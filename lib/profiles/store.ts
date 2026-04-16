@@ -1,38 +1,19 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { ProfileSettings } from "@/types";
-
-const PROFILE_DIR = path.join(process.cwd(), "data", "profiles");
-
-async function ensureProfileDir() {
-  await fs.mkdir(PROFILE_DIR, { recursive: true });
-}
-
-function profilePath(id: string): string {
-  return path.join(PROFILE_DIR, `${id}.json`);
-}
+import { isR2Configured } from "@/lib/storage/r2";
+import * as fsStore from "@/lib/profiles/fsStore";
+import * as r2Store from "@/lib/profiles/r2Store";
 
 export async function listProfiles(): Promise<ProfileSettings[]> {
-  await ensureProfileDir();
-  const files = await fs.readdir(PROFILE_DIR);
-  const profiles = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".json"))
-      .map(async (file) => {
-        const content = await fs.readFile(path.join(PROFILE_DIR, file), "utf8");
-        return JSON.parse(content) as ProfileSettings;
-      })
-  );
-
-  return profiles.sort((a, b) => a.name.localeCompare(b.name));
+  if (isR2Configured()) return r2Store.listProfiles();
+  return fsStore.listProfiles();
 }
 
 export async function saveProfile(profile: ProfileSettings): Promise<void> {
-  await ensureProfileDir();
-  await fs.writeFile(profilePath(profile.id), JSON.stringify(profile, null, 2), "utf8");
+  if (isR2Configured()) return r2Store.saveProfile(profile);
+  return fsStore.saveProfile(profile);
 }
 
 export async function deleteProfile(id: string): Promise<void> {
-  await ensureProfileDir();
-  await fs.rm(profilePath(id), { force: true });
+  if (isR2Configured()) return r2Store.deleteProfile(id);
+  return fsStore.deleteProfile(id);
 }

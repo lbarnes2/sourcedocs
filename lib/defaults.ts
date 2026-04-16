@@ -38,7 +38,9 @@ export const defaultPlaceCardSettings: PlaceCardSettings = {
 export const defaultMenuBookletSettings: MenuBookletSettings = {
   headingFontPt: 15,
   bodyFontPt: 10,
-  lineHeight: 14
+  lineHeight: 14,
+  preMealText: "",
+  postMealText: ""
 };
 
 export function defaultProfile(name = "Default Profile"): ProfileSettings {

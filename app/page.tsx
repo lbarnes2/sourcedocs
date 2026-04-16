@@ -9,7 +9,16 @@ import {
   defaultTablePlanSettings,
   defaultThemeSettings
 } from "@/lib/defaults";
-import type { ColumnMapping, DocumentType, GuestRecord, ProfileSettings, RawCsvRow } from "@/types";
+import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import type {
+  ColumnMapping,
+  DishMenuDuplicateGroup,
+  DishNameOverride,
+  DocumentType,
+  GuestRecord,
+  ProfileSettings,
+  RawCsvRow
+} from "@/types";
 
 const DOCUMENTS: Array<{ id: DocumentType; label: string }> = [
   { id: "tablePlanByTable", label: "Table Plan (By Table)" },
@@ -39,6 +48,15 @@ function toDataUrl(file: File): Promise<string> {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error("Failed to read image."));
     reader.readAsDataURL(file);
+  });
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -120,7 +138,12 @@ export default function HomePage() {
   const [tablePlan, setTablePlan] = useState({ ...defaultTablePlanSettings });
   const [placeCard, setPlaceCard] = useState({ ...defaultPlaceCardSettings });
   const [menuBooklet, setMenuBooklet] = useState({ ...defaultMenuBookletSettings });
-  const [menuLongNames, setMenuLongNames] = useState<Record<string, string>>({});
+  const [dishNameOverrides, setDishNameOverrides] = useState<Record<string, DishNameOverride>>({});
+  const [dishMenuDuplicateGroups, setDishMenuDuplicateGroups] = useState<
+    Array<DishMenuDuplicateGroup & { id: string }>
+  >([]);
+  const [menuMergePick, setMenuMergePick] = useState<string[]>([]);
+  const [normalizeGuestNamesToTitleCase, setNormalizeGuestNamesToTitleCase] = useState(false);
 
   const [selectedDocuments, setSelectedDocuments] = useState<DocumentType[]>(DOCUMENTS.map((doc) => doc.id));
   const [bundleMode, setBundleMode] = useState<"single" | "zip">("zip");
@@ -131,7 +154,39 @@ export default function HomePage() {
   const [clientLogoLuminance, setClientLogoLuminance] = useState<number | null>(null);
   const [menuLogoLegibilityWarning, setMenuLogoLegibilityWarning] = useState("");
 
+  const [venueLogoLibrary, setVenueLogoLibrary] = useState<{
+    loaded: boolean;
+    configured: boolean;
+    items: Array<{ key: string; label: string; assetUrl: string }>;
+  }>({ loaded: false, configured: false, items: [] });
+  const [venueLibraryBusy, setVenueLibraryBusy] = useState(false);
+
   const mappingIssues = useMemo(() => getRequiredMappingIssues(mapping), [mapping]);
+
+  const uniqueEffectiveDishes = useMemo(() => {
+    const set = new Set<string>();
+    guests.forEach((guest) => {
+      (["starter", "main", "dessert"] as const).forEach((field) => {
+        const rewritten = rewriteDishWithShortOverride(guest[field], dishNameOverrides).trim();
+        if (rewritten) set.add(rewritten);
+      });
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [guests, dishNameOverrides]);
+
+  useEffect(() => {
+    const valid = new Set(uniqueEffectiveDishes);
+    setDishMenuDuplicateGroups((previous) => {
+      const next = previous
+        .map((group) => ({
+          ...group,
+          match: group.match.filter((member) => valid.has(member.trim()))
+        }))
+        .filter((group) => group.match.length >= 2);
+      if (JSON.stringify(previous) === JSON.stringify(next)) return previous;
+      return next;
+    });
+  }, [uniqueEffectiveDishes]);
 
   useEffect(() => {
     (async () => {
@@ -140,6 +195,73 @@ export default function HomePage() {
       if (payload.profiles) setProfiles(payload.profiles);
     })();
   }, []);
+
+  async function refreshVenueLogoLibrary() {
+    setVenueLibraryBusy(true);
+    try {
+      const response = await fetch("/api/logos/venue");
+      const payload = await response.json();
+      setVenueLogoLibrary({
+        loaded: true,
+        configured: Boolean(payload.configured),
+        items: Array.isArray(payload.items) ? payload.items : []
+      });
+    } catch {
+      setVenueLogoLibrary({ loaded: true, configured: false, items: [] });
+    } finally {
+      setVenueLibraryBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshVenueLogoLibrary();
+  }, []);
+
+  async function applyVenueLogoFromLibrary(assetUrl: string) {
+    setError("");
+    try {
+      const response = await fetch(assetUrl);
+      if (!response.ok) throw new Error("Could not load that logo from storage.");
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      setTheme((previous) => ({ ...previous, venueLogoDataUrl: dataUrl }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to apply venue logo.");
+    }
+  }
+
+  async function uploadVenueLogoToLibrary(file: File) {
+    setVenueLibraryBusy(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.set("file", file);
+      const response = await fetch("/api/logos/venue", { method: "POST", body: form });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Upload failed.");
+      await refreshVenueLogoLibrary();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setVenueLibraryBusy(false);
+    }
+  }
+
+  async function deleteVenueLogoFromLibrary(key: string) {
+    if (!window.confirm("Remove this venue logo from the library?")) return;
+    setVenueLibraryBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/logos/venue?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Delete failed.");
+      await refreshVenueLogoLibrary();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setVenueLibraryBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (clientLogoLuminance == null || !theme.clientLogoDataUrl) {
@@ -198,10 +320,11 @@ export default function HomePage() {
           )
         )
       );
-      setMenuLongNames((previous) => {
-        const next: Record<string, string> = {};
+      setDishNameOverrides((previous) => {
+        const next: Record<string, DishNameOverride> = {};
         menuOptions.forEach((option) => {
-          next[option] = previous[option] ?? option;
+          const prior = previous[option];
+          next[option] = prior ?? { shortName: option, longName: option };
         });
         return next;
       });
@@ -261,8 +384,34 @@ export default function HomePage() {
     setTheme(found.theme);
     setTablePlan(found.tablePlan);
     setPlaceCard(found.placeCard);
-    setMenuBooklet(found.menuBooklet);
+    setMenuBooklet({ ...defaultMenuBookletSettings, ...found.menuBooklet });
     setProfileName(found.name);
+  }
+
+  function addMenuDuplicateGroup() {
+    if (menuMergePick.length < 2) {
+      setError("Select at least two dishes (⌘ or Ctrl-click) to merge onto one menu line.");
+      return;
+    }
+    const match = [...menuMergePick];
+    const used = new Set<string>();
+    dishMenuDuplicateGroups.forEach((group) => {
+      group.match.forEach((member) => used.add(member.trim()));
+    });
+    const clash = match.find((member) => used.has(member.trim()));
+    if (clash) {
+      setError(
+        `“${clash}” is already in a merge group. Remove that group first, or leave it out of this selection.`
+      );
+      return;
+    }
+    const canonical = [...match].sort((a, b) => a.localeCompare(b))[0];
+    setDishMenuDuplicateGroups((previous) => [
+      ...previous,
+      { id: crypto.randomUUID(), canonical, match }
+    ]);
+    setMenuMergePick([]);
+    setError("");
   }
 
   async function exportDocuments() {
@@ -307,7 +456,12 @@ export default function HomePage() {
             tablePlan,
             placeCard,
             menuBooklet,
-            menuLongNames
+            dishNameOverrides,
+            dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
+              canonical,
+              match
+            })),
+            normalizeGuestNamesToTitleCase
           }
         })
       });
@@ -401,6 +555,89 @@ export default function HomePage() {
             />
           </label>
         </div>
+        {venueLogoLibrary.loaded && venueLogoLibrary.configured && (
+          <div style={{ marginTop: 14 }}>
+            <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Venue logo library (R2)</h3>
+            <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.86 }}>
+              Upload once, then click a thumbnail to use it for this event. Logos are stored in your bucket under{" "}
+              <code>logos/venue/</code>.
+            </p>
+            <label>
+              Add logo to library
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+                disabled={venueLibraryBusy}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadVenueLogoToLibrary(file);
+                }}
+              />
+            </label>
+            {venueLibraryBusy && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Working…</p>}
+            {venueLogoLibrary.items.length === 0 && !venueLibraryBusy ? (
+              <p className="pill" style={{ marginTop: 10 }}>
+                No saved venue logos yet — add one with the field above.
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  marginTop: 10,
+                  alignItems: "flex-start"
+                }}
+              >
+                {venueLogoLibrary.items.map((item) => (
+                  <div
+                    key={item.key}
+                    className="panel"
+                    style={{
+                      marginBottom: 0,
+                      padding: 8,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 6,
+                      minWidth: 100
+                    }}
+                  >
+                    <img
+                      src={item.assetUrl}
+                      alt=""
+                      style={{
+                        width: 72,
+                        height: 72,
+                        objectFit: "contain",
+                        background: "#f4f6f8",
+                        borderRadius: 4
+                      }}
+                    />
+                    <span style={{ fontSize: 11, opacity: 0.75, maxWidth: 120, textAlign: "center", wordBreak: "break-all" }}>
+                      {item.label}
+                    </span>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                      <button type="button" disabled={venueLibraryBusy} onClick={() => void applyVenueLogoFromLibrary(item.assetUrl)}>
+                        Use
+                      </button>
+                      <button type="button" disabled={venueLibraryBusy} onClick={() => void deleteVenueLogoFromLibrary(item.key)}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {venueLogoLibrary.loaded && !venueLogoLibrary.configured && (
+          <p className="pill" style={{ marginTop: 12 }}>
+            R2 env vars not set — profiles stay in <code>data/profiles</code>; venue logo library is disabled. See{" "}
+            <code>.env.example</code>.
+          </p>
+        )}
         {(logoSizeWarnings.clientLogoDataUrl || logoSizeWarnings.venueLogoDataUrl || menuLogoLegibilityWarning) && (
           <ul>
             {logoSizeWarnings.clientLogoDataUrl && <li className="warning">{logoSizeWarnings.clientLogoDataUrl}</li>}
@@ -726,26 +963,165 @@ export default function HomePage() {
           </label>
         </div>
 
-        <h3 style={{ marginTop: 16 }}>Menu card long dish names</h3>
-        <p>These descriptions are used only on menu cards. Place cards and service plans keep short names from CSV.</p>
+        <h3 style={{ marginTop: 16 }}>Menu card extras</h3>
+        <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
+          Optional text above the first course and/or below the last course (for example bread and butter, tea and
+          coffee).
+        </p>
+        <div className="grid two">
+          <label>
+            Pre-meal line (optional)
+            <textarea
+              rows={2}
+              placeholder="Bread and butter"
+              value={menuBooklet.preMealText ?? ""}
+              onChange={(event) =>
+                setMenuBooklet((previous) => ({ ...previous, preMealText: event.target.value }))
+              }
+            />
+          </label>
+          <label>
+            Post-meal line (optional)
+            <textarea
+              rows={2}
+              placeholder="Fairtrade Tea & Coffee"
+              value={menuBooklet.postMealText ?? ""}
+              onChange={(event) =>
+                setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))
+              }
+            />
+          </label>
+        </div>
+
+        <h3 style={{ marginTop: 16 }}>Dish name overrides (short + long)</h3>
+        <p>
+          Run Preview to auto-populate dish names. You can override the short name (place cards/service plans/table views)
+          and/or long name (menu card) before export.
+        </p>
         <div className="grid">
-          {Object.keys(menuLongNames).length === 0 && <p className="pill">Run Preview first to populate menu options.</p>}
-          {Object.entries(menuLongNames).map(([shortName, longName]) => (
-            <label key={shortName}>
-              {shortName}
-              <textarea
-                rows={2}
-                value={longName}
-                onChange={(event) =>
-                  setMenuLongNames((previous) => ({
-                    ...previous,
-                    [shortName]: event.target.value
-                  }))
-                }
-              />
-            </label>
+          {Object.keys(dishNameOverrides).length === 0 && (
+            <p className="pill">Run Preview first to populate dish options.</p>
+          )}
+          {Object.entries(dishNameOverrides).map(([originalName, override]) => (
+            <div key={originalName} className="panel" style={{ marginBottom: 0 }}>
+              <p style={{ marginTop: 0, marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
+                Source: <strong>{originalName}</strong>
+              </p>
+              <div className="grid two">
+                <label>
+                  Short name override
+                  <input
+                    value={override.shortName}
+                    onChange={(event) =>
+                      setDishNameOverrides((previous) => ({
+                        ...previous,
+                        [originalName]: {
+                          ...previous[originalName],
+                          shortName: event.target.value
+                        }
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Long name override
+                  <textarea
+                    rows={2}
+                    value={override.longName}
+                    onChange={(event) =>
+                      setDishNameOverrides((previous) => ({
+                        ...previous,
+                        [originalName]: {
+                          ...previous[originalName],
+                          longName: event.target.value
+                        }
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            </div>
           ))}
         </div>
+
+        <h3 style={{ marginTop: 20 }}>Menu: merge duplicate spellings</h3>
+        <p style={{ marginTop: 0, marginBottom: 8, fontSize: 14, opacity: 0.88 }}>
+          After short-name overrides, the same dish may still appear twice on the menu (for example{" "}
+          <em>Beef</em> and <em>beef</em>). Select the exact lines that should print once; place cards
+          and service plans keep each guest&apos;s wording. Long-name overrides on any merged spelling
+          still apply to the single menu line when possible.
+        </p>
+        {uniqueEffectiveDishes.length < 2 ? (
+          <p className="pill" style={{ marginBottom: 0 }}>
+            Run Preview to list dishes (with overrides applied) here.
+          </p>
+        ) : (
+          <div className="grid" style={{ marginBottom: 12 }}>
+            <label>
+              Dishes to merge (multi-select)
+              <select
+                multiple
+                size={Math.min(12, Math.max(4, uniqueEffectiveDishes.length))}
+                value={menuMergePick}
+                onChange={(event) =>
+                  setMenuMergePick(Array.from(event.target.selectedOptions).map((option) => option.value))
+                }
+                style={{ width: "100%", minHeight: 120 }}
+              >
+                {uniqueEffectiveDishes.map((dish) => (
+                  <option key={dish} value={dish}>
+                    {dish}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" onClick={addMenuDuplicateGroup}>
+                Add merge group
+              </button>
+              <p style={{ margin: 0, fontSize: 12, opacity: 0.8 }}>
+                The menu line defaults to the first spelling in A–Z order; edit it in the group below.
+              </p>
+            </div>
+          </div>
+        )}
+        {dishMenuDuplicateGroups.length > 0 && (
+          <div className="grid">
+            {dishMenuDuplicateGroups.map((group) => (
+              <div key={group.id} className="panel" style={{ marginBottom: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label>
+                      Single menu line
+                      <input
+                        value={group.canonical}
+                        onChange={(event) =>
+                          setDishMenuDuplicateGroups((previous) =>
+                            previous.map((entry) =>
+                              entry.id === group.id ? { ...entry, canonical: event.target.value } : entry
+                            )
+                          )
+                        }
+                      />
+                    </label>
+                    <p style={{ margin: "10px 0 0", fontSize: 13, opacity: 0.8 }}>
+                      Merges:{" "}
+                      <strong>{group.match.join(" · ")}</strong>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDishMenuDuplicateGroups((previous) => previous.filter((entry) => entry.id !== group.id))
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="panel">
@@ -774,6 +1150,21 @@ export default function HomePage() {
               <option value="zip">ZIP (multiple files)</option>
               <option value="single">Single file (one selected output)</option>
             </select>
+          </label>
+          <label>
+            Name normalization
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={normalizeGuestNamesToTitleCase}
+                onChange={(event) => setNormalizeGuestNamesToTitleCase(event.target.checked)}
+                style={{ width: 16, height: 16 }}
+              />
+              <span>Apply title case to guest names on export (optional)</span>
+            </div>
+            <small style={{ display: "block", marginTop: 6, color: "#556070" }}>
+              Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
+            </small>
           </label>
         </div>
         <button disabled={loadingExport || loadingPreview} onClick={exportDocuments}>

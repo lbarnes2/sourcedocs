@@ -75,6 +75,19 @@ export interface MenuBookletSettings {
   headingFontPt: number;
   bodyFontPt: number;
   lineHeight: number;
+  preMealText?: string;
+  postMealText?: string;
+}
+
+export interface DishNameOverride {
+  shortName: string;
+  longName: string;
+}
+
+/** Spellings that should appear as one line on the menu card (after short-name overrides). */
+export interface DishMenuDuplicateGroup {
+  canonical: string;
+  match: string[];
 }
 
 export interface ProfileSettings {
@@ -100,7 +113,10 @@ export interface GenerationRequest {
   tablePlan: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
-  menuLongNames?: Record<string, string>;
+  dishNameOverrides?: Record<string, DishNameOverride>;
+  /** Merge exact dish strings (as they appear after short overrides) into one menu line. */
+  dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
+  normalizeGuestNamesToTitleCase?: boolean;
 }
 
 export interface EventModel {

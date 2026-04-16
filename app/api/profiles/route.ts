@@ -37,7 +37,9 @@ const profileSchema = z.object({
   menuBooklet: z.object({
     headingFontPt: z.number(),
     bodyFontPt: z.number(),
-    lineHeight: z.number()
+    lineHeight: z.number(),
+    preMealText: z.string().optional(),
+    postMealText: z.string().optional()
   })
 });
 

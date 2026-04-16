@@ -2,9 +2,42 @@ import { NextResponse } from "next/server";
 import JSZip from "jszip";
 import { z } from "zod";
 import { parseCsv, normalizeAndValidate } from "@/lib/csv/normalize";
+import { augmentMenuLongNamesForDuplicateGroups, validateDishMenuDuplicateGroups } from "@/lib/docs/menuCards";
+import { applyDishShortOverridesToGuests } from "@/lib/dish/applyOverrides";
 import { buildEventModel } from "@/lib/event/model";
 import { renderDocumentPdf } from "@/lib/pdf/render";
-import type { ColumnMapping, DocumentType, GuestRecord } from "@/types";
+import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
+
+function toTitleCaseName(name: string): string {
+  return name
+    .trim()
+    .split(/(\s+)/)
+    .map((segment) => {
+      if (/^\s+$/.test(segment)) return segment;
+      return segment
+        .split(/([-'])/)
+        .map((token) => {
+          if (token === "-" || token === "'") return token;
+          const lowered = token.toLowerCase();
+          return lowered.charAt(0).toUpperCase() + lowered.slice(1);
+        })
+        .join("");
+    })
+    .join("");
+}
+
+function buildMenuLongNameMap(
+  dishNameOverrides: Record<string, { shortName: string; longName: string }>
+): Record<string, string> {
+  const byShort: Record<string, string> = {};
+  Object.values(dishNameOverrides).forEach((entry) => {
+    const shortName = entry.shortName.trim();
+    const longName = entry.longName.trim();
+    if (!shortName || !longName) return;
+    byShort[shortName] = longName;
+  });
+  return byShort;
+}
 
 const previewSchema = z.object({
   mode: z.literal("preview"),
@@ -68,9 +101,28 @@ const generateSchema = z.object({
     menuBooklet: z.object({
       headingFontPt: z.number(),
       bodyFontPt: z.number(),
-      lineHeight: z.number()
+      lineHeight: z.number(),
+      preMealText: z.string().optional(),
+      postMealText: z.string().optional()
     }),
-    menuLongNames: z.record(z.string(), z.string()).optional()
+    dishNameOverrides: z
+      .record(
+        z.string(),
+        z.object({
+          shortName: z.string(),
+          longName: z.string()
+        })
+      )
+      .optional(),
+    dishMenuDuplicateGroups: z
+      .array(
+        z.object({
+          canonical: z.string(),
+          match: z.array(z.string()).min(2)
+        })
+      )
+      .optional(),
+    normalizeGuestNamesToTitleCase: z.boolean().optional()
   })
 });
 
@@ -122,8 +174,26 @@ export async function POST(request: Request) {
     }
 
     const parsed = generateSchema.parse(payload);
-    const guests = parsed.guests as GuestRecord[];
+    const incomingGuests = parsed.guests as GuestRecord[];
+    const dishNameOverrides = parsed.request.dishNameOverrides ?? {};
+    const dishMenuDuplicateGroups = (parsed.request.dishMenuDuplicateGroups ?? []) as DishMenuDuplicateGroup[];
+    const duplicateGroupError = validateDishMenuDuplicateGroups(dishMenuDuplicateGroups);
+    if (duplicateGroupError) {
+      return NextResponse.json({ error: duplicateGroupError }, { status: 400 });
+    }
+    const guestsAfterDishOverrides = applyDishShortOverridesToGuests(incomingGuests, dishNameOverrides);
+    const guests = parsed.request.normalizeGuestNamesToTitleCase
+      ? guestsAfterDishOverrides.map((guest) => ({
+          ...guest,
+          name: toTitleCaseName(guest.name)
+        }))
+      : guestsAfterDishOverrides;
     const model = buildEventModel(guests);
+    const menuLongNames = augmentMenuLongNamesForDuplicateGroups(
+      buildMenuLongNameMap(dishNameOverrides),
+      dishMenuDuplicateGroups,
+      dishNameOverrides
+    );
     const docs = parsed.request.documents;
     const eventBase = sanitizeFilename(parsed.request.theme.eventName || "event-docs");
 
@@ -134,7 +204,8 @@ export async function POST(request: Request) {
           placeCard: parsed.request.placeCard,
           menuBooklet: parsed.request.menuBooklet,
           theme: parsed.request.theme,
-          menuLongNames: parsed.request.menuLongNames
+          menuLongNames,
+          dishMenuDuplicateGroups
         });
         return { docType, pdfBytes };
       })

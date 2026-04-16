@@ -3,6 +3,7 @@ import path from "node:path";
 import { degrees, PDFDocument, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import type {
+  DishMenuDuplicateGroup,
   DocumentType,
   EventModel,
   MenuBookletSettings,
@@ -748,7 +749,10 @@ export async function renderPlaceCardsPdf(
   const calibrationY = mmToPt(settings.textOffsetYmm);
   const cards = buildPlaceCardDocument(model);
 
-  const borderInset = 4;
+  /** Inset from physical stock / cut line so borders print safely inside the panel (tent stock). */
+  const placeCardCutLineInsetPt = mmToPt(3);
+  const innerFrameGapPt = 4;
+  const borderInset = placeCardCutLineInsetPt + innerFrameGapPt;
   const innerPadH = 5;
   const innerPadV = 5;
   const safeEdge = Math.max(mmToPt(settings.safeMarginMm), 2);
@@ -775,10 +779,10 @@ export async function renderPlaceCardsPdf(
         const x = Math.round(col === 0 ? PLACE_CARD_STOCK.leftColXPt : PLACE_CARD_STOCK.rightColXPt);
 
         page.drawRectangle({
-          x,
-          y,
-          width: cardWidth,
-          height: cardHeight,
+          x: x + placeCardCutLineInsetPt,
+          y: y + placeCardCutLineInsetPt,
+          width: cardWidth - 2 * placeCardCutLineInsetPt,
+          height: cardHeight - 2 * placeCardCutLineInsetPt,
           color: rgb(1, 1, 1),
           borderColor: primary,
           borderWidth: 2
@@ -925,7 +929,8 @@ export async function renderMenuBookletPdf(
   model: EventModel,
   settings: MenuBookletSettings,
   theme: ThemeSettings,
-  menuLongNames: Record<string, string> = {}
+  menuLongNames: Record<string, string> = {},
+  dishMenuDuplicateGroups: DishMenuDuplicateGroup[] = []
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const pageWidth = mmToPt(297);
@@ -935,7 +940,7 @@ export async function renderMenuBookletPdf(
   const outerMargin = 14;
   const primary = hexToRgb(theme.primaryColor || "#012f43");
   const accent = hexToRgb(theme.accentColor || "#acc1cb");
-  const menu = buildMenuBookletDocument(model, menuLongNames);
+  const menu = buildMenuBookletDocument(model, menuLongNames, dishMenuDuplicateGroups);
   const white = rgb(1, 1, 1);
 
   const drawFancyBorder = (
@@ -1186,6 +1191,19 @@ export async function renderMenuBookletPdf(
   const gapAfterLines = 10;
   const dividerPad = 22;
   const dividerTrailing = 32;
+  const hasCoreCourses = sections.length > 0;
+
+  const wrapAddonText = (rawText?: string): string[] => {
+    const text = (rawText ?? "").trim();
+    if (!text) return [];
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .flatMap((line) => wrapTextToWidth(line, font, bodySize, innerW - 8));
+  };
+  const preMealLines = wrapAddonText(settings.preMealText);
+  const postMealLines = wrapAddonText(settings.postMealText);
 
   const measureSectionBlock = (section: MenuSection, isLast: boolean): number => {
     let h = headingSize + sectionGapAfterHeading;
@@ -1197,13 +1215,48 @@ export async function renderMenuBookletPdf(
     if (!isLast) h += dividerTrailing;
     return h;
   };
+  const measureAddonBlock = (lines: string[]): number => lines.length * lineGap + gapAfterLines;
 
   let totalMenuHeight = 0;
+  if (preMealLines.length) {
+    totalMenuHeight += measureAddonBlock(preMealLines);
+    if (hasCoreCourses) totalMenuHeight += dividerTrailing;
+  }
   sections.forEach((section, index) => {
     totalMenuHeight += measureSectionBlock(section, index === sections.length - 1);
   });
+  if (postMealLines.length) {
+    if (hasCoreCourses) totalMenuHeight += dividerTrailing;
+    totalMenuHeight += measureAddonBlock(postMealLines);
+  }
 
   let cursorY = innerTop - (innerHeight - totalMenuHeight) / 2;
+
+  if (preMealLines.length) {
+    preMealLines.forEach((line) => {
+      drawCenteredInPanel(
+        sheet2,
+        line,
+        cursorY,
+        font,
+        bodySize,
+        rgb(0.12, 0.14, 0.2),
+        innerLeft,
+        innerW
+      );
+      cursorY -= lineGap;
+    });
+    cursorY -= gapAfterLines;
+    if (hasCoreCourses) {
+      sheet2.drawLine({
+        start: { x: innerLeft + dividerPad, y: cursorY },
+        end: { x: innerLeft + innerW - dividerPad, y: cursorY },
+        thickness: 1,
+        color: accent
+      });
+      cursorY -= dividerTrailing;
+    }
+  }
 
   sections.forEach((section, sectionIndex) => {
     drawCenteredInPanel(
@@ -1246,6 +1299,32 @@ export async function renderMenuBookletPdf(
       cursorY -= dividerTrailing;
     }
   });
+
+  if (postMealLines.length) {
+    if (hasCoreCourses) {
+      sheet2.drawLine({
+        start: { x: innerLeft + dividerPad, y: cursorY },
+        end: { x: innerLeft + innerW - dividerPad, y: cursorY },
+        thickness: 1,
+        color: accent
+      });
+      cursorY -= dividerTrailing;
+    }
+    postMealLines.forEach((line) => {
+      drawCenteredInPanel(
+        sheet2,
+        line,
+        cursorY,
+        font,
+        bodySize,
+        rgb(0.12, 0.14, 0.2),
+        innerLeft,
+        innerW
+      );
+      cursorY -= lineGap;
+    });
+    cursorY -= gapAfterLines;
+  }
 
   return doc.save();
 }
@@ -1323,6 +1402,7 @@ export async function renderDocumentPdf(
     menuBooklet: MenuBookletSettings;
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
+    dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
   }
 ): Promise<Uint8Array> {
   if (documentType === "tablePlanByTable") {
@@ -1339,7 +1419,8 @@ export async function renderDocumentPdf(
       model,
       options.menuBooklet,
       options.theme,
-      options.menuLongNames ?? {}
+      options.menuLongNames ?? {},
+      options.dishMenuDuplicateGroups ?? []
     );
   }
   return renderServicePlanPdf(model, options.theme);
