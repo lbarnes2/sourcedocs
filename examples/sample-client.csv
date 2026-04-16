@@ -1,0 +1,6 @@
+table_number,name,starter_choice,main_choice,dessert_choice,dietary_requirement
+1,Bob Smith,Tomato Soup,Roast Chicken,Chocolate Torte,GF
+1,Steve Adams,Tomato Soup,Mushroom Risotto,Lemon Tart,Vegetarian
+1,Brian Bell,Goat Cheese Salad,Roast Chicken,Cheesecake,
+2,Alice Green,Smoked Salmon,Sea Bass,Sticky Toffee Pudding,Nut allergy
+2,Chris Wong,Goat Cheese Salad,Ribeye Steak,Lemon Tart,Dairy free
