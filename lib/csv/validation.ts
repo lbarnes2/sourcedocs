@@ -1,34 +1,54 @@
 import type { GuestRecord, ValidationIssue, ValidationReport } from "@/types";
 
-const DIETARY_MAP: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /\b(coeliac|celiac)\b/i, label: "Gluten Free" },
-  { pattern: /\b(gluten\s*free|gf)\b/i, label: "Gluten Free" },
-  { pattern: /\b(vegan)\b/i, label: "Vegan" },
-  { pattern: /\b(vegetarian|veggie)\b/i, label: "Vegetarian" },
-  { pattern: /\b(dairy\s*free|df)\b/i, label: "Dairy Free" },
-  { pattern: /\b(nut\s*allergy|nuts?)\b/i, label: "Nut Allergy" },
-  { pattern: /\b(shellfish)\b/i, label: "Shellfish Allergy" },
-  { pattern: /\b(halal)\b/i, label: "Halal" },
-  { pattern: /\b(kosher)\b/i, label: "Kosher" }
-];
+/**
+ * Split when the source clearly lists multiple dietaries. We intentionally do **not** split on
+ * "and" / "&" so phrases like "vegetarian and no eggs" stay one literal requirement.
+ */
+const DIETARY_SEGMENT_SPLIT = /\s*(?:,|;|\/|\n)\s*/;
 
+/** Whole-segment only: safe spelling unification, no substring inference. */
+const GLUTEN_FREE_WHOLE =
+  /^(gf|g\.?\s*f\.?|gluten\s*free|gluten-free|glutenfree|coeliac|celiac|coeliacs?)$/i;
+const DAIRY_FREE_WHOLE = /^(df|d\.?\s*f\.?|dairy\s*free|dairy-free|dairyfree)$/i;
+
+function collapseSpaces(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizeDietarySegment(segment: string): string {
+  const t = collapseSpaces(segment);
+  if (!t) return t;
+  if (GLUTEN_FREE_WHOLE.test(t)) return "Gluten Free";
+  if (DAIRY_FREE_WHOLE.test(t)) return "Dairy Free";
+  return t;
+}
+
+/**
+ * Dietary requirements are safety-critical. We only unify a **small** set of obvious spelling
+ * variants when the entire segment is one of those labels. Everything else is kept exactly as
+ * entered (aside from trim / whitespace collapse).
+ */
 export function normalizeDietary(input: string): string[] {
-  const trimmed = input.trim();
+  const trimmed = collapseSpaces(input);
   if (!trimmed) return [];
 
-  const labels = new Set<string>();
-  DIETARY_MAP.forEach(({ pattern, label }) => {
-    if (pattern.test(trimmed)) labels.add(label);
-  });
-
-  if (labels.size === 0) {
-    return trimmed
-      .split(/[;,/]/)
-      .map((v) => v.trim())
-      .filter(Boolean);
+  if (/^(none|n\/a|na|no dietary|no dietaries|-)$/i.test(trimmed)) {
+    return [];
   }
 
-  return Array.from(labels);
+  const segments = trimmed.split(DIETARY_SEGMENT_SPLIT).map((s) => collapseSpaces(s)).filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const segment of segments) {
+    const normalized = normalizeDietarySegment(segment);
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+
+  return out;
 }
 
 interface ValidationOptions {

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { autoDetectMapping, canonicalColumns, getRequiredMappingIssues } from "@/lib/csv/mapping";
+import { normalizeDietary } from "@/lib/csv/validation";
 import {
   defaultMenuBookletSettings,
   defaultPlaceCardSettings,
@@ -27,8 +28,6 @@ const DOCUMENTS: Array<{ id: DocumentType; label: string }> = [
   { id: "menuBooklet", label: "Menu Card (A4 landscape, 2 sheets half-page layout)" },
   { id: "servicePlan", label: "Service Plan" }
 ];
-
-const EDIT_LIMIT = 80;
 
 function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[] } {
   const parsed = Papa.parse<RawCsvRow>(csvText, {
@@ -136,6 +135,7 @@ export default function HomePage() {
 
   const [theme, setTheme] = useState({ ...defaultThemeSettings });
   const [tablePlan, setTablePlan] = useState({ ...defaultTablePlanSettings });
+  const [tablePlanByPerson, setTablePlanByPerson] = useState({ ...defaultTablePlanSettings });
   const [placeCard, setPlaceCard] = useState({ ...defaultPlaceCardSettings });
   const [menuBooklet, setMenuBooklet] = useState({ ...defaultMenuBookletSettings });
   const [dishNameOverrides, setDishNameOverrides] = useState<Record<string, DishNameOverride>>({});
@@ -159,6 +159,7 @@ export default function HomePage() {
     configured: boolean;
     items: Array<{ key: string; label: string; assetUrl: string }>;
   }>({ loaded: false, configured: false, items: [] });
+  const [selectedVenueLogoKey, setSelectedVenueLogoKey] = useState<string | null>(null);
   const [venueLibraryBusy, setVenueLibraryBusy] = useState(false);
 
   const mappingIssues = useMemo(() => getRequiredMappingIssues(mapping), [mapping]);
@@ -217,14 +218,15 @@ export default function HomePage() {
     void refreshVenueLogoLibrary();
   }, []);
 
-  async function applyVenueLogoFromLibrary(assetUrl: string) {
+  async function applyVenueLogoFromLibrary(item: { assetUrl: string; key: string }) {
     setError("");
     try {
-      const response = await fetch(assetUrl);
+      const response = await fetch(item.assetUrl);
       if (!response.ok) throw new Error("Could not load that logo from storage.");
       const blob = await response.blob();
       const dataUrl = await blobToDataUrl(blob);
       setTheme((previous) => ({ ...previous, venueLogoDataUrl: dataUrl }));
+      setSelectedVenueLogoKey(item.key);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply venue logo.");
     }
@@ -240,6 +242,7 @@ export default function HomePage() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Upload failed.");
       await refreshVenueLogoLibrary();
+      setSelectedVenueLogoKey(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
@@ -256,6 +259,9 @@ export default function HomePage() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Delete failed.");
       await refreshVenueLogoLibrary();
+      if (selectedVenueLogoKey === key) {
+        setSelectedVenueLogoKey(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
     } finally {
@@ -359,6 +365,7 @@ export default function HomePage() {
       name: profileName,
       theme,
       tablePlan,
+      tablePlanByPerson,
       placeCard,
       menuBooklet
     };
@@ -383,6 +390,7 @@ export default function HomePage() {
     if (!found) return;
     setTheme(found.theme);
     setTablePlan(found.tablePlan);
+    setTablePlanByPerson(found.tablePlanByPerson ?? found.tablePlan);
     setPlaceCard(found.placeCard);
     setMenuBooklet({ ...defaultMenuBookletSettings, ...found.menuBooklet });
     setProfileName(found.name);
@@ -454,6 +462,7 @@ export default function HomePage() {
             bundleMode,
             theme,
             tablePlan,
+            tablePlanByPerson,
             placeCard,
             menuBooklet,
             dishNameOverrides,
@@ -499,7 +508,10 @@ export default function HomePage() {
     <main>
       <h1>Event Document Generator</h1>
       <div className="panel">
-        <h2>1) Upload CSV and map columns</h2>
+        <h2 className="step-heading">
+          <span className="step-heading-badge">1</span>
+          <span>Upload CSV and map columns</span>
+        </h2>
         <div className="grid two">
           <label>
             CSV file
@@ -539,7 +551,10 @@ export default function HomePage() {
               accept="image/*"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) void handleLogoUpload(file, "clientLogoDataUrl");
+                if (file) {
+                  setSelectedVenueLogoKey(null);
+                  void handleLogoUpload(file, "clientLogoDataUrl");
+                }
               }}
             />
           </label>
@@ -550,7 +565,10 @@ export default function HomePage() {
               accept="image/*"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) void handleLogoUpload(file, "venueLogoDataUrl");
+                if (file) {
+                  setSelectedVenueLogoKey(null);
+                  void handleLogoUpload(file, "venueLogoDataUrl");
+                }
               }}
             />
           </label>
@@ -591,6 +609,9 @@ export default function HomePage() {
                 }}
               >
                 {venueLogoLibrary.items.map((item) => (
+                  (() => {
+                    const isSelected = selectedVenueLogoKey === item.key;
+                    return (
                   <div
                     key={item.key}
                     className="panel"
@@ -601,32 +622,44 @@ export default function HomePage() {
                       flexDirection: "column",
                       alignItems: "center",
                       gap: 6,
-                      minWidth: 100
+                      minWidth: 120,
+                      borderColor: isSelected ? "#012f43" : undefined,
+                      boxShadow: isSelected ? "0 0 0 1px rgba(1,47,67,0.3)" : undefined,
+                      background: isSelected ? "#f0f5f8" : undefined
                     }}
                   >
                     <img
                       src={item.assetUrl}
                       alt=""
                       style={{
-                        width: 72,
-                        height: 72,
+                        width: 80,
+                        height: 80,
                         objectFit: "contain",
                         background: "#f4f6f8",
                         borderRadius: 4
                       }}
                     />
+                    {isSelected && (
+                      <span style={{ fontSize: 11, color: "#012f43", fontWeight: 600 }}>Selected</span>
+                    )}
                     <span style={{ fontSize: 11, opacity: 0.75, maxWidth: 120, textAlign: "center", wordBreak: "break-all" }}>
                       {item.label}
                     </span>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-                      <button type="button" disabled={venueLibraryBusy} onClick={() => void applyVenueLogoFromLibrary(item.assetUrl)}>
-                        Use
+                      <button
+                        type="button"
+                        disabled={venueLibraryBusy || isSelected}
+                        onClick={() => void applyVenueLogoFromLibrary(item)}
+                      >
+                        {isSelected ? "In use" : "Use"}
                       </button>
                       <button type="button" disabled={venueLibraryBusy} onClick={() => void deleteVenueLogoFromLibrary(item.key)}>
                         Remove
                       </button>
                     </div>
                   </div>
+                    );
+                  })()
                 ))}
               </div>
             )}
@@ -683,7 +716,10 @@ export default function HomePage() {
       </div>
 
       <div className="panel">
-        <h2>2) Validation report</h2>
+        <h2 className="step-heading">
+          <span className="step-heading-badge">2</span>
+          <span>Validation report</span>
+        </h2>
         {!issues.length && <p className="pill">No validation issues reported yet.</p>}
         {issues.length > 0 && (
           <ul>
@@ -697,9 +733,17 @@ export default function HomePage() {
       </div>
 
       <div className="panel">
-        <h2>3) Last-minute edits</h2>
-        <p>Showing first {Math.min(EDIT_LIMIT, guests.length)} guests for quick in-app changes.</p>
+        <h2 className="step-heading">
+          <span className="step-heading-badge">3</span>
+          <span>Last-minute edits</span>
+        </h2>
+        {guests.length === 0 && <p className="pill">Run Preview to populate the editable guest list.</p>}
         {guests.length > 0 && (
+          <details open>
+            <summary style={{ cursor: "pointer", marginBottom: 10 }}>
+              Editing {guests.length} guest{guests.length === 1 ? "" : "s"} (click to collapse)
+            </summary>
+            <div style={{ maxHeight: 420, overflow: "auto", borderRadius: 10, border: "1px solid #d9deea" }}>
           <table>
             <thead>
               <tr>
@@ -712,7 +756,7 @@ export default function HomePage() {
               </tr>
             </thead>
             <tbody>
-              {guests.slice(0, EDIT_LIMIT).map((guest, guestIndex) => (
+              {guests.map((guest, guestIndex) => (
                 <tr key={guest.id}>
                   <td>
                     <input
@@ -789,10 +833,7 @@ export default function HomePage() {
                           next[guestIndex] = {
                             ...next[guestIndex],
                             dietaryOriginal: value,
-                            dietaryNormalized: value
-                              .split(/[;,/]/)
-                              .map((entry) => entry.trim())
-                              .filter(Boolean)
+                            dietaryNormalized: normalizeDietary(value)
                           };
                           return next;
                         });
@@ -803,11 +844,16 @@ export default function HomePage() {
               ))}
             </tbody>
           </table>
+            </div>
+          </details>
         )}
       </div>
 
       <div className="panel">
-        <h2>4) Profiles and print settings</h2>
+        <h2 className="step-heading">
+          <span className="step-heading-badge">4</span>
+          <span>Profiles and print settings</span>
+        </h2>
         <div className="grid two">
           <label>
             Load profile
@@ -828,38 +874,41 @@ export default function HomePage() {
         <button className="secondary" onClick={saveCurrentProfile}>
           Save profile
         </button>
-        <h3 style={{ marginTop: 16 }}>Theme</h3>
-        <div className="grid two">
-          <label>
-            Primary color
-            <div className="color-field-row">
-              <span className="color-swatch" style={{ backgroundColor: theme.primaryColor }} title="Preview" />
-              <input
-                type="color"
-                className="color-input"
-                value={theme.primaryColor}
-                onChange={(event) => setTheme((previous) => ({ ...previous, primaryColor: event.target.value }))}
-              />
-              <span className="color-hex">{theme.primaryColor}</span>
-            </div>
-          </label>
-          <label>
-            Accent color
-            <div className="color-field-row">
-              <span className="color-swatch" style={{ backgroundColor: theme.accentColor }} title="Preview" />
-              <input
-                type="color"
-                className="color-input"
-                value={theme.accentColor}
-                onChange={(event) => setTheme((previous) => ({ ...previous, accentColor: event.target.value }))}
-              />
-              <span className="color-hex">{theme.accentColor}</span>
-            </div>
-          </label>
+        <div className="subpanel">
+          <h3 style={{ marginTop: 0 }}>Theme</h3>
+          <div className="grid two">
+            <label>
+              Primary color
+              <div className="color-field-row">
+                <span className="color-swatch" style={{ backgroundColor: theme.primaryColor }} title="Preview" />
+                <input
+                  type="color"
+                  className="color-input"
+                  value={theme.primaryColor}
+                  onChange={(event) => setTheme((previous) => ({ ...previous, primaryColor: event.target.value }))}
+                />
+                <span className="color-hex">{theme.primaryColor}</span>
+              </div>
+            </label>
+            <label>
+              Accent color
+              <div className="color-field-row">
+                <span className="color-swatch" style={{ backgroundColor: theme.accentColor }} title="Preview" />
+                <input
+                  type="color"
+                  className="color-input"
+                  value={theme.accentColor}
+                  onChange={(event) => setTheme((previous) => ({ ...previous, accentColor: event.target.value }))}
+                />
+                <span className="color-hex">{theme.accentColor}</span>
+              </div>
+            </label>
+          </div>
         </div>
 
-        <h3 style={{ marginTop: 16 }}>Table plan print controls</h3>
-        <div className="grid two">
+        <div className="subpanel">
+          <h3 style={{ marginTop: 0 }}>Table plan (by table) print controls</h3>
+          <div className="grid two">
           <label>
             Paper size
             <select
@@ -916,81 +965,154 @@ export default function HomePage() {
               }
             />
           </label>
+          </div>
         </div>
 
-        <h3 style={{ marginTop: 16 }}>Place-card stock calibration</h3>
-        <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-          Six guest panels per sheet: rows 2, 4, and 6 (1-based) carry name/table/menu/dietary; rows 1, 3, and 5 are
-          tent backs with the client logo. Width and height below are reference only; text nudge still applies.
-        </p>
-        <div className="grid two">
-          <label>
-            Stock name
-            <input
-              value={placeCard.stockName}
-              onChange={(event) => setPlaceCard((previous) => ({ ...previous, stockName: event.target.value }))}
-            />
-          </label>
-          <label>
-            Card width (mm)
-            <input
-              type="number"
-              value={placeCard.cardWidthMm}
-              onChange={(event) =>
-                setPlaceCard((previous) => ({ ...previous, cardWidthMm: Number(event.target.value) || 0 }))
-              }
-            />
-          </label>
-          <label>
-            Card height (mm)
-            <input
-              type="number"
-              value={placeCard.cardHeightMm}
-              onChange={(event) =>
-                setPlaceCard((previous) => ({ ...previous, cardHeightMm: Number(event.target.value) || 0 }))
-              }
-            />
-          </label>
-          <label>
-            Fold offset (mm, unused)
-            <input
-              type="number"
-              value={placeCard.foldOffsetMm}
-              onChange={(event) =>
-                setPlaceCard((previous) => ({ ...previous, foldOffsetMm: Number(event.target.value) || 0 }))
-              }
-            />
-          </label>
+        <div className="subpanel">
+          <h3 style={{ marginTop: 0 }}>Table plan (by person) print controls</h3>
+          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
+            Often A4 for legibility; you can also switch to landscape to enable a two-column layout.
+          </p>
+          <div className="grid two">
+            <label>
+              Paper size
+              <select
+                value={tablePlanByPerson.paperSize}
+                onChange={(event) =>
+                  setTablePlanByPerson((previous) => ({
+                    ...previous,
+                    paperSize: event.target.value as "A4" | "A3"
+                  }))
+                }
+              >
+                <option value="A4">A4</option>
+                <option value="A3">A3</option>
+              </select>
+            </label>
+            <label>
+              Orientation
+              <select
+                value={tablePlanByPerson.orientation}
+                onChange={(event) =>
+                  setTablePlanByPerson((previous) => ({
+                    ...previous,
+                    orientation: event.target.value as "portrait" | "landscape"
+                  }))
+                }
+              >
+                <option value="portrait">Portrait</option>
+                <option value="landscape">Landscape (two-column)</option>
+              </select>
+            </label>
+            <label>
+              Density mode
+              <select
+                value={tablePlanByPerson.tablesPerSheetMode}
+                onChange={(event) =>
+                  setTablePlanByPerson((previous) => ({
+                    ...previous,
+                    tablesPerSheetMode: event.target.value as "auto" | "manual"
+                  }))
+                }
+              >
+                <option value="auto">Auto paginate</option>
+                <option value="manual">Manual rows-per-page</option>
+              </select>
+            </label>
+            <label>
+              Rows per page (manual)
+              <input
+                type="number"
+                min={1}
+                value={tablePlanByPerson.tablesPerSheet}
+                onChange={(event) =>
+                  setTablePlanByPerson((previous) => ({
+                    ...previous,
+                    tablesPerSheet: Number(event.target.value) || 1
+                  }))
+                }
+              />
+            </label>
+          </div>
         </div>
 
-        <h3 style={{ marginTop: 16 }}>Menu card extras</h3>
-        <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-          Optional text above the first course and/or below the last course (for example bread and butter, tea and
-          coffee).
-        </p>
-        <div className="grid two">
-          <label>
-            Pre-meal line (optional)
-            <textarea
-              rows={2}
-              placeholder="Bread and butter"
-              value={menuBooklet.preMealText ?? ""}
-              onChange={(event) =>
-                setMenuBooklet((previous) => ({ ...previous, preMealText: event.target.value }))
-              }
-            />
-          </label>
-          <label>
-            Post-meal line (optional)
-            <textarea
-              rows={2}
-              placeholder="Fairtrade Tea & Coffee"
-              value={menuBooklet.postMealText ?? ""}
-              onChange={(event) =>
-                setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))
-              }
-            />
-          </label>
+        <div className="subpanel">
+          <h3 style={{ marginTop: 0 }}>Place-card stock calibration</h3>
+          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
+            Six guest panels per sheet: rows 2, 4, and 6 (1-based) carry name/table/menu/dietary; rows 1, 3, and 5 are
+            tent backs with the client logo. Width and height below are reference only; text nudge still applies.
+          </p>
+          <div className="grid two">
+            <label>
+              Stock name
+              <input
+                value={placeCard.stockName}
+                onChange={(event) => setPlaceCard((previous) => ({ ...previous, stockName: event.target.value }))}
+              />
+            </label>
+            <label>
+              Card width (mm)
+              <input
+                type="number"
+                value={placeCard.cardWidthMm}
+                onChange={(event) =>
+                  setPlaceCard((previous) => ({ ...previous, cardWidthMm: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label>
+              Card height (mm)
+              <input
+                type="number"
+                value={placeCard.cardHeightMm}
+                onChange={(event) =>
+                  setPlaceCard((previous) => ({ ...previous, cardHeightMm: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+            <label>
+              Fold offset (mm, unused)
+              <input
+                type="number"
+                value={placeCard.foldOffsetMm}
+                onChange={(event) =>
+                  setPlaceCard((previous) => ({ ...previous, foldOffsetMm: Number(event.target.value) || 0 }))
+                }
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="subpanel">
+          <h3 style={{ marginTop: 0 }}>Menu card extras</h3>
+          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
+            Optional text above the first course and/or below the last course (for example bread and butter, tea and
+            coffee).
+          </p>
+          <div className="grid two">
+            <label>
+              Pre-meal line (optional)
+              <textarea
+                rows={2}
+                placeholder="Bread and butter"
+                value={menuBooklet.preMealText ?? ""}
+                onChange={(event) =>
+                  setMenuBooklet((previous) => ({ ...previous, preMealText: event.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Post-meal line (optional)
+              <textarea
+                rows={2}
+                placeholder="Fairtrade Tea & Coffee"
+                value={menuBooklet.postMealText ?? ""}
+                onChange={(event) =>
+                  setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))
+                }
+              />
+            </label>
+          </div>
         </div>
 
         <h3 style={{ marginTop: 16 }}>Dish name overrides (short + long)</h3>
@@ -1010,7 +1132,8 @@ export default function HomePage() {
               <div className="grid two">
                 <label>
                   Short name override
-                  <input
+                  <textarea
+                    rows={1}
                     value={override.shortName}
                     onChange={(event) =>
                       setDishNameOverrides((previous) => ({
@@ -1125,7 +1248,10 @@ export default function HomePage() {
       </div>
 
       <div className="panel">
-        <h2>5) Export bundle</h2>
+        <h2 className="step-heading">
+          <span className="step-heading-badge">5</span>
+          <span>Export bundle</span>
+        </h2>
         <div className="grid two">
           {DOCUMENTS.map((document) => {
             const checked = selectedDocuments.includes(document.id);
@@ -1158,7 +1284,6 @@ export default function HomePage() {
                 type="checkbox"
                 checked={normalizeGuestNamesToTitleCase}
                 onChange={(event) => setNormalizeGuestNamesToTitleCase(event.target.checked)}
-                style={{ width: 16, height: 16 }}
               />
               <span>Apply title case to guest names on export (optional)</span>
             </div>

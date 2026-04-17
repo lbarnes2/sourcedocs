@@ -542,11 +542,14 @@ export async function renderTablePlanByPersonPdf(
     height - headerBandHeight - tableTopGap - tableBottomMargin;
   const rowHeight = 20;
   const headerRowHeight = 24;
-  const rowsPerPage = Math.max(
+  const rowsPerColumn = Math.max(
     12,
     Math.floor((usableTableHeight - headerRowHeight) / rowHeight)
   );
   const people = buildByPersonDocument(model).people;
+  const isLandscape = settings.orientation === "landscape";
+  const columns = isLandscape ? 2 : 1;
+  const rowsPerPage = rowsPerColumn * columns;
   const pages = chunk(people, rowsPerPage);
   const titleColor = hexToRgb(theme.primaryColor || "#012f43");
   const accentColor = hexToRgb(theme.accentColor || "#acc1cb");
@@ -557,7 +560,7 @@ export async function renderTablePlanByPersonPdf(
   const tableWidth = Math.round(width - tableMargin * 2);
   const tableHeight = Math.round(usableTableHeight);
   const tableRight = tableX + tableWidth;
-  const tableColSplit = Math.round(tableX + tableWidth * 0.78);
+  const tableColSplitFull = Math.round(tableX + tableWidth * 0.78);
   const gridColor = rgb(0.72, 0.76, 0.84);
   const borderColor = rgb(0.65, 0.7, 0.8);
 
@@ -611,114 +614,124 @@ export async function renderTablePlanByPersonPdf(
     });
 
     const tableBottom = Math.round(tableYTop - tableHeight);
-    page.drawRectangle({
-      x: tableX,
-      y: tableBottom,
-      width: tableWidth,
-      height: tableHeight,
-      color: rgb(1, 1, 1)
-    });
-
-    page.drawRectangle({
-      x: tableX,
-      y: Math.round(tableYTop - headerRowHeight),
-      width: tableWidth,
-      height: headerRowHeight,
-      color: accentColor
-    });
-
-    page.drawText("Guest Name", {
-      x: tableX + 10,
-      y: tableYTop - 16,
-      font: bold,
-      size: 11,
-      color: rgb(1, 1, 1)
-    });
-    page.drawText("Table", {
-      x: tableColSplit + 10,
-      y: tableYTop - 16,
-      font: bold,
-      size: 11,
-      color: rgb(1, 1, 1)
-    });
-
     const bodyTop = Math.round(tableYTop - headerRowHeight);
     const rowH = rowHeight;
     const stripeFill = rgb(0.96, 0.97, 0.99);
+    const columnGap = isLandscape ? 18 : 0;
+    const singleTableWidth = isLandscape ? Math.round((tableWidth - columnGap) / 2) : tableWidth;
 
-    peoplePage.forEach((person, rowIndex) => {
-      const rowBottom = Math.round(bodyTop - (rowIndex + 1) * rowH);
-      if (rowIndex % 2 === 1) {
-        const leftStripeW = tableColSplit - tableX;
-        page.drawRectangle({
-          x: tableX,
-          y: rowBottom,
-          width: leftStripeW,
-          height: rowH,
-          color: stripeFill,
-          borderWidth: 0
-        });
-        page.drawRectangle({
-          x: tableColSplit,
-          y: rowBottom,
-          width: tableRight - tableColSplit,
-          height: rowH,
-          color: stripeFill,
-          borderWidth: 0
-        });
-      }
+    for (let col = 0; col < columns; col += 1) {
+      const colPeople = peoplePage.slice(col * rowsPerColumn, (col + 1) * rowsPerColumn);
+      if (!colPeople.length) continue;
+      const colX = isLandscape ? tableX + col * (singleTableWidth + columnGap) : tableX;
+      const colRight = colX + singleTableWidth;
+      const tableColSplit = Math.round(colX + singleTableWidth * 0.78);
 
-      page.drawText(person.name, {
-        x: tableX + 10,
-        y: rowBottom + 6,
-        font,
-        size: 10.5,
-        maxWidth: tableColSplit - tableX - 16
+      page.drawRectangle({
+        x: colX,
+        y: tableBottom,
+        width: singleTableWidth,
+        height: tableHeight,
+        color: rgb(1, 1, 1)
       });
-      page.drawText(`Table ${person.tableNumber}`, {
-        x: tableColSplit + 10,
-        y: rowBottom + 6,
+
+      page.drawRectangle({
+        x: colX,
+        y: Math.round(tableYTop - headerRowHeight),
+        width: singleTableWidth,
+        height: headerRowHeight,
+        color: accentColor
+      });
+
+      page.drawText("Guest Name", {
+        x: colX + 10,
+        y: tableYTop - 16,
         font: bold,
-        size: 10.5,
-        color: titleColor
+        size: 11,
+        color: rgb(1, 1, 1)
       });
-    });
+      page.drawText("Table", {
+        x: tableColSplit + 10,
+        y: tableYTop - 16,
+        font: bold,
+        size: 11,
+        color: rgb(1, 1, 1)
+      });
 
-    const rowCount = peoplePage.length;
-    const horizontalLineYs = new Set<number>();
-    for (let k = 0; k <= rowCount; k += 1) {
-      horizontalLineYs.add(Math.round(bodyTop - k * rowH));
-    }
-    horizontalLineYs.add(Math.round(tableBottom));
-    horizontalLineYs.forEach((lineY) => {
-      if (lineY < tableBottom || lineY > bodyTop) return;
+      colPeople.forEach((person, rowIndex) => {
+        const rowBottom = Math.round(bodyTop - (rowIndex + 1) * rowH);
+        if (rowIndex % 2 === 1) {
+          const leftStripeW = tableColSplit - colX;
+          page.drawRectangle({
+            x: colX,
+            y: rowBottom,
+            width: leftStripeW,
+            height: rowH,
+            color: stripeFill,
+            borderWidth: 0
+          });
+          page.drawRectangle({
+            x: tableColSplit,
+            y: rowBottom,
+            width: colRight - tableColSplit,
+            height: rowH,
+            color: stripeFill,
+            borderWidth: 0
+          });
+        }
+
+        page.drawText(person.name, {
+          x: colX + 10,
+          y: rowBottom + 6,
+          font,
+          size: 10.5,
+          maxWidth: tableColSplit - colX - 16
+        });
+        page.drawText(`Table ${person.tableNumber}`, {
+          x: tableColSplit + 10,
+          y: rowBottom + 6,
+          font: bold,
+          size: 10.5,
+          color: titleColor
+        });
+      });
+
+      const rowCount = colPeople.length;
+      const horizontalLineYs = new Set<number>();
+      for (let k = 0; k <= rowCount; k += 1) {
+        horizontalLineYs.add(Math.round(bodyTop - k * rowH));
+      }
+      horizontalLineYs.add(Math.round(tableBottom));
+      horizontalLineYs.forEach((lineY) => {
+        if (lineY < tableBottom || lineY > bodyTop) return;
+        page.drawLine({
+          start: { x: colX, y: lineY },
+          end: { x: colRight, y: lineY },
+          thickness: 1,
+          color: gridColor
+        });
+      });
+
       page.drawLine({
-        start: { x: tableX, y: lineY },
-        end: { x: tableRight, y: lineY },
+        start: { x: tableColSplit, y: tableBottom },
+        end: { x: tableColSplit, y: bodyTop },
         thickness: 1,
         color: gridColor
       });
-    });
 
-    page.drawLine({
-      start: { x: tableColSplit, y: tableBottom },
-      end: { x: tableColSplit, y: bodyTop },
-      thickness: 1,
-      color: gridColor
-    });
-
-    page.drawLine({
-      start: { x: tableX, y: tableBottom },
-      end: { x: tableRight, y: tableBottom },
-      thickness: 1,
-      color: borderColor
-    });
-    page.drawLine({
-      start: { x: tableX, y: tableYTop },
-      end: { x: tableRight, y: tableYTop },
-      thickness: 1,
-      color: borderColor
-    });
+      page.drawLine({
+        start: { x: colX, y: tableBottom },
+        end: { x: colRight, y: tableBottom },
+        thickness: 1,
+        color: borderColor
+      });
+      page.drawLine({
+        start: { x: colX, y: tableYTop },
+        end: { x: colRight, y: tableYTop },
+        thickness: 1,
+        color: borderColor
+      });
+    }
     page.drawLine({
       start: { x: tableX, y: tableBottom },
       end: { x: tableX, y: tableYTop },
@@ -1331,8 +1344,9 @@ export async function renderMenuBookletPdf(
 
 export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettings): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
-  const width = mmToPt(297);
-  const height = mmToPt(210);
+  // Kitchen copy: always portrait A4 for clipboard use.
+  const width = mmToPt(210);
+  const height = mmToPt(297);
   const data = buildServicePlanDocument(model);
   const serviceCourseLabel =
     data.serviceCourse.slice(0, 1).toUpperCase() + data.serviceCourse.slice(1);
@@ -1343,10 +1357,18 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     x: 22,
     y,
     font: titleBold,
-    size: 18,
+    size: 17,
     color: hexToRgb(theme.primaryColor || "#012f43")
   });
-  y -= 24;
+  y -= 21;
+  page.drawText(`Live call course: ${serviceCourseLabel}`, {
+    x: 24,
+    y,
+    font: bold,
+    size: 11,
+    color: rgb(0.1, 0.12, 0.17)
+  });
+  y -= 16;
 
   const ensureSpace = (required: number) => {
     if (y - required > 20) return;
@@ -1354,40 +1376,274 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y = height - 28;
   };
 
-  data.tables.forEach((table) => {
-    ensureSpace(40);
-    drawPseudoBoldText(page, normalizeForCormorant(`Table ${table.tableNumber}`), {
-      x: 24,
-      y,
-      font: titleBold,
-      size: 13
+  const drawCourseCheckboxes = (x: number, topY: number) => {
+    const size = 9;
+    const gap = 7;
+    (["Starter", "Main", "Dessert"] as const).forEach((label, index) => {
+      const itemX = x + index * 62;
+      page.drawRectangle({
+        x: itemX,
+        y: topY - size,
+        width: size,
+        height: size,
+        borderWidth: 1,
+        borderColor: rgb(0.45, 0.5, 0.58)
+      });
+      page.drawText(label, {
+        x: itemX + size + gap,
+        y: topY - size,
+        font,
+        size: 9.5,
+        color: rgb(0.16, 0.2, 0.26)
+      });
     });
-    y -= 16;
+  };
+
+  const drawScribbleArea = (x: number, topY: number, boxWidth: number, boxHeight: number) => {
+    page.drawRectangle({
+      x,
+      y: topY - boxHeight,
+      width: boxWidth,
+      height: boxHeight,
+      borderColor: rgb(0.78, 0.81, 0.88),
+      borderWidth: 1
+    });
+    page.drawText("Notes", {
+      x: x + 6,
+      y: topY - 12,
+      font: bold,
+      size: 9,
+      color: rgb(0.36, 0.41, 0.5)
+    });
+    let lineY = topY - 22;
+    while (lineY > topY - boxHeight + 10) {
+      page.drawLine({
+        start: { x: x + 6, y: lineY },
+        end: { x: x + boxWidth - 6, y: lineY },
+        thickness: 0.6,
+        color: rgb(0.9, 0.91, 0.95)
+      });
+      lineY -= 12;
+    }
+  };
+
+  data.tables.forEach((table) => {
+    const pax = table.groupedByMain.reduce((sum, group) => sum + group.guests.length, 0);
+    const outerX = 18;
+    const outerW = width - 36;
+    const leftX = 24;
+    const splitX = width - 170;
+    const notesW = width - splitX - 24;
+    const guestLines = table.groupedByMain.reduce((sum, group) => sum + 1 + group.guests.length, 0);
+    const leftContentH = 58 + guestLines * 10 + 12;
+    const rowHeight = Math.max(120, leftContentH);
+    ensureSpace(rowHeight + 8);
+    const rowTop = y;
+    const rowBottom = y - rowHeight;
+    const headerY = rowTop - 14;
+    const headerDividerY = rowTop - 20;
+    const dishTotalsY = rowTop - 33;
+    const bodyStartY = rowTop - 49;
+
+    page.drawRectangle({
+      x: outerX,
+      y: rowBottom,
+      width: outerW,
+      height: rowHeight,
+      borderWidth: 1.1,
+      borderColor: rgb(0.74, 0.78, 0.86)
+    });
+    page.drawLine({
+      start: { x: splitX - 8, y: rowBottom + 8 },
+      end: { x: splitX - 8, y: rowTop - 8 },
+      thickness: 0.8,
+      color: rgb(0.83, 0.86, 0.92)
+    });
+    page.drawLine({
+      start: { x: outerX + 1, y: headerDividerY },
+      end: { x: splitX - 10, y: headerDividerY },
+      thickness: 0.8,
+      color: rgb(0.86, 0.88, 0.93)
+    });
+
+    page.drawText(`Table ${table.tableNumber}`, {
+      x: leftX,
+      y: headerY,
+      font: bold,
+      size: 13,
+      color: rgb(0.11, 0.13, 0.18)
+    });
+    page.drawText(`PAX: ${pax}`, {
+      x: leftX + 102,
+      y: headerY,
+      font: bold,
+      size: 10,
+      color: rgb(0.16, 0.2, 0.26)
+    });
+    drawCourseCheckboxes(leftX + 150, headerY + 9);
+
+    page.drawText(
+      `Dish totals: ${table.dishCounts.map((count) => `${count.dish} (${count.count})`).join(", ")}`,
+      { x: leftX, y: dishTotalsY, font, size: 9.3, color: rgb(0.33, 0.37, 0.45), maxWidth: splitX - leftX - 16 }
+    );
+
+    let localY = bodyStartY;
     table.groupedByMain.forEach((group) => {
-      ensureSpace(24 + group.guests.length * 12);
-      page.drawText(`${serviceCourseLabel}: ${group.dish}`, { x: 34, y, font: bold, size: 11 });
-      y -= 12;
+      page.drawText(`${serviceCourseLabel}: ${group.dish}`, {
+        x: leftX + 4,
+        y: localY,
+        font: bold,
+        size: 10
+      });
+      localY -= 11;
       group.guests.forEach((guest) => {
         const dietary = guest.dietary.length ? ` [${guest.dietary.join(", ")}]` : "";
         page.drawText(`- ${guest.name}${dietary}`, {
-          x: 46,
-          y,
+          x: leftX + 14,
+          y: localY,
           font,
-          size: 10,
+          size: 9.2,
           color: guest.dietary.length ? rgb(0.66, 0.2, 0.06) : rgb(0.1, 0.12, 0.17),
-          maxWidth: width - 60
+          maxWidth: splitX - leftX - 26
         });
-        y -= 11;
+        localY -= 10;
       });
-      y -= 4;
+      localY -= 2;
     });
-    ensureSpace(26);
-    page.drawText(
-      `Dish totals: ${table.dishCounts.map((count) => `${count.dish} (${count.count})`).join(", ")}`,
-      { x: 34, y, font, size: 10, maxWidth: width - 50 }
-    );
-    y -= 18;
+
+    drawScribbleArea(splitX, rowTop - 10, notesW, rowHeight - 16);
+    y -= rowHeight + 8;
   });
+
+  const prettyDietaryLabel = (raw: string): string => {
+    const t = raw.trim();
+    if (!t) return t;
+    /** Already a normalized compound from `normalizeDietary` — do not re-tokenize. */
+    if (t.includes("·")) return t;
+    return t
+      .split(/[\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1).toLowerCase())
+      .join(" ");
+  };
+
+  const comboLabel = (dietary: string[]): string =>
+    dietary
+      .slice()
+      .sort((a, b) => a.localeCompare(b))
+      .map((item) => prettyDietaryLabel(item))
+      .join(" / ");
+
+  const makeCourseSummary = (course: "starter" | "main" | "dessert") => {
+    const dishTotals = new Map<string, number>();
+    const dietaryComboByDish = new Map<string, Map<string, number>>();
+    model.guests.forEach((guest) => {
+      const dish = guest[course]?.trim() || `No ${course} selected`;
+      dishTotals.set(dish, (dishTotals.get(dish) ?? 0) + 1);
+      if (guest.dietaryNormalized.length) {
+        const combo = comboLabel(guest.dietaryNormalized);
+        if (!dietaryComboByDish.has(dish)) dietaryComboByDish.set(dish, new Map<string, number>());
+        const perDish = dietaryComboByDish.get(dish)!;
+        perDish.set(combo, (perDish.get(combo) ?? 0) + 1);
+      }
+    });
+    return {
+      dishTotals: Array.from(dishTotals.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+      dietaryByDish: Array.from(dietaryComboByDish.entries())
+        .map(([dish, combos]) => ({
+          dish,
+          combos: Array.from(combos.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        }))
+        .sort((a, b) => a.dish.localeCompare(b.dish))
+    };
+  };
+
+  const starterSummary = makeCourseSummary("starter");
+  const mainSummary = makeCourseSummary("main");
+  const dessertSummary = makeCourseSummary("dessert");
+
+  page = doc.addPage([width, height]);
+  y = height - 28;
+  drawPseudoBoldText(page, normalizeForCormorant("Service Summary"), {
+    x: 24,
+    y,
+    font: titleBold,
+    size: 14,
+    color: hexToRgb(theme.primaryColor || "#012f43")
+  });
+  y -= 16;
+  page.drawText(`Total tables: ${data.tables.length}`, { x: 26, y, font: bold, size: 10.5 });
+  page.drawText(`Total guests: ${model.guests.length}`, { x: 160, y, font: bold, size: 10.5 });
+  y -= 14;
+
+  const ensureSummarySpace = (required: number) => {
+    if (y - required > 20) return;
+    page = doc.addPage([width, height]);
+    y = height - 28;
+  };
+
+  const drawSummaryCourse = (
+    label: string,
+    summary: {
+      dishTotals: Array<[string, number]>;
+      dietaryByDish: Array<{ dish: string; combos: Array<[string, number]> }>;
+    }
+  ) => {
+    ensureSummarySpace(28);
+    page.drawText(label, { x: 24, y, font: bold, size: 12, color: rgb(0.11, 0.13, 0.18) });
+    y -= 12;
+    page.drawText("Total dishes:", { x: 28, y, font: bold, size: 10, color: rgb(0.3, 0.34, 0.42) });
+    y -= 10;
+    summary.dishTotals.forEach(([dish, count]) => {
+      ensureSummarySpace(10);
+      page.drawText(`- ${dish} (${count})`, { x: 34, y, font, size: 9.3, maxWidth: width - 54 });
+      y -= 9.5;
+    });
+    ensureSummarySpace(14);
+    y -= 2;
+    page.drawText("Total dietaries per dish:", {
+      x: 28,
+      y,
+      font: bold,
+      size: 10,
+      color: rgb(0.3, 0.34, 0.42)
+    });
+    y -= 10;
+    if (!summary.dietaryByDish.length) {
+      ensureSummarySpace(10);
+      page.drawText("- None", { x: 34, y, font, size: 9.3 });
+      y -= 9.5;
+    } else {
+      summary.dietaryByDish.forEach(({ dish, combos }) => {
+        ensureSummarySpace(10);
+        page.drawText(`- ${dish}:`, {
+          x: 34,
+          y,
+          font: bold,
+          size: 9.3,
+          maxWidth: width - 54
+        });
+        y -= 9.5;
+        combos.forEach(([combo, count]) => {
+          ensureSummarySpace(10);
+          page.drawText(`  • ${combo} (${count})`, {
+            x: 40,
+            y,
+            font,
+            size: 9.2,
+            color: rgb(0.63, 0.23, 0.07),
+            maxWidth: width - 60
+          });
+          y -= 9.2;
+        });
+      });
+    }
+    y -= 6;
+  };
+
+  drawSummaryCourse("Starter", starterSummary);
+  drawSummaryCourse("Main", mainSummary);
+  drawSummaryCourse("Dessert", dessertSummary);
 
   await embedLogoIfPresent(doc, doc.getPages()[0], theme);
   return doc.save();
@@ -1398,6 +1654,7 @@ export async function renderDocumentPdf(
   model: EventModel,
   options: {
     tablePlan: TablePlanSettings;
+    tablePlanByPerson?: TablePlanSettings;
     placeCard: PlaceCardSettings;
     menuBooklet: MenuBookletSettings;
     theme: ThemeSettings;
@@ -1409,7 +1666,11 @@ export async function renderDocumentPdf(
     return renderTablePlanByTablePdf(model, options.tablePlan, options.theme);
   }
   if (documentType === "tablePlanByPerson") {
-    return renderTablePlanByPersonPdf(model, options.tablePlan, options.theme);
+    return renderTablePlanByPersonPdf(
+      model,
+      options.tablePlanByPerson ?? options.tablePlan,
+      options.theme
+    );
   }
   if (documentType === "placeCards") {
     return renderPlaceCardsPdf(model, options.placeCard, options.theme);

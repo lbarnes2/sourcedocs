@@ -95,6 +95,8 @@ export interface ProfileSettings {
   name: string;
   theme: ThemeSettings;
   tablePlan: TablePlanSettings;
+  /** Optional override used specifically for the table-plan-by-person layout. Falls back to `tablePlan` when absent. */
+  tablePlanByPerson?: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
 }
@@ -111,6 +113,8 @@ export interface GenerationRequest {
   bundleMode: "single" | "zip";
   theme: ThemeSettings;
   tablePlan: TablePlanSettings;
+  /** Optional override used specifically for the table-plan-by-person layout. Falls back to `tablePlan` when absent. */
+  tablePlanByPerson?: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
   dishNameOverrides?: Record<string, DishNameOverride>;

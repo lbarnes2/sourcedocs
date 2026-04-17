@@ -49,6 +49,7 @@ export function defaultProfile(name = "Default Profile"): ProfileSettings {
     name,
     theme: { ...defaultThemeSettings },
     tablePlan: { ...defaultTablePlanSettings },
+    tablePlanByPerson: { ...defaultTablePlanSettings },
     placeCard: { ...defaultPlaceCardSettings },
     menuBooklet: { ...defaultMenuBookletSettings }
   };

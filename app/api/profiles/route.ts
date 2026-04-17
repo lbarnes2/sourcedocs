@@ -24,6 +24,15 @@ const profileSchema = z.object({
     tablesPerSheet: z.number(),
     minFontSizePt: z.number()
   }),
+  tablePlanByPerson: z
+    .object({
+      paperSize: z.enum(["A4", "A3"]),
+      orientation: z.enum(["portrait", "landscape"]),
+      tablesPerSheetMode: z.enum(["auto", "manual"]),
+      tablesPerSheet: z.number(),
+      minFontSizePt: z.number()
+    })
+    .optional(),
   placeCard: z.object({
     stockName: z.string(),
     cardWidthMm: z.number(),

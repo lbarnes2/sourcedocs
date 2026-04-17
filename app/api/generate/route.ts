@@ -88,6 +88,15 @@ const generateSchema = z.object({
       tablesPerSheet: z.number(),
       minFontSizePt: z.number()
     }),
+    tablePlanByPerson: z
+      .object({
+        paperSize: z.enum(["A4", "A3"]),
+        orientation: z.enum(["portrait", "landscape"]),
+        tablesPerSheetMode: z.enum(["auto", "manual"]),
+        tablesPerSheet: z.number(),
+        minFontSizePt: z.number()
+      })
+      .optional(),
     placeCard: z.object({
       stockName: z.string(),
       cardWidthMm: z.number(),
@@ -201,6 +210,7 @@ export async function POST(request: Request) {
       docs.map(async (docType) => {
         const pdfBytes = await renderDocumentPdf(docType, model, {
           tablePlan: parsed.request.tablePlan,
+          tablePlanByPerson: parsed.request.tablePlanByPerson,
           placeCard: parsed.request.placeCard,
           menuBooklet: parsed.request.menuBooklet,
           theme: parsed.request.theme,
