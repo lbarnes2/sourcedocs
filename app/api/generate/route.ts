@@ -9,6 +9,7 @@ import { buildEventModel } from "@/lib/event/model";
 import { renderDocumentPdf } from "@/lib/pdf/render";
 import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
 import {
+  floorplanSchema,
   menuBookletSchema,
   placeCardSchema,
   tablePlanSchema,
@@ -75,7 +76,8 @@ const generateSchema = z.object({
           "tablePlanByPerson",
           "placeCards",
           "menuBooklet",
-          "servicePlan"
+          "servicePlan",
+          "floorplan"
         ])
       )
       .min(1),
@@ -85,6 +87,7 @@ const generateSchema = z.object({
     tablePlanByPerson: tablePlanSchema.optional(),
     placeCard: placeCardSchema,
     menuBooklet: menuBookletSchema,
+    floorplan: floorplanSchema,
     dishNameOverrides: z
       .record(
         z.string(),
@@ -130,6 +133,8 @@ function documentFilename(doc: DocumentType): string {
       return "menu-booklet.pdf";
     case "servicePlan":
       return "service-plan.pdf";
+    case "floorplan":
+      return "floorplan.pdf";
   }
 }
 
@@ -188,6 +193,7 @@ export async function POST(request: Request) {
           tablePlanByPerson: parsed.request.tablePlanByPerson,
           placeCard: parsed.request.placeCard,
           menuBooklet: parsed.request.menuBooklet,
+          floorplan: parsed.request.floorplan,
           theme: parsed.request.theme,
           menuLongNames,
           dishMenuDuplicateGroups

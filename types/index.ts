@@ -79,6 +79,16 @@ export interface MenuBookletSettings {
   postMealText?: string;
 }
 
+export interface FloorplanSettings {
+  paperSize: "A4" | "A3";
+  orientation: "portrait" | "landscape";
+  rows: number;
+  columns: number;
+  tableLayout: "aligned" | "staggered";
+  numbering: "straight" | "snaked";
+  startCorner: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+}
+
 export interface DishNameOverride {
   shortName: string;
   longName: string;
@@ -99,6 +109,7 @@ export interface ProfileSettings {
   tablePlanByPerson?: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
+  floorplan: FloorplanSettings;
 }
 
 export type DocumentType =
@@ -106,7 +117,8 @@ export type DocumentType =
   | "tablePlanByPerson"
   | "placeCards"
   | "menuBooklet"
-  | "servicePlan";
+  | "servicePlan"
+  | "floorplan";
 
 export interface GenerationRequest {
   documents: DocumentType[];
@@ -117,6 +129,7 @@ export interface GenerationRequest {
   tablePlanByPerson?: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
+  floorplan: FloorplanSettings;
   dishNameOverrides?: Record<string, DishNameOverride>;
   /** Merge exact dish strings (as they appear after short overrides) into one menu line. */
   dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -148,6 +161,7 @@ export interface EventProjectFile {
   tablePlanByPerson: TablePlanSettings;
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
+  floorplan: FloorplanSettings;
   dishNameOverrides: Record<string, DishNameOverride>;
   dishMenuDuplicateGroups: Array<DishMenuDuplicateGroup & { id: string }>;
   normalizeGuestNamesToTitleCase: boolean;

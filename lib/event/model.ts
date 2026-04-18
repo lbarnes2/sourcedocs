@@ -6,6 +6,13 @@ function tableSortKey(table: string): number {
   return Number.MAX_SAFE_INTEGER;
 }
 
+/** Same ordering as table-plan-by-table (`buildByTableDocument`). */
+export function sortedTableNumbers(model: EventModel): string[] {
+  return Object.keys(model.byTable).sort(
+    (a, b) => tableSortKey(a) - tableSortKey(b) || a.localeCompare(b)
+  );
+}
+
 export function buildEventModel(guests: GuestRecord[]): EventModel {
   const byTable: Record<string, GuestRecord[]> = {};
   guests.forEach((guest) => {

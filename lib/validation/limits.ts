@@ -11,3 +11,6 @@ export const MAX_DATA_URL_CHARS = 25_000_000;
 export const MAX_EVENT_NAME_CHARS = 500;
 
 export const MAX_STOCK_NAME_CHARS = 2000;
+
+/** Floorplan grid dimensions (rows × columns). */
+export const MAX_FLOORPLAN_GRID = 24;

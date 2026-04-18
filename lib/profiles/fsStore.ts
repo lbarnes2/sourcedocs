@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { assertSafeProfileId, isSafeProfileId } from "@/lib/profiles/profileId";
+import { normalizeProfileSettings } from "@/lib/profiles/normalizeProfile";
 import type { ProfileSettings } from "@/types";
 
 const PROFILE_DIR = path.join(process.cwd(), "data", "profiles");
@@ -26,7 +27,7 @@ export async function listProfiles(): Promise<ProfileSettings[]> {
       })
       .map(async (file) => {
         const content = await fs.readFile(path.join(PROFILE_DIR, file), "utf8");
-        return JSON.parse(content) as ProfileSettings;
+        return normalizeProfileSettings(JSON.parse(content));
       })
   );
 

@@ -4,6 +4,7 @@ import { assertSafeProfileId } from "@/lib/profiles/profileId";
 import { listProfiles, saveProfile, deleteProfile } from "@/lib/profiles/store";
 import { defaultProfile } from "@/lib/defaults";
 import {
+  floorplanSchema,
   menuBookletSchema,
   placeCardSchema,
   profileIdSchema,
@@ -18,7 +19,8 @@ const profileSchema = z.object({
   tablePlan: tablePlanSchema,
   tablePlanByPerson: tablePlanSchema.optional(),
   placeCard: placeCardSchema,
-  menuBooklet: menuBookletSchema
+  menuBooklet: menuBookletSchema,
+  floorplan: floorplanSchema
 });
 
 export async function GET() {

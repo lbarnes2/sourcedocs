@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { defaultFloorplanSettings } from "@/lib/defaults";
 import type { EventProjectFile } from "@/types";
 import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConflicts";
 import {
+  floorplanSchema,
   menuBookletSchema,
   placeCardSchema,
   tablePlanSchema,
@@ -15,7 +17,8 @@ const documentTypeSchema = z.enum([
   "tablePlanByPerson",
   "placeCards",
   "menuBooklet",
-  "servicePlan"
+  "servicePlan",
+  "floorplan"
 ]);
 
 const guestRecordSchema = z.object({
@@ -54,6 +57,7 @@ const savePayloadBaseSchema = z.object({
   tablePlanByPerson: tablePlanSchema,
   placeCard: placeCardSchema,
   menuBooklet: menuBookletSchema,
+  floorplan: floorplanSchema.optional(),
   dishNameOverrides: z.record(z.string(), dishOverrideSchema),
   dishMenuDuplicateGroups: z.array(duplicateGroupSchema),
   normalizeGuestNamesToTitleCase: z.boolean(),
@@ -91,6 +95,7 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
     tablePlanByPerson: parsed.tablePlanByPerson,
     placeCard: parsed.placeCard,
     menuBooklet: parsed.menuBooklet,
+    floorplan: parsed.floorplan ?? { ...defaultFloorplanSettings },
     dishNameOverrides: parsed.dishNameOverrides,
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,
@@ -142,6 +147,7 @@ export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
     tablePlanByPerson: parsed.tablePlanByPerson,
     placeCard: parsed.placeCard,
     menuBooklet: parsed.menuBooklet,
+    floorplan: parsed.floorplan ?? { ...defaultFloorplanSettings },
     dishNameOverrides: parsed.dishNameOverrides,
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,

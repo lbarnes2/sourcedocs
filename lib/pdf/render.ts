@@ -7,11 +7,14 @@ import type {
   DishMenuDuplicateGroup,
   DocumentType,
   EventModel,
+  FloorplanSettings,
   MenuBookletSettings,
   PlaceCardSettings,
   TablePlanSettings,
   ThemeSettings
 } from "@/types";
+import { buildFloorplanPlacedCells } from "@/lib/docs/floorplanLayout";
+import { sortedTableNumbers } from "@/lib/event/model";
 import { buildByPersonDocument } from "@/lib/docs/byPerson";
 import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
@@ -124,12 +127,20 @@ async function createDocWithFonts(): Promise<{ doc: PDFDocument } & EmbeddedPdfF
   return { doc, body, bodyBold, title: cormorant, titleBold: cormorant };
 }
 
-function pageDimensions(settings: TablePlanSettings): [number, number] {
+function pageDimensions(settings: Pick<TablePlanSettings, "paperSize" | "orientation">): [number, number] {
   const A4: [number, number] = [mmToPt(210), mmToPt(297)];
   const A3: [number, number] = [mmToPt(297), mmToPt(420)];
   const base = settings.paperSize === "A3" ? A3 : A4;
   if (settings.orientation === "landscape") return [base[1], base[0]];
   return base;
+}
+
+function floorplanCellWidth(usableW: number, cols: number, gap: number, staggered: boolean): number {
+  if (!staggered || cols <= 1) {
+    return (usableW - (cols - 1) * gap) / cols;
+  }
+  /** Odd rows offset by (w+gap)/2; solve so rightmost cell stays within usable width. */
+  return (usableW - gap * (cols - 0.5)) / (cols + 0.5);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -1713,6 +1724,196 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   return doc.save();
 }
 
+export async function renderFloorplanPdf(
+  model: EventModel,
+  settings: FloorplanSettings,
+  theme: ThemeSettings
+): Promise<Uint8Array> {
+  const { doc, bodyBold: bold, title } = await createDocWithFonts();
+  const [width, height] = pageDimensions(settings);
+  const titleColor = hexToRgb(theme.primaryColor, "#012f43");
+  const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
+  const headerBandHeight = 96;
+  const sideMargin = 24;
+  const gap = 12;
+  const outerPad = 8;
+  const safeSideWidth = 104;
+  const logoWidth = 68;
+
+  const rows = settings.rows;
+  const cols = settings.columns;
+  const tables = sortedTableNumbers(model);
+  const placed = buildFloorplanPlacedCells(settings, tables);
+
+  const innerTop = height - headerBandHeight - sideMargin;
+  const innerBottom = sideMargin;
+  const usableH = innerTop - innerBottom;
+  const cellH = (usableH - (rows - 1) * gap) / rows;
+
+  const innerLeft = sideMargin;
+  const usableW = width - 2 * sideMargin;
+  const cellW = floorplanCellWidth(usableW, cols, gap, settings.tableLayout === "staggered");
+
+  const cellRect = (row: number, col: number) => {
+    const rowOffsetX =
+      settings.tableLayout === "staggered" && cols > 1 && row % 2 === 1 ? (cellW + gap) / 2 : 0;
+    const x = innerLeft + rowOffsetX + col * (cellW + gap);
+    const y = innerTop - (row + 1) * cellH - row * gap;
+    return { x, y, w: cellW, h: cellH };
+  };
+
+  /** pdf-lib circles use (x,y) as center; `size` is the radius (semi-axis). */
+  const floorplanRoundLayout = (w: number, h: number) => {
+    const cellR = Math.min(w, h) / 2 - 1;
+    const chairR = clamp(cellR * 0.065, 1.9, 4);
+    const ringGap = 2.4;
+    /** Outer edge of chair must stay inside the cell: tableR + gap + 2·chairR ≤ cellR. */
+    const maxTableR = Math.max(7, cellR - 0.5 - ringGap - 2 * chairR);
+    let tableR = Math.min(cellR * 0.62, maxTableR);
+    let chairDist = tableR + ringGap + chairR;
+    while (chairDist + chairR > cellR - 0.4 && tableR > 7) {
+      tableR -= 0.6;
+      chairDist = tableR + ringGap + chairR;
+    }
+    const nChairs = 8;
+    return { cellR, tableR, chairR, chairDist, nChairs };
+  };
+
+  let boundMinX = Infinity;
+  let boundMaxX = -Infinity;
+  let boundMinY = Infinity;
+  let boundMaxY = -Infinity;
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const { x, y, w, h } = cellRect(r, c);
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const { cellR } = floorplanRoundLayout(w, h);
+      boundMinX = Math.min(boundMinX, cx - cellR);
+      boundMaxX = Math.max(boundMaxX, cx + cellR);
+      boundMinY = Math.min(boundMinY, cy - cellR);
+      boundMaxY = Math.max(boundMaxY, cy + cellR);
+    }
+  }
+
+  const page = doc.addPage([width, height]);
+  page.drawRectangle({
+    x: 0,
+    y: height - headerBandHeight,
+    width,
+    height: headerBandHeight,
+    color: rgb(1, 1, 1)
+  });
+
+  const eventTitle = normalizeForCormorant(theme.eventName || "Event");
+  const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
+  let titleSize = 30;
+  let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+  while (titleLines.length > 2 && titleSize > 18) {
+    titleSize -= 1;
+    titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+  }
+  const titleLineHeight = titleSize + 3;
+  const titleBlockHeight = titleLines.length * titleLineHeight;
+  let titleY = height - 16 - titleSize - (2 - Math.min(2, titleLines.length)) * 4;
+  if (titleBlockHeight > 44) {
+    titleY -= (titleBlockHeight - 44) / 2;
+  }
+  const titleCenterY = titleY - ((Math.min(2, titleLines.length) - 1) * titleLineHeight) / 2 + titleSize * 0.35;
+  titleLines.slice(0, 2).forEach((line, lineIndex) => {
+    const lineWidth = title.widthOfTextAtSize(line, titleSize);
+    page.drawText(line, {
+      x: (width - lineWidth) / 2,
+      y: titleY - lineIndex * titleLineHeight,
+      font: title,
+      size: titleSize,
+      color: titleColor
+    });
+  });
+
+  page.drawRectangle({
+    x: boundMinX - outerPad,
+    y: boundMinY - outerPad,
+    width: boundMaxX - boundMinX + 2 * outerPad,
+    height: boundMaxY - boundMinY + 2 * outerPad,
+    borderColor: rgb(0.55, 0.6, 0.68),
+    borderWidth: 1.2,
+    color: rgb(0.98, 0.99, 1)
+  });
+
+  const mutedFill = rgb(0.93, 0.94, 0.96);
+  const mutedBorder = rgb(0.78, 0.81, 0.88);
+  const mutedChair = rgb(0.72, 0.75, 0.82);
+  const chairBorder = rgb(0.55, 0.6, 0.68);
+  const tableBorder = rgb(0.79, 0.82, 0.9);
+  const tableFill = rgb(0.99, 0.995, 1);
+  const labelColor = hexToRgb(theme.textColor, "#1a2430");
+
+  placed.forEach((cell) => {
+    const { x, y, w, h } = cellRect(cell.row, cell.col);
+    const filled = cell.tableNumber != null && cell.tableNumber !== "";
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const { tableR, chairR, chairDist, nChairs } = floorplanRoundLayout(w, h);
+
+    for (let i = 0; i < nChairs; i += 1) {
+      const angle = (i / nChairs) * Math.PI * 2 - Math.PI / 2;
+      const chx = cx + chairDist * Math.cos(angle);
+      const chy = cy + chairDist * Math.sin(angle);
+      page.drawCircle({
+        x: chx,
+        y: chy,
+        size: chairR,
+        color: filled ? accentColor : mutedChair,
+        opacity: filled ? 0.45 : 0.35,
+        borderColor: filled ? tableBorder : chairBorder,
+        borderWidth: 0.55
+      });
+    }
+
+    page.drawCircle({
+      x: cx,
+      y: cy,
+      size: tableR,
+      color: filled ? tableFill : mutedFill,
+      opacity: filled ? 1 : 0.85,
+      borderColor: filled ? tableBorder : mutedBorder,
+      borderWidth: 1
+    });
+
+    if (filled) {
+      const label = `Table ${cell.tableNumber}`;
+      let tableLabelSize = Math.min(15, Math.max(8, (tableR * 2) / 6.5));
+      let labelWidth = bold.widthOfTextAtSize(label, tableLabelSize);
+      const maxW = (tableR * 2 - 5) * 0.95;
+      while (labelWidth > maxW && tableLabelSize > 6) {
+        tableLabelSize -= 0.5;
+        labelWidth = bold.widthOfTextAtSize(label, tableLabelSize);
+      }
+      page.drawText(label, {
+        x: cx - labelWidth / 2,
+        y: cy - tableLabelSize * 0.35,
+        font: bold,
+        size: tableLabelSize,
+        color: labelColor
+      });
+    }
+  });
+
+  await embedLogoFromDataUrl(doc, page, theme.clientLogoDataUrl, {
+    x: 24,
+    centerY: titleCenterY,
+    width: logoWidth
+  });
+  await embedLogoFromDataUrl(doc, page, theme.venueLogoDataUrl, {
+    x: width - 24 - logoWidth,
+    centerY: titleCenterY,
+    width: logoWidth
+  });
+
+  return doc.save();
+}
+
 export async function renderDocumentPdf(
   documentType: DocumentType,
   model: EventModel,
@@ -1721,6 +1922,7 @@ export async function renderDocumentPdf(
     tablePlanByPerson?: TablePlanSettings;
     placeCard: PlaceCardSettings;
     menuBooklet: MenuBookletSettings;
+    floorplan: FloorplanSettings;
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
     dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -1747,6 +1949,9 @@ export async function renderDocumentPdf(
       options.menuLongNames ?? {},
       options.dishMenuDuplicateGroups ?? []
     );
+  }
+  if (documentType === "floorplan") {
+    return renderFloorplanPdf(model, options.floorplan, options.theme);
   }
   return renderServicePlanPdf(model, options.theme);
 }

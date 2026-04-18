@@ -1,3 +1,4 @@
+import { normalizeProfileSettings } from "@/lib/profiles/normalizeProfile";
 import type { ProfileSettings } from "@/types";
 import { assertSafeProfileId, isSafeProfileId } from "@/lib/profiles/profileId";
 import { r2DeleteObject, r2GetObjectUtf8, r2ListObjectKeys, r2PutObjectUtf8 } from "@/lib/storage/r2";
@@ -20,7 +21,7 @@ export async function listProfiles(): Promise<ProfileSettings[]> {
       const raw = await r2GetObjectUtf8(key);
       if (!raw) return null;
       try {
-        return JSON.parse(raw) as ProfileSettings;
+        return normalizeProfileSettings(JSON.parse(raw));
       } catch {
         return null;
       }

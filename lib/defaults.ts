@@ -1,4 +1,5 @@
 import type {
+  FloorplanSettings,
   MenuBookletSettings,
   PlaceCardSettings,
   ProfileSettings,
@@ -43,6 +44,16 @@ export const defaultMenuBookletSettings: MenuBookletSettings = {
   postMealText: ""
 };
 
+export const defaultFloorplanSettings: FloorplanSettings = {
+  paperSize: "A4",
+  orientation: "landscape",
+  rows: 3,
+  columns: 4,
+  tableLayout: "aligned",
+  numbering: "snaked",
+  startCorner: "topLeft"
+};
+
 export function defaultProfile(name = "Default Profile"): ProfileSettings {
   return {
     id: "default",
@@ -51,6 +62,7 @@ export function defaultProfile(name = "Default Profile"): ProfileSettings {
     tablePlan: { ...defaultTablePlanSettings },
     tablePlanByPerson: { ...defaultTablePlanSettings },
     placeCard: { ...defaultPlaceCardSettings },
-    menuBooklet: { ...defaultMenuBookletSettings }
+    menuBooklet: { ...defaultMenuBookletSettings },
+    floorplan: { ...defaultFloorplanSettings }
   };
 }

@@ -33,6 +33,16 @@ export const menuBookletSchema = z.object({
   postMealText: z.string().max(20_000).optional()
 });
 
+export const floorplanSchema = z.object({
+  paperSize: z.enum(["A4", "A3"]),
+  orientation: z.enum(["portrait", "landscape"]),
+  rows: z.number().int().min(1).max(limits.MAX_FLOORPLAN_GRID),
+  columns: z.number().int().min(1).max(limits.MAX_FLOORPLAN_GRID),
+  tableLayout: z.enum(["aligned", "staggered"]),
+  numbering: z.enum(["straight", "snaked"]),
+  startCorner: z.enum(["topLeft", "topRight", "bottomLeft", "bottomRight"])
+});
+
 export const themeSchema = z.object({
   primaryColor: hexColorStringSchema,
   accentColor: hexColorStringSchema,
