@@ -657,7 +657,13 @@ export default function HomePage() {
 
   return (
     <main>
-      <h1>Event Document Generator</h1>
+      <header className="app-header">
+        <h1>Event Document Generator</h1>
+        <p className="app-tagline">
+          Upload guest data, tune branding and print settings, then export table plans, place cards, menu booklets, and
+          service plans as PDF.
+        </p>
+      </header>
       <div className="panel">
         <h2 className="step-heading">
           <span className="step-heading-badge">·</span>
@@ -982,7 +988,7 @@ export default function HomePage() {
             <summary style={{ cursor: "pointer", marginBottom: 10 }}>
               Editing {guests.length} guest{guests.length === 1 ? "" : "s"} (click to collapse)
             </summary>
-            <div style={{ maxHeight: 420, overflow: "auto", borderRadius: 10, border: "1px solid #d9deea" }}>
+            <div className="guest-table-wrap">
           <table>
             <thead>
               <tr>
@@ -1324,15 +1330,16 @@ export default function HomePage() {
 
         <div className="subpanel">
           <h3 style={{ marginTop: 0 }}>Menu card extras</h3>
-          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
+          <p className="text-muted" style={{ marginTop: 0, marginBottom: 12 }}>
             Optional text above the first course and/or below the last course (for example bread and butter, tea and
             coffee).
           </p>
-          <div className="grid two">
-            <label>
-              Pre-meal line (optional)
+          <div className="paired-fields">
+            <label className="field-stack">
+              <span className="field-label-text">Pre-meal line (optional)</span>
               <textarea
-                rows={2}
+                className="textarea-paired"
+                rows={3}
                 placeholder="Bread and butter"
                 value={menuBooklet.preMealText ?? ""}
                 onChange={(event) =>
@@ -1340,10 +1347,11 @@ export default function HomePage() {
                 }
               />
             </label>
-            <label>
-              Post-meal line (optional)
+            <label className="field-stack">
+              <span className="field-label-text">Post-meal line (optional)</span>
               <textarea
-                rows={2}
+                className="textarea-paired"
+                rows={3}
                 placeholder="Fairtrade Tea & Coffee"
                 value={menuBooklet.postMealText ?? ""}
                 onChange={(event) =>
@@ -1355,7 +1363,7 @@ export default function HomePage() {
         </div>
 
         <h3 style={{ marginTop: 16 }}>Dish name overrides (short + long)</h3>
-        <p>
+        <p className="text-muted" style={{ marginBottom: 14 }}>
           Run Preview to auto-populate dish names. You can override the short name (place cards/service plans/table views)
           and/or long name (menu card) before export.
         </p>
@@ -1364,15 +1372,17 @@ export default function HomePage() {
             <p className="pill">Run Preview first to populate dish options.</p>
           )}
           {Object.entries(dishNameOverrides).map(([originalName, override]) => (
-            <div key={originalName} className="panel" style={{ marginBottom: 0 }}>
-              <p style={{ marginTop: 0, marginBottom: 10, fontSize: 13, opacity: 0.8 }}>
+            <div key={originalName} className="dish-override-card">
+              <p className="dish-source">
                 Source: <strong>{originalName}</strong>
               </p>
-              <div className="grid two">
-                <label>
-                  Short name override
+              <div className="paired-fields">
+                <label className="field-stack">
+                  <span className="field-label-text">Short name override</span>
                   <textarea
-                    rows={1}
+                    className="textarea-paired"
+                    rows={3}
+                    autoComplete="off"
                     value={override.shortName}
                     onChange={(event) =>
                       setDishNameOverrides((previous) => ({
@@ -1385,10 +1395,12 @@ export default function HomePage() {
                     }
                   />
                 </label>
-                <label>
-                  Long name override
+                <label className="field-stack">
+                  <span className="field-label-text">Long name override</span>
                   <textarea
-                    rows={2}
+                    className="textarea-paired"
+                    rows={3}
+                    autoComplete="off"
                     value={override.longName}
                     onChange={(event) =>
                       setDishNameOverrides((previous) => ({
@@ -1491,11 +1503,14 @@ export default function HomePage() {
           <span className="step-heading-badge">5</span>
           <span>Export bundle</span>
         </h2>
-        <div className="grid two">
+        <p className="text-muted" style={{ marginTop: 0, marginBottom: 12 }}>
+          Select which PDFs to include. Single-file mode only applies when exactly one output is checked.
+        </p>
+        <div className="export-doc-grid">
           {DOCUMENTS.map((document) => {
             const checked = selectedDocuments.includes(document.id);
             return (
-              <label key={document.id}>
+              <label key={document.id} className="checkbox-row">
                 <input
                   type="checkbox"
                   checked={checked}
@@ -1504,32 +1519,37 @@ export default function HomePage() {
                       checked ? previous.filter((item) => item !== document.id) : [...previous, document.id]
                     );
                   }}
-                />{" "}
-                {document.label}
+                />
+                <span>{document.label}</span>
               </label>
             );
           })}
+        </div>
+        <div className="export-options-row">
           <label>
-            Download mode
+            <span className="field-label-text">Download mode</span>
             <select value={bundleMode} onChange={(event) => setBundleMode(event.target.value as "single" | "zip")}>
               <option value="zip">ZIP (multiple files)</option>
               <option value="single">Single file (one selected output)</option>
             </select>
           </label>
-          <label>
-            Name normalization
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-              <input
-                type="checkbox"
-                checked={normalizeGuestNamesToTitleCase}
-                onChange={(event) => setNormalizeGuestNamesToTitleCase(event.target.checked)}
-              />
-              <span>Apply title case to guest names on export (optional)</span>
-            </div>
-            <small style={{ display: "block", marginTop: 6, color: "#556070" }}>
-              Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
-            </small>
+        </div>
+        <div className="export-name-block">
+          <div className="export-name-heading">Name normalization</div>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={normalizeGuestNamesToTitleCase}
+              onChange={(event) => setNormalizeGuestNamesToTitleCase(event.target.checked)}
+            />
+            <span>
+              Apply title case to guest names on export{" "}
+              <span style={{ color: "var(--ink-muted)", fontWeight: 400 }}>(optional)</span>
+            </span>
           </label>
+          <p className="text-muted checkbox-hint">
+            Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
+          </p>
         </div>
         <button disabled={loadingExport || loadingPreview} onClick={exportDocuments}>
           {loadingExport ? "Generating..." : "Generate and Download"}

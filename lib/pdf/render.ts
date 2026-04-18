@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { degrees, PDFDocument, rgb } from "pdf-lib";
+import { hexToRgb } from "@/lib/pdf/color";
 import fontkit from "@pdf-lib/fontkit";
 import type {
   DishMenuDuplicateGroup,
@@ -121,13 +122,6 @@ async function createDocWithFonts(): Promise<{ doc: PDFDocument } & EmbeddedPdfF
   ]);
   const cormorant = await doc.embedFont(bytes.title, { subset: false });
   return { doc, body, bodyBold, title: cormorant, titleBold: cormorant };
-}
-
-function hexToRgb(hex: string) {
-  const cleaned = hex.replace("#", "");
-  const full = cleaned.length === 3 ? cleaned.split("").map((c) => c + c).join("") : cleaned;
-  const value = parseInt(full, 16);
-  return rgb(((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255);
 }
 
 function pageDimensions(settings: TablePlanSettings): [number, number] {
@@ -390,7 +384,7 @@ export async function renderTablePlanByTablePdf(
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const [width, height] = pageDimensions(settings);
-  const titleColor = hexToRgb(theme.primaryColor || "#012f43");
+  const titleColor = hexToRgb(theme.primaryColor, "#012f43");
   const data = buildByTableDocument(model);
   const tablesPerSheet = pickAdaptiveTablesPerSheet(
     data.tables.map((table) => table.guests.length),
@@ -404,7 +398,7 @@ export async function renderTablePlanByTablePdf(
   const contentTopOffset = headerBandHeight;
   const safeSideWidth = 104;
   const logoWidth = 68;
-  const accentColor = hexToRgb(theme.accentColor || "#acc1cb");
+  const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
 
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
     const tables = pages[pageIndex];
@@ -551,8 +545,8 @@ export async function renderTablePlanByPersonPdf(
   const columns = isLandscape ? 2 : 1;
   const rowsPerPage = rowsPerColumn * columns;
   const pages = chunk(people, rowsPerPage);
-  const titleColor = hexToRgb(theme.primaryColor || "#012f43");
-  const accentColor = hexToRgb(theme.accentColor || "#acc1cb");
+  const titleColor = hexToRgb(theme.primaryColor, "#012f43");
+  const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
   const safeSideWidth = 104;
   const logoWidth = 68;
   const tableX = Math.round(tableMargin);
@@ -770,9 +764,9 @@ export async function renderPlaceCardsPdf(
   const innerPadV = 5;
   const safeEdge = Math.max(mmToPt(settings.safeMarginMm), 2);
 
-  const primary = hexToRgb(theme.primaryColor || "#012f43");
-  const accent = hexToRgb(theme.accentColor || "#acc1cb");
-  const nameColor = hexToRgb(theme.textColor || "#595959");
+  const primary = hexToRgb(theme.primaryColor, "#012f43");
+  const accent = hexToRgb(theme.accentColor, "#acc1cb");
+  const nameColor = hexToRgb(theme.textColor, "#595959");
   const subtitleColor = accent;
   const mutedGrey = rgb(0.5, 0.52, 0.55);
   const dietaryColor = rgb(0.1, 0.12, 0.17);
@@ -951,28 +945,72 @@ export async function renderMenuBookletPdf(
   const halfW = pageWidth / 2;
   const foldGutter = 6;
   const outerMargin = 14;
-  const primary = hexToRgb(theme.primaryColor || "#012f43");
-  const accent = hexToRgb(theme.accentColor || "#acc1cb");
+  /** Gap between primary outer stroke and accent inner stroke (pt). */
+  const borderInsetOuter = 8;
+  /** Pull both outer and inner frames in from the panel edge at the center fold (pt). */
+  const borderInsetExtraTowardFold = 10;
+  const primary = hexToRgb(theme.primaryColor, "#012f43");
+  const accent = hexToRgb(theme.accentColor, "#acc1cb");
   const menu = buildMenuBookletDocument(model, menuLongNames, dishMenuDuplicateGroups);
   const white = rgb(1, 1, 1);
 
+  type MenuHalfSide = "left" | "right";
+
+  type BorderRect = { x: number; y: number; width: number; height: number };
+
+  /** Primary (outer) border frame: same fold inset as before, now explicit for both strokes. */
+  const outerBorderFrame = (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    side: MenuHalfSide
+  ): BorderRect => {
+    const fold = borderInsetExtraTowardFold;
+    if (side === "left") {
+      return { x, y, width: width - fold, height };
+    }
+    return { x: x + fold, y, width: width - fold, height };
+  };
+
+  /** Accent (inner) border: uniform inset from the outer frame. */
+  const innerBorderFromOuter = (outer: BorderRect): BorderRect => {
+    const p = borderInsetOuter;
+    return {
+      x: outer.x + p,
+      y: outer.y + p,
+      width: outer.width - 2 * p,
+      height: outer.height - 2 * p
+    };
+  };
+
   const drawFancyBorder = (
     page: import("pdf-lib").PDFPage,
-    options: { x: number; y: number; width: number; height: number; primaryColor: ReturnType<typeof rgb>; accentColor: ReturnType<typeof rgb> }
+    options: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      primaryColor: ReturnType<typeof rgb>;
+      accentColor: ReturnType<typeof rgb>;
+      halfSide: MenuHalfSide;
+    }
   ) => {
+    const outer = outerBorderFrame(options.x, options.y, options.width, options.height, options.halfSide);
     page.drawRectangle({
-      x: options.x,
-      y: options.y,
-      width: options.width,
-      height: options.height,
+      x: outer.x,
+      y: outer.y,
+      width: outer.width,
+      height: outer.height,
       borderColor: options.primaryColor,
       borderWidth: 1.8
     });
+    const inner = innerBorderFromOuter(outer);
     page.drawRectangle({
-      x: options.x + 8,
-      y: options.y + 8,
-      width: options.width - 16,
-      height: options.height - 16,
+      x: inner.x,
+      y: inner.y,
+      width: inner.width,
+      height: inner.height,
       borderColor: options.accentColor,
       borderWidth: 1.2
     });
@@ -980,21 +1018,23 @@ export async function renderMenuBookletPdf(
 
   const drawFancyBorderOnDark = (
     page: import("pdf-lib").PDFPage,
-    options: { x: number; y: number; width: number; height: number }
+    options: { x: number; y: number; width: number; height: number; halfSide: MenuHalfSide }
   ) => {
+    const outer = outerBorderFrame(options.x, options.y, options.width, options.height, options.halfSide);
     page.drawRectangle({
-      x: options.x,
-      y: options.y,
-      width: options.width,
-      height: options.height,
+      x: outer.x,
+      y: outer.y,
+      width: outer.width,
+      height: outer.height,
       borderColor: white,
       borderWidth: 1.6
     });
+    const inner = innerBorderFromOuter(outer);
     page.drawRectangle({
-      x: options.x + 8,
-      y: options.y + 8,
-      width: options.width - 16,
-      height: options.height - 16,
+      x: inner.x,
+      y: inner.y,
+      width: inner.width,
+      height: inner.height,
       borderColor: accent,
       borderWidth: 1.1
     });
@@ -1034,6 +1074,10 @@ export async function renderMenuBookletPdf(
   const panelY = outerMargin;
   const panelH = pageHeight - outerMargin * 2;
 
+  /** Inset toward fold — use for cover content + menu text so it lines up with the border frames. */
+  const leftCoverOuter = outerBorderFrame(leftPanelX, panelY, leftPanelW, panelH, "left");
+  const rightCoverOuter = outerBorderFrame(rightPanelX, panelY, rightPanelW, panelH, "right");
+
   // --- Sheet 1: [ Back cover | Front cover ] ---
   const sheet1 = doc.addPage([pageWidth, pageHeight]);
   sheet1.drawRectangle({ x: 0, y: 0, width: pageWidth, height: pageHeight, color: rgb(1, 1, 1) });
@@ -1045,15 +1089,16 @@ export async function renderMenuBookletPdf(
     width: leftPanelW,
     height: panelH,
     primaryColor: primary,
-    accentColor: accent
+    accentColor: accent,
+    halfSide: "left"
   });
   const venueLogoW = 118;
   await embedLogoFromDataUrl(doc, sheet1, theme.venueLogoDataUrl, {
     width: venueLogoW,
-    x: leftPanelX + (leftPanelW - venueLogoW) / 2,
+    x: leftCoverOuter.x + (leftCoverOuter.width - venueLogoW) / 2,
     y: pageHeight / 2 + 18
   });
-  drawCenteredInPanel(sheet1, "0117 428 4000", pageHeight / 2 - 6, bold, 16, primary, leftPanelX, leftPanelW);
+  drawCenteredInPanel(sheet1, "0117 428 4000", pageHeight / 2 - 6, bold, 16, primary, leftCoverOuter.x, leftCoverOuter.width);
   drawCenteredInPanel(
     sheet1,
     "bristol.ac.uk/venues | bristol.ac.uk/catering",
@@ -1061,31 +1106,32 @@ export async function renderMenuBookletPdf(
     font,
     11,
     rgb(0.23, 0.27, 0.35),
-    leftPanelX,
-    leftPanelW
+    leftCoverOuter.x,
+    leftCoverOuter.width
   );
 
   // Right half: front cover (solid primary, white text)
   sheet1.drawRectangle({
-    x: rightPanelX,
-    y: panelY,
-    width: rightPanelW,
-    height: panelH,
+    x: rightCoverOuter.x,
+    y: rightCoverOuter.y,
+    width: rightCoverOuter.width,
+    height: rightCoverOuter.height,
     color: primary
   });
   drawFancyBorderOnDark(sheet1, {
     x: rightPanelX,
     y: panelY,
     width: rightPanelW,
-    height: panelH
+    height: panelH,
+    halfSide: "right"
   });
   const clientLogoW = 88;
   await embedLogoFromDataUrl(doc, sheet1, theme.clientLogoDataUrl, {
     width: clientLogoW,
-    x: rightPanelX + (rightPanelW - clientLogoW) / 2,
+    x: rightCoverOuter.x + (rightCoverOuter.width - clientLogoW) / 2,
     y: pageHeight - panelY - clientLogoW - 18
   });
-  const titleMaxW = rightPanelW - 36;
+  const titleMaxW = rightCoverOuter.width - 36;
   const titleToDateGap = 52;
   const logoImgBottomY = pageHeight - panelY - clientLogoW - 18;
   const titleTopMaxY = logoImgBottomY - 12;
@@ -1145,8 +1191,8 @@ export async function renderMenuBookletPdf(
       title,
       titleFontSize,
       white,
-      rightPanelX,
-      rightPanelW
+      rightCoverOuter.x,
+      rightCoverOuter.width
     );
   });
   if (theme.eventDate?.trim()) {
@@ -1157,8 +1203,8 @@ export async function renderMenuBookletPdf(
       title,
       14,
       white,
-      rightPanelX,
-      rightPanelW,
+      rightCoverOuter.x,
+      rightCoverOuter.width,
       0.62
     );
   }
@@ -1173,7 +1219,8 @@ export async function renderMenuBookletPdf(
     width: leftPanelW,
     height: panelH,
     primaryColor: primary,
-    accentColor: accent
+    accentColor: accent,
+    halfSide: "left"
   });
 
   drawFancyBorder(sheet2, {
@@ -1182,7 +1229,8 @@ export async function renderMenuBookletPdf(
     width: rightPanelW,
     height: panelH,
     primaryColor: primary,
-    accentColor: accent
+    accentColor: accent,
+    halfSide: "right"
   });
   type MenuSection = { heading: string; lines: string[] };
   const sections: MenuSection[] = [];
@@ -1191,8 +1239,8 @@ export async function renderMenuBookletPdf(
   if (menu.desserts.length) sections.push({ heading: "Dessert", lines: menu.desserts });
 
   const innerPad = 18;
-  const innerLeft = rightPanelX + innerPad;
-  const innerW = rightPanelW - innerPad * 2;
+  const innerLeft = rightCoverOuter.x + innerPad;
+  const innerW = rightCoverOuter.width - innerPad * 2;
   const innerBottom = panelY + innerPad;
   const innerTop = panelY + panelH - innerPad;
   const innerHeight = innerTop - innerBottom;
@@ -1357,7 +1405,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y,
     font: titleBold,
     size: 17,
-    color: hexToRgb(theme.primaryColor || "#012f43")
+    color: hexToRgb(theme.primaryColor, "#012f43")
   });
   y -= 21;
   page.drawText(`Courses: ${coursesSubtitle}`, {
@@ -1585,7 +1633,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y,
     font: titleBold,
     size: 14,
-    color: hexToRgb(theme.primaryColor || "#012f43")
+    color: hexToRgb(theme.primaryColor, "#012f43")
   });
   y -= 16;
   page.drawText(`Total tables: ${data.tables.length}`, { x: 26, y, font: bold, size: 10.5 });

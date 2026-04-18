@@ -1,8 +1,10 @@
 import type { EventProjectFile, ProjectListItem } from "@/types";
 import {
   PROJECT_MANIFEST_KEY,
+  PROJECT_PREFIX,
   assertValidProjectId,
   isProjectDataKey,
+  isValidProjectUuid,
   listItemFromProjectFile,
   projectObjectKey
 } from "@/lib/projects/projectKeys";
@@ -29,6 +31,26 @@ async function writeManifest(entries: ProjectListItem[]): Promise<void> {
   await r2PutObjectUtf8(PROJECT_MANIFEST_KEY, JSON.stringify(entries, null, 2));
 }
 
+async function listedProjectIds(): Promise<Set<string>> {
+  const keys = (await r2ListObjectKeys("projects/")).filter(isProjectDataKey);
+  const ids = new Set<string>();
+  for (const key of keys) {
+    const id = key.slice(PROJECT_PREFIX.length, -".json".length);
+    if (isValidProjectUuid(id)) ids.add(id);
+  }
+  return ids;
+}
+
+function manifestMatchesObjectIds(manifest: ProjectListItem[], objectIds: Set<string>): boolean {
+  if (manifest.length !== objectIds.size) return false;
+  const seen = new Set<string>();
+  for (const entry of manifest) {
+    if (!objectIds.has(entry.id)) return false;
+    seen.add(entry.id);
+  }
+  return seen.size === objectIds.size;
+}
+
 async function rebuildManifestFromObjects(): Promise<ProjectListItem[]> {
   const keys = (await r2ListObjectKeys("projects/")).filter(isProjectDataKey);
   const entries: ProjectListItem[] = [];
@@ -53,6 +75,11 @@ export async function listProjectsR2(): Promise<ProjectListItem[]> {
   let manifest = await readManifest();
   if (!manifest || manifest.length === 0) {
     manifest = await rebuildManifestFromObjects();
+  } else {
+    const objectIds = await listedProjectIds();
+    if (!manifestMatchesObjectIds(manifest, objectIds)) {
+      manifest = await rebuildManifestFromObjects();
+    }
   }
   return manifest;
 }

@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { EventProjectFile, ProjectListItem } from "@/types";
-import { assertValidProjectId, listItemFromProjectFile } from "@/lib/projects/projectKeys";
+import {
+  assertValidProjectId,
+  isValidProjectUuid,
+  listItemFromProjectFile
+} from "@/lib/projects/projectKeys";
 
 const PROJECT_DIR = path.join(process.cwd(), "data", "projects");
 
@@ -33,6 +37,28 @@ async function writeManifestToDisk(entries: ProjectListItem[]): Promise<void> {
   await fs.writeFile(manifestFsPath(), JSON.stringify(entries, null, 2), "utf8");
 }
 
+async function diskProjectIds(): Promise<Set<string>> {
+  await ensureProjectDir();
+  const files = await fs.readdir(PROJECT_DIR);
+  const ids = new Set<string>();
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    const id = file.slice(0, -".json".length);
+    if (isValidProjectUuid(id)) ids.add(id);
+  }
+  return ids;
+}
+
+function manifestMatchesDisk(manifest: ProjectListItem[], diskIds: Set<string>): boolean {
+  if (manifest.length !== diskIds.size) return false;
+  const seen = new Set<string>();
+  for (const entry of manifest) {
+    if (!diskIds.has(entry.id)) return false;
+    seen.add(entry.id);
+  }
+  return seen.size === diskIds.size;
+}
+
 async function rebuildManifestFromFiles(): Promise<ProjectListItem[]> {
   await ensureProjectDir();
   const files = await fs.readdir(PROJECT_DIR);
@@ -58,6 +84,11 @@ export async function listProjectsFs(): Promise<ProjectListItem[]> {
   let manifest = await readManifestFromDisk();
   if (!manifest || manifest.length === 0) {
     manifest = await rebuildManifestFromFiles();
+  } else {
+    const diskIds = await diskProjectIds();
+    if (!manifestMatchesDisk(manifest, diskIds)) {
+      manifest = await rebuildManifestFromFiles();
+    }
   }
   return manifest;
 }

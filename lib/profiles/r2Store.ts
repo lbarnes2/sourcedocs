@@ -1,16 +1,20 @@
 import type { ProfileSettings } from "@/types";
+import { assertSafeProfileId, isSafeProfileId } from "@/lib/profiles/profileId";
 import { r2DeleteObject, r2GetObjectUtf8, r2ListObjectKeys, r2PutObjectUtf8 } from "@/lib/storage/r2";
 
 const PREFIX = "profiles/";
 
 function profileKey(id: string): string {
-  const safe = id.replace(/[^a-zA-Z0-9_-]/g, "");
-  if (!safe) throw new Error("Invalid profile id.");
-  return `${PREFIX}${safe}.json`;
+  assertSafeProfileId(id);
+  return `${PREFIX}${id}.json`;
 }
 
 export async function listProfiles(): Promise<ProfileSettings[]> {
-  const keys = (await r2ListObjectKeys(PREFIX)).filter((key) => key.endsWith(".json"));
+  const keys = (await r2ListObjectKeys(PREFIX)).filter((key) => {
+    if (!key.startsWith(PREFIX) || !key.endsWith(".json")) return false;
+    const id = key.slice(PREFIX.length, -".json".length);
+    return isSafeProfileId(id);
+  });
   const profiles = await Promise.all(
     keys.map(async (key) => {
       const raw = await r2GetObjectUtf8(key);

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { EventProjectFile } from "@/types";
+import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConflicts";
+import {
+  menuBookletSchema,
+  placeCardSchema,
+  tablePlanSchema,
+  themeSchema
+} from "@/lib/validation/layoutSchemas";
+import * as limits from "@/lib/validation/limits";
 
 const documentTypeSchema = z.enum([
   "tablePlanByTable",
@@ -11,75 +19,36 @@ const documentTypeSchema = z.enum([
 ]);
 
 const guestRecordSchema = z.object({
-  id: z.string(),
-  tableNumber: z.string(),
-  name: z.string(),
-  starter: z.string(),
-  main: z.string(),
-  dessert: z.string(),
-  dietaryOriginal: z.string(),
-  dietaryNormalized: z.array(z.string())
-});
-
-const themeSchema = z.object({
-  primaryColor: z.string(),
-  accentColor: z.string(),
-  textColor: z.string(),
-  eventName: z.string(),
-  eventDate: z.string().optional(),
-  eventSubtitle: z.string().optional(),
-  clientName: z.string().optional(),
-  clientLogoDataUrl: z.string().optional(),
-  venueLogoDataUrl: z.string().optional()
-});
-
-const tablePlanSchema = z.object({
-  paperSize: z.enum(["A4", "A3"]),
-  orientation: z.enum(["portrait", "landscape"]),
-  tablesPerSheetMode: z.enum(["auto", "manual"]),
-  tablesPerSheet: z.number(),
-  minFontSizePt: z.number()
-});
-
-const placeCardSchema = z.object({
-  stockName: z.string(),
-  cardWidthMm: z.number(),
-  cardHeightMm: z.number(),
-  foldOffsetMm: z.number(),
-  textOffsetXmm: z.number(),
-  textOffsetYmm: z.number(),
-  safeMarginMm: z.number(),
-  fontScale: z.number()
-});
-
-const menuBookletSchema = z.object({
-  headingFontPt: z.number(),
-  bodyFontPt: z.number(),
-  lineHeight: z.number(),
-  preMealText: z.string().optional(),
-  postMealText: z.string().optional()
+  id: z.string().max(500),
+  tableNumber: z.string().max(200),
+  name: z.string().max(500),
+  starter: z.string().max(2000),
+  main: z.string().max(2000),
+  dessert: z.string().max(2000),
+  dietaryOriginal: z.string().max(4000),
+  dietaryNormalized: z.array(z.string().max(500))
 });
 
 const dishOverrideSchema = z.object({
-  shortName: z.string(),
-  longName: z.string()
+  shortName: z.string().max(2000),
+  longName: z.string().max(4000)
 });
 
 const duplicateGroupSchema = z.object({
-  id: z.string(),
-  canonical: z.string(),
-  match: z.array(z.string())
+  id: z.string().max(200),
+  canonical: z.string().max(2000),
+  match: z.array(z.string()).min(2)
 });
 
 /** Client omits `id` / `savedAt` / `version` on create; may send existing `id` to overwrite. */
-const savePayloadSchema = z.object({
+const savePayloadBaseSchema = z.object({
   id: z.string().uuid().optional().nullable(),
-  name: z.string().min(1),
-  csvText: z.string(),
-  headers: z.array(z.string()),
-  mapping: z.record(z.string()),
-  guests: z.array(guestRecordSchema),
-  issues: z.array(z.object({ severity: z.string(), message: z.string() })),
+  name: z.string().min(1).max(500),
+  csvText: z.string().max(limits.MAX_CSV_TEXT_CHARS),
+  headers: z.array(z.string().max(500)).max(2000),
+  mapping: z.record(z.string(), z.string()),
+  guests: z.array(guestRecordSchema).max(limits.MAX_PROJECT_GUESTS),
+  issues: z.array(z.object({ severity: z.string(), message: z.string() })).max(5000),
   theme: themeSchema,
   tablePlan: tablePlanSchema,
   tablePlanByPerson: tablePlanSchema,
@@ -90,8 +59,15 @@ const savePayloadSchema = z.object({
   normalizeGuestNamesToTitleCase: z.boolean(),
   selectedDocuments: z.array(documentTypeSchema),
   bundleMode: z.enum(["single", "zip"]),
-  profileName: z.string(),
-  selectedVenueLogoKey: z.string().nullable()
+  profileName: z.string().max(200),
+  selectedVenueLogoKey: z.string().max(500).nullable()
+});
+
+const savePayloadSchema = savePayloadBaseSchema.superRefine((data, ctx) => {
+  const err = validateDishOverrideShortNameUniqueness(data.dishNameOverrides);
+  if (err) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
+  }
 });
 
 export type ProjectSavePayload = z.infer<typeof savePayloadSchema>;
@@ -125,15 +101,32 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
   };
 }
 
-const loadedFileSchema = savePayloadSchema.extend({
+const loadedFileSchema = savePayloadBaseSchema.extend({
   version: z.literal(1),
   id: z.string().uuid(),
-  name: z.string().min(1),
+  name: z.string().min(1).max(500),
   savedAt: z.string().min(1)
 });
 
+/** Drops legacy menu-merge rows that cannot satisfy `match.length >= 2` so older saves still load. */
+function normalizeStoredProjectRaw(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const o = { ...(raw as Record<string, unknown>) };
+  const groups = o.dishMenuDuplicateGroups;
+  if (Array.isArray(groups)) {
+    o.dishMenuDuplicateGroups = groups.filter((g) => {
+      if (!g || typeof g !== "object") return false;
+      const m = (g as { match?: unknown }).match;
+      return Array.isArray(m) && m.length >= 2;
+    });
+  }
+  return o;
+}
+
 export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
-  const parsed = loadedFileSchema.parse(raw);
+  const parsed = loadedFileSchema.parse(normalizeStoredProjectRaw(raw));
   return {
     version: 1,
     id: parsed.id,

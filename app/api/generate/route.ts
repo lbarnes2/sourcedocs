@@ -4,9 +4,17 @@ import { z } from "zod";
 import { parseCsv, normalizeAndValidate } from "@/lib/csv/normalize";
 import { augmentMenuLongNamesForDuplicateGroups, validateDishMenuDuplicateGroups } from "@/lib/docs/menuCards";
 import { applyDishShortOverridesToGuests } from "@/lib/dish/applyOverrides";
+import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConflicts";
 import { buildEventModel } from "@/lib/event/model";
 import { renderDocumentPdf } from "@/lib/pdf/render";
 import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
+import {
+  menuBookletSchema,
+  placeCardSchema,
+  tablePlanSchema,
+  themeSchema
+} from "@/lib/validation/layoutSchemas";
+import * as limits from "@/lib/validation/limits";
 
 function toTitleCaseName(name: string): string {
   return name
@@ -41,92 +49,55 @@ function buildMenuLongNameMap(
 
 const previewSchema = z.object({
   mode: z.literal("preview"),
-  csvText: z.string().min(1),
+  csvText: z.string().min(1).max(limits.MAX_CSV_TEXT_CHARS),
   mapping: z.record(z.string(), z.string()).optional()
+});
+
+const guestPayloadSchema = z.object({
+  id: z.string().max(500),
+  tableNumber: z.string().max(200),
+  name: z.string().max(500),
+  starter: z.string().max(2000),
+  main: z.string().max(2000),
+  dessert: z.string().max(2000),
+  dietaryOriginal: z.string().max(4000),
+  dietaryNormalized: z.array(z.string().max(500))
 });
 
 const generateSchema = z.object({
   mode: z.literal("generate"),
-  guests: z.array(
-    z.object({
-      id: z.string(),
-      tableNumber: z.string(),
-      name: z.string(),
-      starter: z.string(),
-      main: z.string(),
-      dessert: z.string(),
-      dietaryOriginal: z.string(),
-      dietaryNormalized: z.array(z.string())
-    })
-  ),
+  guests: z.array(guestPayloadSchema).max(limits.MAX_GENERATION_GUESTS),
   request: z.object({
-    documents: z.array(
-      z.enum([
-        "tablePlanByTable",
-        "tablePlanByPerson",
-        "placeCards",
-        "menuBooklet",
-        "servicePlan"
-      ])
-    ),
+    documents: z
+      .array(
+        z.enum([
+          "tablePlanByTable",
+          "tablePlanByPerson",
+          "placeCards",
+          "menuBooklet",
+          "servicePlan"
+        ])
+      )
+      .min(1),
     bundleMode: z.enum(["single", "zip"]),
-    theme: z.object({
-      primaryColor: z.string(),
-      accentColor: z.string(),
-      textColor: z.string(),
-      eventName: z.string(),
-      eventDate: z.string().optional(),
-      eventSubtitle: z.string().optional(),
-      clientName: z.string().optional(),
-      clientLogoDataUrl: z.string().optional(),
-      venueLogoDataUrl: z.string().optional()
-    }),
-    tablePlan: z.object({
-      paperSize: z.enum(["A4", "A3"]),
-      orientation: z.enum(["portrait", "landscape"]),
-      tablesPerSheetMode: z.enum(["auto", "manual"]),
-      tablesPerSheet: z.number(),
-      minFontSizePt: z.number()
-    }),
-    tablePlanByPerson: z
-      .object({
-        paperSize: z.enum(["A4", "A3"]),
-        orientation: z.enum(["portrait", "landscape"]),
-        tablesPerSheetMode: z.enum(["auto", "manual"]),
-        tablesPerSheet: z.number(),
-        minFontSizePt: z.number()
-      })
-      .optional(),
-    placeCard: z.object({
-      stockName: z.string(),
-      cardWidthMm: z.number(),
-      cardHeightMm: z.number(),
-      foldOffsetMm: z.number(),
-      textOffsetXmm: z.number(),
-      textOffsetYmm: z.number(),
-      safeMarginMm: z.number(),
-      fontScale: z.number()
-    }),
-    menuBooklet: z.object({
-      headingFontPt: z.number(),
-      bodyFontPt: z.number(),
-      lineHeight: z.number(),
-      preMealText: z.string().optional(),
-      postMealText: z.string().optional()
-    }),
+    theme: themeSchema,
+    tablePlan: tablePlanSchema,
+    tablePlanByPerson: tablePlanSchema.optional(),
+    placeCard: placeCardSchema,
+    menuBooklet: menuBookletSchema,
     dishNameOverrides: z
       .record(
         z.string(),
         z.object({
-          shortName: z.string(),
-          longName: z.string()
+          shortName: z.string().max(2000),
+          longName: z.string().max(4000)
         })
       )
       .optional(),
     dishMenuDuplicateGroups: z
       .array(
         z.object({
-          canonical: z.string(),
+          canonical: z.string().max(2000),
           match: z.array(z.string()).min(2)
         })
       )
@@ -189,6 +160,10 @@ export async function POST(request: Request) {
     const duplicateGroupError = validateDishMenuDuplicateGroups(dishMenuDuplicateGroups);
     if (duplicateGroupError) {
       return NextResponse.json({ error: duplicateGroupError }, { status: 400 });
+    }
+    const shortNameConflict = validateDishOverrideShortNameUniqueness(dishNameOverrides);
+    if (shortNameConflict) {
+      return NextResponse.json({ error: shortNameConflict }, { status: 400 });
     }
     const guestsAfterDishOverrides = applyDishShortOverridesToGuests(incomingGuests, dishNameOverrides);
     const guests = parsed.request.normalizeGuestNamesToTitleCase

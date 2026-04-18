@@ -7,6 +7,10 @@ export const PROJECT_MANIFEST_KEY = `${PROJECT_PREFIX}__manifest.json`;
 
 const PROJECT_ID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 
+export function isValidProjectUuid(id: string): boolean {
+  return PROJECT_ID_RE.test(id);
+}
+
 export function assertValidProjectId(id: string): void {
   if (!PROJECT_ID_RE.test(id)) {
     throw new Error("Invalid project id.");
