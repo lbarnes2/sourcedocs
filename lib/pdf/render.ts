@@ -15,7 +15,7 @@ import { buildByPersonDocument } from "@/lib/docs/byPerson";
 import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
-import { buildServicePlanDocument } from "@/lib/docs/servicePlan";
+import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
 import type { PDFFont } from "pdf-lib";
 
 function mmToPt(mm: number): number {
@@ -1348,8 +1348,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   const width = mmToPt(210);
   const height = mmToPt(297);
   const data = buildServicePlanDocument(model);
-  const serviceCourseLabel =
-    data.serviceCourse.slice(0, 1).toUpperCase() + data.serviceCourse.slice(1);
+  const coursesSubtitle = data.coursesOnPlan.map((key) => SERVICE_COURSE_LABEL[key]).join(" · ");
   let page = doc.addPage([width, height]);
   let y = height - 28;
 
@@ -1361,7 +1360,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     color: hexToRgb(theme.primaryColor || "#012f43")
   });
   y -= 21;
-  page.drawText(`Live call course: ${serviceCourseLabel}`, {
+  page.drawText(`Courses: ${coursesSubtitle}`, {
     x: 24,
     y,
     font: bold,
@@ -1428,22 +1427,25 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   };
 
   data.tables.forEach((table) => {
-    const pax = table.groupedByMain.reduce((sum, group) => sum + group.guests.length, 0);
+    const pax =
+      table.courseBlocks[0]?.groupedByDish.reduce((sum, group) => sum + group.guests.length, 0) ?? 0;
     const outerX = 18;
     const outerW = width - 36;
     const leftX = 24;
     const splitX = width - 170;
     const notesW = width - splitX - 24;
-    const guestLines = table.groupedByMain.reduce((sum, group) => sum + 1 + group.guests.length, 0);
-    const leftContentH = 58 + guestLines * 10 + 12;
+    const guestLines = table.courseBlocks.reduce((sum, block) => {
+      const dishLines = block.groupedByDish.reduce((acc, group) => acc + 1 + group.guests.length, 0);
+      return sum + 1 + 1 + dishLines + 1;
+    }, 0);
+    const leftContentH = 46 + guestLines * 10 + 12;
     const rowHeight = Math.max(120, leftContentH);
     ensureSpace(rowHeight + 8);
     const rowTop = y;
     const rowBottom = y - rowHeight;
     const headerY = rowTop - 14;
     const headerDividerY = rowTop - 20;
-    const dishTotalsY = rowTop - 33;
-    const bodyStartY = rowTop - 49;
+    const bodyStartY = rowTop - 36;
 
     page.drawRectangle({
       x: outerX,
@@ -1482,33 +1484,51 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     });
     drawCourseCheckboxes(leftX + 150, headerY + 9);
 
-    page.drawText(
-      `Dish totals: ${table.dishCounts.map((count) => `${count.dish} (${count.count})`).join(", ")}`,
-      { x: leftX, y: dishTotalsY, font, size: 9.3, color: rgb(0.33, 0.37, 0.45), maxWidth: splitX - leftX - 16 }
-    );
-
     let localY = bodyStartY;
-    table.groupedByMain.forEach((group) => {
-      page.drawText(`${serviceCourseLabel}: ${group.dish}`, {
-        x: leftX + 4,
+    table.courseBlocks.forEach((block) => {
+      page.drawText(block.label, {
+        x: leftX,
         y: localY,
         font: bold,
-        size: 10
+        size: 10.5,
+        color: rgb(0.11, 0.13, 0.18)
       });
       localY -= 11;
-      group.guests.forEach((guest) => {
-        const dietary = guest.dietary.length ? ` [${guest.dietary.join(", ")}]` : "";
-        page.drawText(`- ${guest.name}${dietary}`, {
-          x: leftX + 14,
+      page.drawText(
+        `Dish totals: ${block.dishCounts.map((entry) => `${entry.dish} (${entry.count})`).join(", ")}`,
+        {
+          x: leftX,
           y: localY,
           font,
-          size: 9.2,
-          color: guest.dietary.length ? rgb(0.66, 0.2, 0.06) : rgb(0.1, 0.12, 0.17),
-          maxWidth: splitX - leftX - 26
+          size: 9.3,
+          color: rgb(0.33, 0.37, 0.45),
+          maxWidth: splitX - leftX - 16
+        }
+      );
+      localY -= 10;
+      block.groupedByDish.forEach((group) => {
+        page.drawText(`${block.label}: ${group.dish}`, {
+          x: leftX + 4,
+          y: localY,
+          font: bold,
+          size: 10
         });
-        localY -= 10;
+        localY -= 11;
+        group.guests.forEach((guest) => {
+          const dietary = guest.dietary.length ? ` [${guest.dietary.join(", ")}]` : "";
+          page.drawText(`- ${guest.name}${dietary}`, {
+            x: leftX + 14,
+            y: localY,
+            font,
+            size: 9.2,
+            color: guest.dietary.length ? rgb(0.66, 0.2, 0.06) : rgb(0.1, 0.12, 0.17),
+            maxWidth: splitX - leftX - 26
+          });
+          localY -= 10;
+        });
+        localY -= 2;
       });
-      localY -= 2;
+      localY -= 4;
     });
 
     drawScribbleArea(splitX, rowTop - 10, notesW, rowHeight - 16);
@@ -1557,10 +1577,6 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
         .sort((a, b) => a.dish.localeCompare(b.dish))
     };
   };
-
-  const starterSummary = makeCourseSummary("starter");
-  const mainSummary = makeCourseSummary("main");
-  const dessertSummary = makeCourseSummary("dessert");
 
   page = doc.addPage([width, height]);
   y = height - 28;
@@ -1641,9 +1657,9 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y -= 6;
   };
 
-  drawSummaryCourse("Starter", starterSummary);
-  drawSummaryCourse("Main", mainSummary);
-  drawSummaryCourse("Dessert", dessertSummary);
+  data.coursesOnPlan.forEach((course) => {
+    drawSummaryCourse(SERVICE_COURSE_LABEL[course], makeCourseSummary(course));
+  });
 
   await embedLogoIfPresent(doc, doc.getPages()[0], theme);
   return doc.save();

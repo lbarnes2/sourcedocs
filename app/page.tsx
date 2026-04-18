@@ -16,8 +16,10 @@ import type {
   DishMenuDuplicateGroup,
   DishNameOverride,
   DocumentType,
+  EventProjectFile,
   GuestRecord,
   ProfileSettings,
+  ProjectListItem,
   RawCsvRow
 } from "@/types";
 
@@ -162,6 +164,13 @@ export default function HomePage() {
   const [selectedVenueLogoKey, setSelectedVenueLogoKey] = useState<string | null>(null);
   const [venueLibraryBusy, setVenueLibraryBusy] = useState(false);
 
+  const [projectList, setProjectList] = useState<ProjectListItem[]>([]);
+  const [projectStorage, setProjectStorage] = useState<"r2" | "local" | "">("");
+  const [projectLibraryName, setProjectLibraryName] = useState("");
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [projectLoadSelection, setProjectLoadSelection] = useState("");
+  const [projectBusy, setProjectBusy] = useState(false);
+
   const mappingIssues = useMemo(() => getRequiredMappingIssues(mapping), [mapping]);
 
   const uniqueEffectiveDishes = useMemo(() => {
@@ -196,6 +205,148 @@ export default function HomePage() {
       if (payload.profiles) setProfiles(payload.profiles);
     })();
   }, []);
+
+  async function refreshProjectList() {
+    try {
+      const response = await fetch("/api/projects");
+      const payload = await response.json();
+      if (Array.isArray(payload.projects)) {
+        setProjectList(payload.projects);
+      }
+      if (payload.storage === "r2" || payload.storage === "local") {
+        setProjectStorage(payload.storage);
+      }
+    } catch {
+      setProjectList([]);
+    }
+  }
+
+  useEffect(() => {
+    void refreshProjectList();
+  }, []);
+
+  async function applyLoadedProject(file: EventProjectFile) {
+    setCsvText(file.csvText);
+    setHeaders(file.headers);
+    setMapping(file.mapping);
+    setGuests(file.guests);
+    setIssues(file.issues);
+    setTheme({ ...defaultThemeSettings, ...file.theme });
+    setTablePlan({ ...defaultTablePlanSettings, ...file.tablePlan });
+    setTablePlanByPerson({
+      ...defaultTablePlanSettings,
+      ...file.tablePlanByPerson
+    });
+    setPlaceCard({ ...defaultPlaceCardSettings, ...file.placeCard });
+    setMenuBooklet({ ...defaultMenuBookletSettings, ...file.menuBooklet });
+    setDishNameOverrides(file.dishNameOverrides ?? {});
+    setDishMenuDuplicateGroups(file.dishMenuDuplicateGroups ?? []);
+    setMenuMergePick([]);
+    setNormalizeGuestNamesToTitleCase(file.normalizeGuestNamesToTitleCase ?? false);
+    setSelectedDocuments(
+      file.selectedDocuments?.length ? file.selectedDocuments : DOCUMENTS.map((doc) => doc.id)
+    );
+    setBundleMode(file.bundleMode === "single" ? "single" : "zip");
+    setProfileName(file.profileName ?? "New Profile");
+    setSelectedVenueLogoKey(file.selectedVenueLogoKey ?? null);
+    setCurrentProjectId(file.id);
+    setProjectLibraryName(file.name);
+    setProjectLoadSelection("");
+    setError("");
+    if (file.theme.clientLogoDataUrl) {
+      const luma = await estimateLogoLuminance(file.theme.clientLogoDataUrl);
+      setClientLogoLuminance(luma);
+    } else {
+      setClientLogoLuminance(null);
+    }
+    void refreshVenueLogoLibrary();
+  }
+
+  async function saveProjectToLibrary() {
+    const name =
+      projectLibraryName.trim() || theme.eventName.trim() || "Untitled project";
+    setProjectBusy(true);
+    setError("");
+    try {
+      const payload = {
+        id: currentProjectId,
+        name,
+        csvText,
+        headers,
+        mapping,
+        guests,
+        issues,
+        theme,
+        tablePlan,
+        tablePlanByPerson,
+        placeCard,
+        menuBooklet,
+        dishNameOverrides,
+        dishMenuDuplicateGroups,
+        normalizeGuestNamesToTitleCase,
+        selectedDocuments,
+        bundleMode,
+        profileName,
+        selectedVenueLogoKey
+      };
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Save failed.");
+      setCurrentProjectId(data.id);
+      setProjectLibraryName(name);
+      await refreshProjectList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed.");
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
+  async function loadSelectedProject() {
+    const id = projectLoadSelection.trim();
+    if (!id) {
+      setError("Choose a saved project to load.");
+      return;
+    }
+    setProjectBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(id)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Load failed.");
+      await applyLoadedProject(data.project as EventProjectFile);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Load failed.");
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
+  async function deleteSelectedProject() {
+    const id = projectLoadSelection.trim();
+    if (!id) return;
+    if (!window.confirm("Delete this saved project from storage? This cannot be undone.")) return;
+    setProjectBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Delete failed.");
+      if (currentProjectId === id) {
+        setCurrentProjectId(null);
+      }
+      setProjectLoadSelection("");
+      await refreshProjectList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setProjectBusy(false);
+    }
+  }
 
   async function refreshVenueLogoLibrary() {
     setVenueLibraryBusy(true);
@@ -507,6 +658,94 @@ export default function HomePage() {
   return (
     <main>
       <h1>Event Document Generator</h1>
+      <div className="panel">
+        <h2 className="step-heading">
+          <span className="step-heading-badge">·</span>
+          <span>Saved projects</span>
+        </h2>
+        <p style={{ marginTop: 0, marginBottom: 12, fontSize: 14, opacity: 0.88 }}>
+          Save or load the full workspace (CSV, guest edits, theme, logos, print settings, dish overrides).
+          Nothing is saved until you click <strong>Save project</strong>.
+        </p>
+        {projectStorage === "r2" && (
+          <p className="pill" style={{ marginBottom: 12 }}>
+            Projects are stored in your R2 bucket under <code>projects/</code>.
+          </p>
+        )}
+        {projectStorage === "local" && (
+          <p className="pill" style={{ marginBottom: 12 }}>
+            R2 is not configured — projects are stored on this server in <code>data/projects/</code> (see{" "}
+            <code>.env.example</code>).
+          </p>
+        )}
+        <div className="grid two">
+          <label>
+            Project name
+            <input
+              value={projectLibraryName}
+              onChange={(event) => setProjectLibraryName(event.target.value)}
+              placeholder="e.g. Smith Wedding — April 2026"
+            />
+          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "flex-end" }}>
+            {currentProjectId && (
+              <p style={{ margin: 0, fontSize: 12, opacity: 0.82 }}>
+                Updating saved id <code>{currentProjectId.slice(0, 8)}…</code> — save again to overwrite.
+              </p>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <button type="button" disabled={projectBusy} onClick={() => void saveProjectToLibrary()}>
+                {projectBusy ? "Working…" : "Save project"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={projectBusy}
+                onClick={() => {
+                  setCurrentProjectId(null);
+                  setError("");
+                }}
+              >
+                New save target
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="grid two" style={{ marginTop: 14 }}>
+          <label>
+            Open saved project
+            <select
+              value={projectLoadSelection}
+              onChange={(event) => setProjectLoadSelection(event.target.value)}
+            >
+              <option value="">— choose —</option>
+              {projectList.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                  {item.eventName ? ` (${item.eventName})` : ""} —{" "}
+                  {new Date(item.savedAt).toLocaleString(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short"
+                  })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+            <button type="button" disabled={projectBusy || !projectLoadSelection} onClick={() => void loadSelectedProject()}>
+              Load project
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={projectBusy || !projectLoadSelection}
+              onClick={() => void deleteSelectedProject()}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
       <div className="panel">
         <h2 className="step-heading">
           <span className="step-heading-badge">1</span>

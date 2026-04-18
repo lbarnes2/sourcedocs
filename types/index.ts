@@ -128,3 +128,38 @@ export interface EventModel {
   byTable: Record<string, GuestRecord[]>;
   sortedByName: GuestRecord[];
 }
+
+/** Current project bundle format; increment when shape changes. */
+export type EventProjectVersion = 1;
+
+export interface EventProjectFile {
+  version: EventProjectVersion;
+  id: string;
+  /** Library label for this project (not necessarily the same as event name). */
+  name: string;
+  savedAt: string;
+  csvText: string;
+  headers: string[];
+  mapping: ColumnMapping;
+  guests: GuestRecord[];
+  issues: Array<{ severity: string; message: string }>;
+  theme: ThemeSettings;
+  tablePlan: TablePlanSettings;
+  tablePlanByPerson: TablePlanSettings;
+  placeCard: PlaceCardSettings;
+  menuBooklet: MenuBookletSettings;
+  dishNameOverrides: Record<string, DishNameOverride>;
+  dishMenuDuplicateGroups: Array<DishMenuDuplicateGroup & { id: string }>;
+  normalizeGuestNamesToTitleCase: boolean;
+  selectedDocuments: DocumentType[];
+  bundleMode: "single" | "zip";
+  profileName: string;
+  selectedVenueLogoKey: string | null;
+}
+
+export interface ProjectListItem {
+  id: string;
+  name: string;
+  savedAt: string;
+  eventName: string;
+}
