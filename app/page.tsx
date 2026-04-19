@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { autoDetectMapping, canonicalColumns, getRequiredMappingIssues } from "@/lib/csv/mapping";
+import { excelFileToCsvText, isExcelFile } from "@/lib/csv/excelToCsv";
 import { normalizeDietary } from "@/lib/csv/validation";
 import {
   defaultFloorplanSettings,
@@ -449,18 +450,22 @@ export default function HomePage() {
     }
   }, [clientLogoLuminance, theme.clientLogoDataUrl, theme.primaryColor]);
 
-  async function handleCsvFile(file: File) {
+  async function handleGuestDataFile(file: File) {
     setError("");
-    const text = await file.text();
-    setCsvText(text);
-    const parsed = parseCsvClient(text);
-    setHeaders(parsed.headers);
-    setMapping(autoDetectMapping(parsed.headers));
+    try {
+      const text = isExcelFile(file) ? await excelFileToCsvText(file) : await file.text();
+      setCsvText(text);
+      const parsed = parseCsvClient(text);
+      setHeaders(parsed.headers);
+      setMapping(autoDetectMapping(parsed.headers));
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : "Could not read that file.");
+    }
   }
 
   async function runPreview() {
     if (!csvText) {
-      setError("Upload a CSV first.");
+      setError("Upload a guest list file first (CSV or Excel).");
       return;
     }
     if (mappingIssues.length) {
@@ -683,7 +688,7 @@ export default function HomePage() {
           <span>Saved projects</span>
         </h2>
         <p style={{ marginTop: 0, marginBottom: 12, fontSize: 14, opacity: 0.88 }}>
-          Save or load the full workspace (CSV, guest edits, theme, logos, print settings, dish overrides).
+          Save or load the full workspace (guest data, guest edits, theme, logos, print settings, dish overrides).
           Nothing is saved until you click <strong>Save project</strong>.
         </p>
         {projectStorage === "r2" && (
@@ -768,21 +773,24 @@ export default function HomePage() {
       <div className="panel">
         <h2 className="step-heading">
           <span className="step-heading-badge">1</span>
-          <span>Upload CSV and map columns</span>
+          <span>Upload guest data and map columns</span>
         </h2>
         <div className="grid two">
           <label>
-            CSV file
+            CSV or Excel file
             <input
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (file) {
-                  void handleCsvFile(file);
+                  void handleGuestDataFile(file);
                 }
               }}
             />
+            <span style={{ display: "block", marginTop: 6, fontSize: 12, opacity: 0.82 }}>
+              Excel workbooks use the <strong>first sheet</strong> only (exported to CSV, then parsed like a normal CSV).
+            </span>
           </label>
           <label>
             Event name
