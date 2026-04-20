@@ -3,6 +3,7 @@ import type {
   MenuBookletSettings,
   PlaceCardSettings,
   ProfileSettings,
+  SignageThemeColors,
   TablePlanSettings,
   ThemeSettings
 } from "@/types";
@@ -15,6 +16,13 @@ export const defaultThemeSettings: ThemeSettings = {
   eventDate: "",
   eventSubtitle: "",
   clientName: ""
+};
+
+/** Default colours for event signage PDFs (distinct from banqueting but same structure). */
+export const defaultSignageTheme: SignageThemeColors = {
+  primaryColor: "#0d5c5f",
+  accentColor: "#9dd3d5",
+  textColor: "#0a2425"
 };
 
 export const defaultTablePlanSettings: TablePlanSettings = {

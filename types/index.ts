@@ -177,3 +177,5 @@ export interface ProjectListItem {
   savedAt: string;
   eventName: string;
 }
+
+export type * from "./signage";
