@@ -10,6 +10,10 @@ export const MAX_DATA_URL_CHARS = 25_000_000;
 
 export const MAX_EVENT_NAME_CHARS = 500;
 
+/** Venue line + date line on signage PDFs. */
+export const MAX_SIGNAGE_VENUE_LABEL_CHARS = 200;
+export const MAX_SIGNAGE_EVENT_DATE_CHARS = 120;
+
 export const MAX_STOCK_NAME_CHARS = 2000;
 
 /** Floorplan grid dimensions (rows × columns). */

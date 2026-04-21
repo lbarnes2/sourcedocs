@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { defaultSignageTheme } from "@/lib/defaults";
+import * as limits from "@/lib/validation/limits";
 import type { SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
 
 const ARROW_OPTIONS: { value: SignageArrowDirection; label: string }[] = [
@@ -14,7 +15,10 @@ const ARROW_OPTIONS: { value: SignageArrowDirection; label: string }[] = [
   { value: "upLeft", label: "Up + left" },
   { value: "upRight", label: "Up + right" },
   { value: "downLeft", label: "Down + left" },
-  { value: "downRight", label: "Down + right" }
+  { value: "downRight", label: "Down + right" },
+  { value: "cornerUpRight", label: "Corner Up Right" },
+  { value: "cornerUpLeft", label: "Corner Up Left" },
+  { value: "turnAround", label: "U Turn" }
 ];
 
 function newVenueId(): string {
@@ -33,7 +37,9 @@ function defaultProfile(): VenueSignageProfile {
     id: newVenueId(),
     name: "New venue profile",
     slots: [emptySlot()],
-    theme: { ...defaultSignageTheme }
+    theme: { ...defaultSignageTheme },
+    defaultVenueLabel: undefined,
+    defaultSubVenueLabel: undefined
   };
 }
 
@@ -48,6 +54,19 @@ async function downloadPdf(response: Response, fallbackName: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = name.endsWith(".pdf") ? name : `${name}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadPdfBase64(base64: string, filename: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -72,6 +91,9 @@ export default function SignagePage() {
   const [packPrimary, setPackPrimary] = useState(defaultSignageTheme.primaryColor);
   const [packAccent, setPackAccent] = useState(defaultSignageTheme.accentColor);
   const [packText, setPackText] = useState(defaultSignageTheme.textColor);
+  const [packVenueOverride, setPackVenueOverride] = useState("");
+  const [packSubVenueOverride, setPackSubVenueOverride] = useState("");
+  const [packEventDate, setPackEventDate] = useState("");
 
   const [adhocEventName, setAdhocEventName] = useState("");
   const [adhocPaper, setAdhocPaper] = useState<"A3" | "A4">("A4");
@@ -80,6 +102,11 @@ export default function SignagePage() {
   const [adhocVenueKey, setAdhocVenueKey] = useState("");
   const [adhocClientKey, setAdhocClientKey] = useState("");
   const [adhocTheme, setAdhocTheme] = useState({ ...defaultSignageTheme });
+  const [adhocVenueLine, setAdhocVenueLine] = useState("");
+  const [adhocSubVenueLine, setAdhocSubVenueLine] = useState("");
+  const [adhocEventDate, setAdhocEventDate] = useState("");
+
+  const [venueProfileEditorOpen, setVenueProfileEditorOpen] = useState(false);
 
   const loadProfiles = useCallback(async () => {
     setError("");
@@ -247,7 +274,10 @@ export default function SignagePage() {
         eventName: packEventName.trim(),
         themeOverride,
         venueLogoKey: packVenueKey || undefined,
-        clientLogoKey: packClientKey || undefined
+        clientLogoKey: packClientKey || undefined,
+        ...(packVenueOverride.trim() ? { venueLabel: packVenueOverride.trim() } : {}),
+        ...(packSubVenueOverride.trim() ? { subVenueLabel: packSubVenueOverride.trim() } : {}),
+        ...(packEventDate.trim() ? { eventDate: packEventDate.trim() } : {})
       };
       const r = await fetch("/api/signage/generate", {
         method: "POST",
@@ -258,7 +288,29 @@ export default function SignagePage() {
         const j = await r.json().catch(() => ({}));
         throw new Error((j as { error?: string }).error ?? "Generation failed.");
       }
-      await downloadPdf(r, `signage-${packEventName.trim()}`);
+      const ct = r.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const data = (await r.json()) as {
+          split?: boolean;
+          filenameBase?: string;
+          a4Base64?: string | null;
+          a3Base64?: string | null;
+        };
+        const base = data.filenameBase?.trim() || "signage";
+        if (data.a4Base64) {
+          downloadPdfBase64(data.a4Base64, `${base}-A4.pdf`);
+        }
+        if (data.a3Base64) {
+          const a3 = data.a3Base64;
+          const delay = data.a4Base64 ? 200 : 0;
+          window.setTimeout(() => downloadPdfBase64(a3, `${base}-A3.pdf`), delay);
+        }
+        if (!data.a4Base64 && !data.a3Base64) {
+          throw new Error("No PDFs were generated.");
+        }
+      } else {
+        await downloadPdf(r, `signage-${packEventName.trim()}`);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed.");
     } finally {
@@ -282,7 +334,10 @@ export default function SignagePage() {
         arrow: adhocArrow,
         theme: adhocTheme,
         venueLogoKey: adhocVenueKey || undefined,
-        clientLogoKey: adhocClientKey || undefined
+        clientLogoKey: adhocClientKey || undefined,
+        ...(adhocVenueLine.trim() ? { venueLabel: adhocVenueLine.trim() } : {}),
+        ...(adhocSubVenueLine.trim() ? { subVenueLabel: adhocSubVenueLine.trim() } : {}),
+        ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {})
       };
       const r = await fetch("/api/signage/generate", {
         method: "POST",
@@ -311,8 +366,8 @@ export default function SignagePage() {
       <header className="app-header">
         <h1>Event Signage</h1>
         <p className="app-tagline">
-          Configure venue sign packs (counts, sizes, arrows), then generate a single multi-page PDF with event branding
-          and optional venue and client logos.
+          Configure venue sign packs (counts, sizes, arrows), then download separate A4 and A3 PDFs (one per paper size)
+          with event branding and optional venue and client logos—ready for tray selection on multifunction printers.
         </p>
       </header>
 
@@ -326,11 +381,37 @@ export default function SignagePage() {
         <p className="text-muted">Loading…</p>
       ) : (
         <>
-          <div className="panel">
-            <h2 className="step-heading">
-              <span className="step-heading-badge">1</span>
-              <span>Venue profiles</span>
-            </h2>
+          <div className="panel panel--collapsible">
+            <div
+              className={
+                venueProfileEditorOpen ? "panel-collapsible-head panel-collapsible-head--open" : "panel-collapsible-head"
+              }
+            >
+              <h2 className="step-heading step-heading--collapsible">
+                <button
+                  type="button"
+                  className="panel-collapsible-trigger"
+                  aria-expanded={venueProfileEditorOpen}
+                  aria-controls="venue-profile-editor"
+                  id="venue-profile-editor-toggle"
+                  onClick={() => setVenueProfileEditorOpen((o) => !o)}
+                >
+                  <span className="step-heading-badge">1</span>
+                  <span className="panel-collapsible-title">Venue profiles</span>
+                  <span className="panel-collapsible-chevron" aria-hidden>
+                    {venueProfileEditorOpen ? "▼" : "▶"}
+                  </span>
+                </button>
+              </h2>
+              {!venueProfileEditorOpen ? (
+                <p className="text-muted panel-collapsible-summary" id="venue-profile-editor-summary">
+                  {draft.name} · {draft.slots.length} slot{draft.slots.length === 1 ? "" : "s"}
+                  {!selectedId ? " · unsaved draft" : null}
+                </p>
+              ) : null}
+            </div>
+
+            <div id="venue-profile-editor" hidden={!venueProfileEditorOpen}>
             <p className="text-muted" style={{ marginTop: 0 }}>
               Each profile lists the signs you need for that venue (e.g. 3× A4 portrait up, 1× A3 welcome with no arrow).
               Save defaults for venue and client logos to speed up one-click generation.
@@ -384,6 +465,36 @@ export default function SignagePage() {
                 <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
               </label>
             </div>
+
+            <label style={{ display: "block", marginTop: 12 }}>
+              Venue line on signs (default for packs)
+              <input
+                value={draft.defaultVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    defaultVenueLabel: e.target.value ? e.target.value : undefined
+                  }))
+                }
+                placeholder="e.g. The Grand Hotel — shown in bold below the event name"
+              />
+            </label>
+
+            <label style={{ display: "block", marginTop: 12 }}>
+              Sub-venue line (optional, default for packs)
+              <input
+                value={draft.defaultSubVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    defaultSubVenueLabel: e.target.value ? e.target.value : undefined
+                  }))
+                }
+                placeholder="e.g. Oak Room — regular weight, under the venue line"
+              />
+            </label>
 
             <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Sign slots (order = PDF page order)</h3>
             {draft.slots.map((slot, index) => (
@@ -559,6 +670,7 @@ export default function SignagePage() {
             <button type="button" style={{ marginTop: 16 }} disabled={busy} onClick={() => void saveDraft()}>
               {busy ? "Saving…" : "Save venue profile"}
             </button>
+            </div>
           </div>
 
           <div className="panel">
@@ -589,9 +701,40 @@ export default function SignagePage() {
                 </select>
               </label>
             </div>
+            <div className="grid two" style={{ marginTop: 10 }}>
+              <label>
+                Event date (on signs)
+                <input
+                  value={packEventDate}
+                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                  onChange={(e) => setPackEventDate(e.target.value)}
+                  placeholder="e.g. Saturday 20 June 2026"
+                />
+              </label>
+              <label>
+                Venue line (override)
+                <input
+                  value={packVenueOverride}
+                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                  onChange={(e) => setPackVenueOverride(e.target.value)}
+                  placeholder="Leave blank to use profile default"
+                />
+              </label>
+            </div>
+            <label style={{ display: "block", marginTop: 10 }}>
+              Sub-venue line (override)
+              <input
+                value={packSubVenueOverride}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) => setPackSubVenueOverride(e.target.value)}
+                placeholder="Leave blank to use profile default"
+              />
+            </label>
             <p className="text-muted" style={{ marginBottom: 8 }}>
-              Logo dropdowns override profile defaults for this download only. Enable the checkbox to override colours
-              for this run.
+              Pack download gives one PDF for all A4 signs and one for all A3 signs (you only get a file for sizes
+              present in the profile). Venue, optional sub-venue, and date appear under the event name; leave overrides
+              blank to use profile defaults. Logo dropdowns override profile defaults for this download only. Enable the
+              checkbox to override colours for this run.
             </p>
             <label className="checkbox-row" style={{ marginBottom: 12 }}>
               <input
@@ -652,7 +795,7 @@ export default function SignagePage() {
               </label>
             </div>
             <button type="button" disabled={busy} onClick={() => void generatePack()}>
-              {busy ? "Working…" : "Download sign pack PDF"}
+              {busy ? "Working…" : "Download sign pack PDFs (A4 & A3)"}
             </button>
           </div>
 
@@ -694,6 +837,35 @@ export default function SignagePage() {
                 </select>
               </label>
             </div>
+            <div className="grid two">
+              <label>
+                Venue line
+                <input
+                  value={adhocVenueLine}
+                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                  onChange={(e) => setAdhocVenueLine(e.target.value)}
+                  placeholder="Optional — bold, below event name"
+                />
+              </label>
+              <label>
+                Event date
+                <input
+                  value={adhocEventDate}
+                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                  onChange={(e) => setAdhocEventDate(e.target.value)}
+                  placeholder="Optional — regular weight"
+                />
+              </label>
+            </div>
+            <label style={{ display: "block", marginTop: 10 }}>
+              Sub-venue line
+              <input
+                value={adhocSubVenueLine}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) => setAdhocSubVenueLine(e.target.value)}
+                placeholder="Optional — same size as venue, regular weight, under venue"
+              />
+            </label>
             <div className="grid two">
               <label>
                 Primary

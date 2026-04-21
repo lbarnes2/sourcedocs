@@ -6,7 +6,12 @@ import { getVenueSignageProfile } from "@/lib/signageVenues/store";
 import { isR2Configured } from "@/lib/storage/r2";
 import { profileIdSchema } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
-import { signageArrowSchema, signageThemeSchema } from "@/lib/validation/signageSchemas";
+import {
+  optionalSignageEventDateField,
+  optionalSignageVenueLabelField,
+  signageArrowSchema,
+  signageThemeSchema
+} from "@/lib/validation/signageSchemas";
 
 const optionalKey = z.string().max(512).optional();
 
@@ -20,7 +25,10 @@ const adhocSchema = z.object({
   venueLogoKey: optionalKey,
   clientLogoKey: optionalKey,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
-  clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional()
+  clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
+  venueLabel: optionalSignageVenueLabelField,
+  subVenueLabel: optionalSignageVenueLabelField,
+  eventDate: optionalSignageEventDateField
 });
 
 const packSchema = z.object({
@@ -31,7 +39,10 @@ const packSchema = z.object({
   venueLogoKey: optionalKey,
   clientLogoKey: optionalKey,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
-  clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional()
+  clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
+  venueLabel: optionalSignageVenueLabelField,
+  subVenueLabel: optionalSignageVenueLabelField,
+  eventDate: optionalSignageEventDateField
 });
 
 const generateSchema = z.discriminatedUnion("mode", [adhocSchema, packSchema]);
@@ -84,6 +95,9 @@ export async function POST(request: Request) {
           orientation: body.orientation,
           arrow: body.arrow,
           eventName: body.eventName,
+          venueLine: body.venueLabel ?? "",
+          subVenueLine: body.subVenueLabel ?? "",
+          dateLine: body.eventDate ?? "",
           theme: body.theme
         }
       ];
@@ -99,6 +113,9 @@ export async function POST(request: Request) {
         accentColor: body.themeOverride?.accentColor ?? profile.theme.accentColor,
         textColor: body.themeOverride?.textColor ?? profile.theme.textColor
       };
+      const venueLine = body.venueLabel ?? profile.defaultVenueLabel ?? "";
+      const subVenueLine = body.subVenueLabel ?? profile.defaultSubVenueLabel ?? "";
+      const dateLine = body.eventDate ?? "";
       pages = [];
       for (const slot of profile.slots) {
         for (let i = 0; i < slot.count; i++) {
@@ -107,6 +124,9 @@ export async function POST(request: Request) {
             orientation: slot.orientation,
             arrow: slot.arrow,
             eventName: body.eventName,
+            venueLine,
+            subVenueLine,
+            dateLine,
             theme
           });
         }
@@ -124,6 +144,23 @@ export async function POST(request: Request) {
         body.clientLogoDataUrl,
         profile.defaultClientLogoKey
       );
+
+      const pagesA4 = pages.filter((p) => p.paperSize === "A4");
+      const pagesA3 = pages.filter((p) => p.paperSize === "A3");
+      const logoOpts = { venueBytes, clientBytes };
+
+      const [pdfA4, pdfA3] = await Promise.all([
+        pagesA4.length ? renderSignagePdf(pagesA4, logoOpts) : Promise.resolve(null),
+        pagesA3.length ? renderSignagePdf(pagesA3, logoOpts) : Promise.resolve(null)
+      ]);
+
+      const filenameBase = sanitizeFilename(body.eventName);
+      return NextResponse.json({
+        split: true as const,
+        filenameBase,
+        a4Base64: pdfA4 ? Buffer.from(pdfA4).toString("base64") : null,
+        a3Base64: pdfA3 ? Buffer.from(pdfA3).toString("base64") : null
+      });
     }
 
     const pdf = await renderSignagePdf(pages, { venueBytes, clientBytes });

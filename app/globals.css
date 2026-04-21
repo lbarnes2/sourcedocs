@@ -542,3 +542,62 @@ tbody tr:nth-child(even) {
 .app-signage .step-heading-badge {
   background: #0d5c5f;
 }
+
+.app-signage .step-heading--collapsible {
+  display: block;
+  width: 100%;
+  margin: 0;
+}
+
+.app-signage .panel-collapsible-head {
+  margin-bottom: 0;
+}
+
+.app-signage .panel-collapsible-head--open {
+  margin-bottom: 14px;
+}
+
+.app-signage .panel-collapsible-trigger {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.app-signage .panel-collapsible-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-signage .panel-collapsible-trigger:hover {
+  color: var(--brand);
+}
+
+.app-signage .panel-collapsible-trigger:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.app-signage .panel-collapsible-chevron {
+  flex-shrink: 0;
+  font-size: 0.65em;
+  opacity: 0.65;
+  line-height: 1;
+}
+
+.app-signage .panel-collapsible-summary {
+  margin: 6px 0 0;
+}

@@ -10,7 +10,10 @@ const ARROWS: SignageArrowDirection[] = [
   "upLeft",
   "upRight",
   "downLeft",
-  "downRight"
+  "downRight",
+  "cornerUpRight",
+  "cornerUpLeft",
+  "turnAround"
 ];
 
 function normalizeArrow(value: unknown): SignageArrowDirection {
@@ -51,6 +54,14 @@ export function normalizeVenueSignageProfile(raw: unknown): VenueSignageProfile 
     accentColor: typeof themeRaw.accentColor === "string" ? themeRaw.accentColor : defaultSignageTheme.accentColor,
     textColor: typeof themeRaw.textColor === "string" ? themeRaw.textColor : defaultSignageTheme.textColor
   };
+  const defaultVenueLabel =
+    typeof o.defaultVenueLabel === "string" && o.defaultVenueLabel.trim()
+      ? o.defaultVenueLabel.trim()
+      : undefined;
+  const defaultSubVenueLabel =
+    typeof o.defaultSubVenueLabel === "string" && o.defaultSubVenueLabel.trim()
+      ? o.defaultSubVenueLabel.trim()
+      : undefined;
   const defaultVenueLogoKey =
     typeof o.defaultVenueLogoKey === "string" && o.defaultVenueLogoKey.trim()
       ? o.defaultVenueLogoKey.trim()
@@ -65,6 +76,8 @@ export function normalizeVenueSignageProfile(raw: unknown): VenueSignageProfile 
     name,
     slots,
     theme,
+    defaultVenueLabel,
+    defaultSubVenueLabel,
     defaultVenueLogoKey,
     defaultClientLogoKey
   };

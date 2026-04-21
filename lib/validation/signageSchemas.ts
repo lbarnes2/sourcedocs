@@ -2,6 +2,18 @@ import { z } from "zod";
 import * as limits from "@/lib/validation/limits";
 import { hexColorStringSchema, profileIdSchema } from "@/lib/validation/layoutSchemas";
 
+export const optionalSignageVenueLabelField = z
+  .string()
+  .max(limits.MAX_SIGNAGE_VENUE_LABEL_CHARS)
+  .optional()
+  .transform((s) => (s && s.trim() ? s.trim() : undefined));
+
+export const optionalSignageEventDateField = z
+  .string()
+  .max(limits.MAX_SIGNAGE_EVENT_DATE_CHARS)
+  .optional()
+  .transform((s) => (s && s.trim() ? s.trim() : undefined));
+
 export const signageArrowSchema = z.enum([
   "none",
   "up",
@@ -11,7 +23,10 @@ export const signageArrowSchema = z.enum([
   "upLeft",
   "upRight",
   "downLeft",
-  "downRight"
+  "downRight",
+  "cornerUpRight",
+  "cornerUpLeft",
+  "turnAround"
 ]);
 
 export const venueSignageSlotSchema = z.object({
@@ -39,6 +54,8 @@ export const venueSignageProfileSchema = z.object({
   name: z.string().min(1).max(200),
   slots: z.array(venueSignageSlotSchema).min(1).max(200),
   theme: signageThemeSchema,
+  defaultVenueLabel: optionalSignageVenueLabelField,
+  defaultSubVenueLabel: optionalSignageVenueLabelField,
   defaultVenueLogoKey: optionalLogoKeySchema,
   defaultClientLogoKey: optionalLogoKeySchema
 });
