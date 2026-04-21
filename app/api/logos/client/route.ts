@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isR2Configured } from "@/lib/storage/r2";
-import { deleteClientLogo, listClientLogos, saveClientLogoUpload } from "@/lib/logos/clientR2";
+import { deleteClientLogo, listClientLogos, renameClientLogo, saveClientLogoUpload } from "@/lib/logos/clientR2";
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
 
@@ -45,6 +45,29 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload failed.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  if (!isR2Configured()) {
+    return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
+  }
+  try {
+    const body = (await request.json()) as { key?: unknown; name?: unknown };
+    const key = typeof body.key === "string" ? body.key.trim() : "";
+    const name = typeof body.name === "string" ? body.name : "";
+    if (!key) {
+      return NextResponse.json({ error: "Missing key." }, { status: 400 });
+    }
+    const { key: newKey } = await renameClientLogo(key, name);
+    return NextResponse.json({
+      ok: true,
+      key: newKey,
+      assetUrl: `/api/logos/client/asset?key=${encodeURIComponent(newKey)}`
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Rename failed.";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

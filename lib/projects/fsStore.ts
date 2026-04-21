@@ -121,3 +121,24 @@ export async function deleteProjectFs(id: string): Promise<void> {
   const next = manifest.filter((e) => e.id !== id);
   await writeManifestToDisk(next);
 }
+
+export async function replaceVenueLogoKeyInAllProjectsFs(oldKey: string, newKey: string): Promise<void> {
+  await ensureProjectDir();
+  const files = await fs.readdir(PROJECT_DIR);
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    const id = file.slice(0, -".json".length);
+    if (!isValidProjectUuid(id)) continue;
+    let data: EventProjectFile;
+    try {
+      const raw = await fs.readFile(path.join(PROJECT_DIR, file), "utf8");
+      data = JSON.parse(raw) as EventProjectFile;
+    } catch {
+      continue;
+    }
+    if (data.selectedVenueLogoKey === oldKey) {
+      data.selectedVenueLogoKey = newKey;
+      await fs.writeFile(path.join(PROJECT_DIR, file), JSON.stringify(data, null, 2), "utf8");
+    }
+  }
+}

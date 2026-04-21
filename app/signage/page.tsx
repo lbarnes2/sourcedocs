@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { SignageLogoLibraryGrid } from "./LogoLibraryGrid";
 import { defaultSignageTheme } from "@/lib/defaults";
 import * as limits from "@/lib/validation/limits";
 import type { SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
@@ -126,6 +127,18 @@ export default function SignagePage() {
     setVenueLogos(vj.items ?? []);
     setClientLogos(cj.items ?? []);
     setLogosConfigured(Boolean(vj.configured));
+  }, []);
+
+  const remapLogoKey = useCallback((oldKey: string, newKey: string) => {
+    setDraft((d) => ({
+      ...d,
+      defaultVenueLogoKey: d.defaultVenueLogoKey === oldKey ? newKey : d.defaultVenueLogoKey,
+      defaultClientLogoKey: d.defaultClientLogoKey === oldKey ? newKey : d.defaultClientLogoKey
+    }));
+    setPackVenueKey((k) => (k === oldKey ? newKey : k));
+    setPackClientKey((k) => (k === oldKey ? newKey : k));
+    setAdhocVenueKey((k) => (k === oldKey ? newKey : k));
+    setAdhocClientKey((k) => (k === oldKey ? newKey : k));
   }, []);
 
   useEffect(() => {
@@ -587,25 +600,25 @@ export default function SignagePage() {
 
             <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Default logos (optional)</h3>
             <div className="grid two">
-              <label>
-                Default venue logo
-                <select
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Default venue logo</div>
+                <SignageLogoLibraryGrid
+                  kind="venue"
+                  items={venueLogos}
                   value={draft.defaultVenueLogoKey ?? ""}
-                  onChange={(e) =>
+                  onChange={(key) =>
                     setDraft((d) => ({
                       ...d,
-                      defaultVenueLogoKey: e.target.value || undefined
+                      defaultVenueLogoKey: key || undefined
                     }))
                   }
-                >
-                  <option value="">None</option>
-                  {venueLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
               <label>
                 Upload venue logo
                 <input
@@ -626,25 +639,25 @@ export default function SignagePage() {
                   }}
                 />
               </label>
-              <label>
-                Default client logo
-                <select
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Default client logo</div>
+                <SignageLogoLibraryGrid
+                  kind="client"
+                  items={clientLogos}
                   value={draft.defaultClientLogoKey ?? ""}
-                  onChange={(e) =>
+                  onChange={(key) =>
                     setDraft((d) => ({
                       ...d,
-                      defaultClientLogoKey: e.target.value || undefined
+                      defaultClientLogoKey: key || undefined
                     }))
                   }
-                >
-                  <option value="">None</option>
-                  {clientLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
               <label>
                 Upload client logo
                 <input
@@ -733,7 +746,7 @@ export default function SignagePage() {
             <p className="text-muted" style={{ marginBottom: 8 }}>
               Pack download gives one PDF for all A4 signs and one for all A3 signs (you only get a file for sizes
               present in the profile). Venue, optional sub-venue, and date appear under the event name; leave overrides
-              blank to use profile defaults. Logo dropdowns override profile defaults for this download only. Enable the
+              blank to use profile defaults. Logo choices below override profile defaults for this download only. Enable the
               checkbox to override colours for this run.
             </p>
             <label className="checkbox-row" style={{ marginBottom: 12 }}>
@@ -771,28 +784,34 @@ export default function SignagePage() {
               </div>
             ) : null}
             <div className="grid two">
-              <label>
-                Venue logo (this run)
-                <select value={packVenueKey} onChange={(e) => setPackVenueKey(e.target.value)}>
-                  <option value="">Use profile default</option>
-                  {venueLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Client logo (this run)
-                <select value={packClientKey} onChange={(e) => setPackClientKey(e.target.value)}>
-                  <option value="">Use profile default</option>
-                  {clientLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Venue logo (this run)</div>
+                <SignageLogoLibraryGrid
+                  kind="venue"
+                  items={venueLogos}
+                  value={packVenueKey}
+                  onChange={setPackVenueKey}
+                  emptyOption={{ label: "Use profile default", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Client logo (this run)</div>
+                <SignageLogoLibraryGrid
+                  kind="client"
+                  items={clientLogos}
+                  value={packClientKey}
+                  onChange={setPackClientKey}
+                  emptyOption={{ label: "Use profile default", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
             </div>
             <button type="button" disabled={busy} onClick={() => void generatePack()}>
               {busy ? "Working…" : "Download sign pack PDFs (A4 & A3)"}
@@ -893,28 +912,34 @@ export default function SignagePage() {
               </label>
             </div>
             <div className="grid two">
-              <label>
-                Venue logo
-                <select value={adhocVenueKey} onChange={(e) => setAdhocVenueKey(e.target.value)}>
-                  <option value="">None</option>
-                  {venueLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Client logo
-                <select value={adhocClientKey} onChange={(e) => setAdhocClientKey(e.target.value)}>
-                  <option value="">None</option>
-                  {clientLogos.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Venue logo</div>
+                <SignageLogoLibraryGrid
+                  kind="venue"
+                  items={venueLogos}
+                  value={adhocVenueKey}
+                  onChange={setAdhocVenueKey}
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Client logo</div>
+                <SignageLogoLibraryGrid
+                  kind="client"
+                  items={clientLogos}
+                  value={adhocClientKey}
+                  onChange={setAdhocClientKey}
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                  onRenamed={remapLogoKey}
+                  onRefresh={loadLogos}
+                  onError={setError}
+                />
+              </div>
             </div>
             <button type="button" className="secondary" disabled={busy} onClick={() => void generateAdhoc()}>
               {busy ? "Working…" : "Download single sign PDF"}

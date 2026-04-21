@@ -1,6 +1,8 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client
@@ -99,6 +101,41 @@ export async function r2DeleteObject(key: string): Promise<void> {
   const c = getR2Client();
   const bucket = requireBucket();
   await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/** S3 CopySource: bucket + URL-encoded key (slashes preserved between segments). */
+function r2CopySource(bucket: string, sourceKey: string): string {
+  const encodedKey = sourceKey.split("/").map(encodeURIComponent).join("/");
+  return `${bucket}/${encodedKey}`;
+}
+
+export async function r2CopyObject(sourceKey: string, destKey: string): Promise<void> {
+  const c = getR2Client();
+  const bucket = requireBucket();
+  await c.send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: r2CopySource(bucket, sourceKey),
+      Key: destKey
+    })
+  );
+}
+
+export async function r2ObjectExists(key: string): Promise<boolean> {
+  const c = getR2Client();
+  const bucket = requireBucket();
+  try {
+    await c.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "$metadata" in error) {
+      const code = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+      if (code === 404) return false;
+    }
+    const name = error && typeof error === "object" && "name" in error ? (error as { name: string }).name : "";
+    if (name === "NotFound" || name === "NoSuchKey") return false;
+    throw error;
+  }
 }
 
 export async function r2ListObjectKeys(prefix: string): Promise<string[]> {

@@ -1,5 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { replaceClientLogoKeyAfterRename } from "@/lib/logos/replaceLogoKeyRefs";
+import { renameLogoObject } from "@/lib/logos/renameLogoInR2";
 import { r2DeleteObject, r2GetObjectBytes, r2ListObjectKeys, r2PutObjectBytes } from "@/lib/storage/r2";
+import { buildLogoObjectKey } from "@/lib/logos/logoObjectKey";
 
 export const CLIENT_LOGO_PREFIX = "logos/client/";
 
@@ -41,8 +43,7 @@ export async function saveClientLogoUpload(
   if (buffer.length > MAX_UPLOAD_BYTES) {
     throw new Error(`Logo must be at most ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`);
   }
-  const ext = extensionFromMime(options.contentType, options.originalName);
-  const key = `${CLIENT_LOGO_PREFIX}${randomUUID()}${ext}`;
+  const key = buildLogoObjectKey(CLIENT_LOGO_PREFIX, options);
   await r2PutObjectBytes(key, buffer, options.contentType || "application/octet-stream");
   return { key };
 }
@@ -52,14 +53,6 @@ export async function deleteClientLogo(key: string): Promise<void> {
   await r2DeleteObject(key);
 }
 
-function extensionFromMime(contentType: string, originalName?: string): string {
-  const fromName = originalName?.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase();
-  if (fromName === "png" || fromName === "jpg" || fromName === "jpeg" || fromName === "webp" || fromName === "gif") {
-    return fromName === "jpeg" ? ".jpg" : `.${fromName}`;
-  }
-  if (contentType.includes("png")) return ".png";
-  if (contentType.includes("jpeg") || contentType.includes("jpg")) return ".jpg";
-  if (contentType.includes("webp")) return ".webp";
-  if (contentType.includes("gif")) return ".gif";
-  return ".bin";
+export async function renameClientLogo(oldKey: string, newDisplayName: string): Promise<{ key: string }> {
+  return renameLogoObject(CLIENT_LOGO_PREFIX, assertClientLogoKey, oldKey, newDisplayName, replaceClientLogoKeyAfterRename);
 }
