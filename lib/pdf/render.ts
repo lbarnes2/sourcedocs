@@ -20,6 +20,7 @@ import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
+import { normalizeForCormorant } from "@/lib/buffetMenu/cormorantNormalize";
 import type { PDFFont } from "pdf-lib";
 
 function mmToPt(mm: number): number {
@@ -57,37 +58,6 @@ const PDF_FONT_SOURCES = {
   bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
   title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf")
 } as const;
-
-const CORMORANT_CHAR_REPLACEMENTS: Record<string, string> = {
-  "’": "'",
-  "‘": "'",
-  "“": "\"",
-  "”": "\"",
-  "–": "-",
-  "—": "-",
-  "…": "...",
-  "ß": "ss",
-  "Æ": "AE",
-  "æ": "ae",
-  "Œ": "OE",
-  "œ": "oe",
-  "Ø": "O",
-  "ø": "o",
-  "Đ": "D",
-  "đ": "d",
-  "Ł": "L",
-  "ł": "l",
-  "Þ": "Th",
-  "þ": "th"
-};
-
-function normalizeForCormorant(text: string): string {
-  if (!text) return "";
-  const remapped = Array.from(text)
-    .map((char) => CORMORANT_CHAR_REPLACEMENTS[char] ?? char)
-    .join("");
-  return remapped.normalize("NFKD").replace(/\p{M}+/gu, "");
-}
 
 export type EmbeddedPdfFonts = {
   body: PDFFont;

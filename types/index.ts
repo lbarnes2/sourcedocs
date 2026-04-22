@@ -179,3 +179,4 @@ export interface ProjectListItem {
 }
 
 export type * from "./signage";
+export type * from "./buffetMenu";

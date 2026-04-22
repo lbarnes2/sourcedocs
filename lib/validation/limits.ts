@@ -18,3 +18,10 @@ export const MAX_STOCK_NAME_CHARS = 2000;
 
 /** Floorplan grid dimensions (rows × columns). */
 export const MAX_FLOORPLAN_GRID = 24;
+
+/** Buffet menu generator */
+export const MAX_BUFFET_MENU_ITEMS = 200;
+export const MAX_BUFFET_CATEGORY_TITLE_CHARS = 120;
+export const MAX_BUFFET_ITEM_TITLE_CHARS = 500;
+export const MAX_BUFFET_SAVED_NAME_CHARS = 200;
+export const MAX_BUFFET_CATEGORIES = 50;
