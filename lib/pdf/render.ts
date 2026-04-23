@@ -20,7 +20,7 @@ import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
-import { normalizeForCormorant } from "@/lib/buffetMenu/cormorantNormalize";
+import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
 import type { PDFFont } from "pdf-lib";
 
 function mmToPt(mm: number): number {
@@ -393,7 +393,7 @@ export async function renderTablePlanByTablePdf(
       color: rgb(1, 1, 1)
     });
 
-    const eventTitle = normalizeForCormorant(theme.eventName || "Event");
+    const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
     const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
     let titleSize = 30;
     let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
@@ -551,7 +551,7 @@ export async function renderTablePlanByPersonPdf(
       color: rgb(1, 1, 1)
     });
 
-    const eventTitle = normalizeForCormorant(theme.eventName || "Event");
+    const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
     const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
     let titleSize = 30;
     let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
@@ -1119,7 +1119,7 @@ export async function renderMenuBookletPdf(
   const panelCenterY = panelY + panelH / 2;
   const minTextBottomY = panelY + 32;
   let titleFontSize = 26;
-  const coverTitle = normalizeForCormorant(theme.eventName || "Event");
+  const coverTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
   let titleLines = wrapTextToWidth(coverTitle, title, titleFontSize, titleMaxW);
   let titleLineHeight = titleFontSize + 5;
   const minTitleFont = 16;
@@ -1179,7 +1179,7 @@ export async function renderMenuBookletPdf(
   if (theme.eventDate?.trim()) {
     drawCenteredInPanel(
       sheet1,
-      normalizeForCormorant(theme.eventDate.trim()),
+      normalizeForCormorantLigatureSafe(theme.eventDate.trim()),
       dateBaseline,
       title,
       14,
@@ -1303,7 +1303,7 @@ export async function renderMenuBookletPdf(
   sections.forEach((section, sectionIndex) => {
     drawCenteredInPanel(
       sheet2,
-      normalizeForCormorant(section.heading),
+      normalizeForCormorantLigatureSafe(section.heading),
       cursorY,
       titleBold,
       headingSize,
@@ -1381,7 +1381,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   let page = doc.addPage([width, height]);
   let y = height - 28;
 
-  drawPseudoBoldText(page, normalizeForCormorant(`${theme.eventName} - Service Plan`), {
+  drawPseudoBoldText(page, normalizeForCormorantLigatureSafe(`${theme.eventName} - Service Plan`), {
     x: 22,
     y,
     font: titleBold,
@@ -1609,7 +1609,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
 
   page = doc.addPage([width, height]);
   y = height - 28;
-  drawPseudoBoldText(page, normalizeForCormorant("Service Summary"), {
+  drawPseudoBoldText(page, normalizeForCormorantLigatureSafe("Service Summary"), {
     x: 24,
     y,
     font: titleBold,
@@ -1775,7 +1775,7 @@ export async function renderFloorplanPdf(
     color: rgb(1, 1, 1)
   });
 
-  const eventTitle = normalizeForCormorant(theme.eventName || "Event");
+  const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
   const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
   let titleSize = 30;
   let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);

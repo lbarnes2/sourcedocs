@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { PDFDocument, type PDFFont, type PDFImage, type PDFPage, rgb } from "pdf-lib";
+import { degrees, PDFDocument, type PDFFont, type PDFImage, type PDFPage, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { normalizeForCormorant } from "@/lib/buffetMenu/cormorantNormalize";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import { allItemsInOrderForLabels, flattenForDisplayMenu, type DisplayLine } from "@/lib/buffetMenu/flattenMenu";
 import { drawLucideIconStroke, lucideCheck, lucideSquare, lucideSquareCheck } from "@/lib/pdf/lucidePdfDraw";
@@ -15,9 +14,9 @@ function mmToPt(mm: number): number {
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
   body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
+  bodyLight: path.join(LIB_FONTS, "NotoSans-Light.ttf"),
   bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
-  bodyItalic: path.join(LIB_FONTS, "NotoSans-Italic.ttf"),
-  title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf")
+  bodyItalic: path.join(LIB_FONTS, "NotoSans-Italic.ttf")
 };
 
 const WATER_BG_PATH = path.join(process.cwd(), "lib", "assets", "buffet", "water-menu-bg.png");
@@ -32,14 +31,19 @@ const A6_H = mmToPt(148.5);
 const LABELS_PER_SHEET = 4;
 
 /** Spacing after each food item (not after category title lines, except small gap). */
-const DISPLAY_ITEM_GAP_RATIO = 0.22; /* of item line height */
+const DISPLAY_ITEM_GAP_RATIO = 0.38; /* of item line height (extra between consecutive items) */
 const DISPLAY_AFTER_CATEGORY_PT = 3;
 
 type EmbeddedFonts = { body: PDFFont; bodyBold: PDFFont; bodyItalic: PDFFont };
 
-async function loadTitleFont(doc: PDFDocument): Promise<PDFFont> {
-  const b = await readFile(PDF_FONT_SOURCES.title);
-  return doc.embedFont(b, { subset: false });
+/** Noto Sans Light for the display menu; falls back to Regular if the file is missing. */
+async function loadNotoForDisplayMenu(doc: PDFDocument, regular: PDFFont): Promise<PDFFont> {
+  try {
+    const bytes = await readFile(PDF_FONT_SOURCES.bodyLight);
+    return await doc.embedFont(bytes, { subset: true });
+  } catch {
+    return regular;
+  }
 }
 
 function wrapWords(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
@@ -95,7 +99,7 @@ function totalDisplayHeight(
   itemSize: number,
   categoryRatio: number,
   contentWidth: number,
-  title: PDFFont
+  displayFont: PDFFont
 ): number {
   const catSize = itemSize * categoryRatio;
   const itemLH = itemSize * 1.25;
@@ -105,11 +109,11 @@ function totalDisplayHeight(
   for (let i = 0; i < displayLines.length; i++) {
     const line = displayLines[i]!;
     if (line.kind === "category") {
-      const wrapped = wrapWords(normalizeForCormorant(line.title), title, catSize, contentWidth);
+      const wrapped = wrapWords(line.title, displayFont, catSize, contentWidth);
       h += wrapped.length * catLH;
       h += DISPLAY_AFTER_CATEGORY_PT;
     } else {
-      const wrapped = wrapWords(normalizeForCormorant(line.title), title, itemSize, contentWidth);
+      const wrapped = wrapWords(line.title, displayFont, itemSize, contentWidth);
       h += wrapped.length * itemLH;
       h += itemGap;
     }
@@ -121,12 +125,13 @@ function totalDisplayHeight(
 }
 
 /**
- * A4 portrait display menu: full-bleed water background, text only in the central band (~64% of height), centred.
+ * A4 portrait display menu: full-bleed water background, Noto Sans Light (or Regular if Light is missing), centred in band.
  */
 export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
-  const title = await loadTitleFont(doc);
+  const { body } = await loadEmbeddedFonts(doc);
+  const displayFont = await loadNotoForDisplayMenu(doc, body);
   const bgBytes = new Uint8Array(await readFile(WATER_BG_PATH));
   const bgImage = await embedImageFromBytes(doc, bgBytes);
 
@@ -147,12 +152,12 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise
   const displayLines = flattenForDisplayMenu(menu);
   if (displayLines.length === 0) {
     const emptyMsg = "Add menu items to generate this page.";
-    const w = title.widthOfTextAtSize(emptyMsg, 12);
+    const w = displayFont.widthOfTextAtSize(emptyMsg, 12);
     page.drawText(emptyMsg, {
       x: (pw - w) / 2,
       y: yVC,
       size: 12,
-      font: title,
+      font: displayFont,
       color: rgb(0, 0, 0)
     });
     return doc.save();
@@ -162,7 +167,7 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise
   let hi = 28;
   while (lo < hi) {
     const mid = Math.floor((lo + hi + 1) / 2);
-    const t = totalDisplayHeight(displayLines, mid, categoryRatio, contentWidth, title);
+    const t = totalDisplayHeight(displayLines, mid, categoryRatio, contentWidth, displayFont);
     if (t <= contentH) lo = mid;
     else hi = mid - 1;
   }
@@ -172,26 +177,26 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise
   const catLH = catSize * 1.25;
   const gap = itemGap(itemSize);
 
-  const totalH = totalDisplayHeight(displayLines, itemSize, categoryRatio, contentWidth, title);
+  const totalH = totalDisplayHeight(displayLines, itemSize, categoryRatio, contentWidth, displayFont);
   /* Vertically centre the full block; first baseline = band centre + half block height. */
   let cursorY = yVC + totalH / 2;
   for (let idx = 0; idx < displayLines.length; idx++) {
     const line = displayLines[idx]!;
     if (line.kind === "category") {
-      const wrapped = wrapWords(normalizeForCormorant(line.title), title, catSize, contentWidth);
+      const wrapped = wrapWords(line.title, displayFont, catSize, contentWidth);
       for (const w of wrapped) {
-        const tw = title.widthOfTextAtSize(w, catSize);
+        const tw = displayFont.widthOfTextAtSize(w, catSize);
         const x = marginX + (contentWidth - tw) / 2;
-        page.drawText(w, { x, y: cursorY, size: catSize, font: title, color: rgb(0, 0, 0) });
+        page.drawText(w, { x, y: cursorY, size: catSize, font: displayFont, color: rgb(0, 0, 0) });
         cursorY -= catLH;
       }
       cursorY -= DISPLAY_AFTER_CATEGORY_PT;
     } else {
-      const wrapped = wrapWords(normalizeForCormorant(line.title), title, itemSize, contentWidth);
+      const wrapped = wrapWords(line.title, displayFont, itemSize, contentWidth);
       for (const w of wrapped) {
-        const tw = title.widthOfTextAtSize(w, itemSize);
+        const tw = displayFont.widthOfTextAtSize(w, itemSize);
         const x = marginX + (contentWidth - tw) / 2;
-        page.drawText(w, { x, y: cursorY, size: itemSize, font: title, color: rgb(0, 0, 0) });
+        page.drawText(w, { x, y: cursorY, size: itemSize, font: displayFont, color: rgb(0, 0, 0) });
         cursorY -= itemLH;
       }
       if (idx < displayLines.length - 1) cursorY -= gap;
@@ -246,17 +251,30 @@ export async function renderBuffetAllergenMatrixPdf(
   const tableLeft = margin;
   const tableRight = W - margin;
   const tableBottom = margin + 6;
-  const nameColW = (tableRight - tableLeft) * 0.26;
+  const nameColW = (tableRight - tableLeft) * 0.27;
   const colW = (tableRight - tableLeft - nameColW) / ALLERGENS.length;
   const n = items.length;
   const maxRows = 40;
-  const namePadBot = 2.2;
+  const namePadBot = 2.4;
   const maxNameLines = 4;
 
-  let fontSize = 8.5;
-  let headerSize = 6.2;
-  const headerH = 24;
+  let fontSize = 10.5;
+  let headerSize = 8.5;
+  const HEADER_ROT_DEG = 45;
+  const headerRad = (Math.PI * HEADER_ROT_DEG) / 180;
+  const headerCos = Math.cos(headerRad);
+  const headerSin = Math.sin(headerRad);
+
+  const maxAllergyLabelWidth = (hs: number) =>
+    Math.max(...ALLERGENS.map((a) => bodyBold.widthOfTextAtSize(a.shortLabel, hs)));
+  /** Vertical room for one-line labels tilted 45° (span along y ≈ w·sin(45) plus padding). */
+  const headerHForTilted = (hs: number) => {
+    const w = maxAllergyLabelWidth(hs);
+    return Math.min(80, Math.max(34, w * headerSin + hs * 0.85 + 10));
+  };
+
   let lineStep = fontSize * 1.12;
+  let headerH = headerHForTilted(headerSize);
   /** Distance from top grid line to first text baseline: cap height + small gap (keeps glyphs below the line). */
   const nameTopToFirstBaseline = (s: number) => s * 0.72 + 1.2;
   const rowHFor = (s: number, maxLines: number) => {
@@ -273,11 +291,14 @@ export async function renderBuffetAllergenMatrixPdf(
       maxLines = Math.max(maxLines, Math.min(maxNameLines, lines.length));
     }
     rowH = rowHFor(fontSize, maxLines);
+    headerH = headerHForTilted(headerSize);
     const bodyH = n * rowH;
     if (headerH + bodyH <= tableTop - tableBottom && n <= maxRows) break;
-    fontSize = Math.max(3.2, fontSize * 0.96);
-    headerSize = Math.max(2.8, fontSize * 0.8);
+    fontSize = Math.max(3.4, fontSize * 0.97);
+    headerSize = Math.max(3.0, fontSize * 0.82);
   }
+  headerSize = Math.min(10.5, headerSize * 1.1);
+  headerH = headerHForTilted(headerSize);
   lineStep = fontSize * 1.12;
 
   const dataTop = tableTop - headerH;
@@ -319,15 +340,22 @@ export async function renderBuffetAllergenMatrixPdf(
   for (let c = 0; c < ALLERGENS.length; c++) {
     const a = ALLERGENS[c]!;
     const colLeft = tableLeft + nameColW + c * colW;
-    const short = a.shortLabel;
-    const lines = wrapWords(short, bodyBold, headerSize, colW - 0.5);
-    const blockH = lines.length * headerSize * 0.88;
-    let colY = headerBandMidY + blockH / 2 - headerSize * 0.22;
-    for (const ln of lines) {
-      const lw = bodyBold.widthOfTextAtSize(ln, headerSize);
-      page.drawText(ln, { x: colLeft + (colW - lw) / 2, y: colY, size: headerSize, font: bodyBold, color: ink });
-      colY -= headerSize * 0.88;
-    }
+    const label = a.shortLabel;
+    const w = bodyBold.widthOfTextAtSize(label, headerSize);
+    const cap = headerSize * 0.7;
+    const cx = colLeft + colW / 2;
+    const cy = headerBandMidY;
+    /* Anchor lower-left; rotate 45° around (x,y) so label sits in narrow column. */
+    const x = cx - (w / 2) * headerCos - cap * 0.35 * headerSin;
+    const y = cy - (w / 2) * headerSin - cap * 0.35 * headerCos;
+    page.drawText(label, {
+      x,
+      y,
+      size: headerSize,
+      font: bodyBold,
+      color: ink,
+      rotate: degrees(HEADER_ROT_DEG)
+    });
   }
 
   /* Data: name block top-padded to row (aligns to grid); up to 4 wrapped lines; checks centred in cell */
@@ -345,7 +373,8 @@ export async function renderBuffetAllergenMatrixPdf(
       ny -= lineStep;
     }
     const rowMidY = (rowTopY + rowBotY) / 2;
-    const iconPt = Math.min(rowH, colW) * 0.4;
+    const cell = Math.min(rowH, colW);
+    const iconPt = Math.max(9, Math.min(20, cell * 0.72));
     for (let c = 0; c < ALLERGENS.length; c++) {
       const id = ALLERGENS[c]!.id as AllergenId;
       if (it.allergens[id]) {
@@ -359,7 +388,7 @@ export async function renderBuffetAllergenMatrixPdf(
 }
 
 /**
- * A6 labels: 2×2 on A4; top 75% logo, title, diet; bottom 25% allergen grid (3 cols, Lucide Square / SquareCheck).
+ * A6 labels: 2×2 on A4; top 75% logo, title, diet; bottom 25% allergen grid (4 cols, Lucide Square / SquareCheck).
  */
 export async function renderBuffetLabelSheetsPdf(
   menu: BuffetMenuState,
@@ -435,19 +464,20 @@ export async function renderBuffetLabelSheetsPdf(
       const title = it.title.trim() || "Item";
       const dietLine = it.vegan ? "Vegan" : it.vegetarian ? "Vegetarian" : null;
       const nAllergen = ALLERGENS.length;
-      const gridCols = 3;
+      const gridCols = 4;
       const gridRows = Math.ceil(nAllergen / gridCols);
-      const colGap = mmToPt(0.6);
+      const colGap = mmToPt(0.35);
       const wCol = (innerW - (gridCols - 1) * colGap) / gridCols;
 
-      const titleGapDiet = mmToPt(1.2);
+      const titleGapDiet = mmToPt(2.6);
       const availForTitle = cursorY - mainBandBottom - titleGapDiet;
       let titleSize = 30;
       let titleLines: string[] = [];
+      const titleToDietGapH = dietLine ? mmToPt(1.6) : 0;
       for (let t = 0; t < 200 && titleSize >= 6.5; t++) {
         titleLines = wrapWords(title, bodyBold, titleSize, innerW);
         const titleBlockH = titleLines.length * titleSize * 1.1;
-        const dietH = dietLine ? Math.max(8, titleSize * 0.44) * 1.22 : 0;
+        const dietH = dietLine ? titleToDietGapH + Math.max(8, titleSize * 0.45) * 1.22 : 0;
         if (titleBlockH + dietH <= availForTitle) break;
         titleSize -= 0.5;
       }
@@ -458,8 +488,9 @@ export async function renderBuffetLabelSheetsPdf(
         page.drawText(line, { x: x0 + (A6_W - tw) / 2, y: cursorY, size: titleSize, font: bodyBold, color: ink });
       }
       if (dietLine) {
+        cursorY -= titleToDietGapH;
         const dietSize = Math.max(8, titleSize * 0.45);
-        cursorY -= dietSize * 1.28;
+        cursorY -= dietSize * 1.22;
         const dw = bodyItalic.widthOfTextAtSize(dietLine, dietSize);
         page.drawText(dietLine, { x: x0 + (A6_W - dw) / 2, y: cursorY, size: dietSize, font: bodyItalic, color: ink });
       }
@@ -469,8 +500,8 @@ export async function renderBuffetLabelSheetsPdf(
       const zoneBotY = innerBot + zonePad;
       const useH = Math.max(0, zoneTopY - zoneBotY);
       const cellH = useH / Math.max(1, gridRows);
-      const tfs = Math.min(6.2, Math.max(3.8, cellH * 0.38));
-      const boxS = Math.min(5, Math.max(3.6, cellH * 0.42));
+      const tfs = Math.min(9, Math.max(6.2, cellH * 0.62));
+      const boxS = cellH * 0.85;
       for (let row = 0; row < gridRows; row++) {
         for (let col = 0; col < gridCols; col++) {
           const k = row * gridCols + col;
@@ -479,11 +510,9 @@ export async function renderBuffetLabelSheetsPdf(
           const yRowTop = zoneTopY - row * cellH;
           const yMid = yRowTop - cellH * 0.5;
           const lab = a.shortLabel;
-          const tw2 = body.widthOfTextAtSize(lab, tfs);
           const colX0 = x0 + pad + col * (wCol + colGap);
-          const textGap = 1.1;
-          const groupW = boxS + textGap + tw2;
-          const startX = colX0 + (wCol - groupW) / 2;
+          const textGap = 0.75;
+          const startX = colX0;
           const isOn = it.allergens[a.id as AllergenId];
           const iconCx = startX + boxS * 0.5;
           drawLucideIconStroke(page, isOn ? lucideSquareCheck : lucideSquare, iconCx, yMid, boxS, ink);

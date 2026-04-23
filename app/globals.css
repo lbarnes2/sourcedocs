@@ -862,3 +862,10 @@ button.signage-logo-tile:disabled {
   font-size: 0.8rem;
   margin: 4px 0 0;
 }
+
+.buffet-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-top: 8px;
+}

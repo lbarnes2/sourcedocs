@@ -30,7 +30,7 @@ export type AllergenDef = {
 export const ALLERGENS: AllergenDef[] = [
   { id: "celery", shortLabel: "Celery", fullLabel: "Celery" },
   { id: "gluten", shortLabel: "Gluten", fullLabel: "Cereals containing gluten" },
-  { id: "crustaceans", shortLabel: "Crustaceans", fullLabel: "Crustaceans" },
+  { id: "crustaceans", shortLabel: "Crustacean", fullLabel: "Crustacean" },
   { id: "eggs", shortLabel: "Eggs", fullLabel: "Eggs" },
   { id: "fish", shortLabel: "Fish", fullLabel: "Fish" },
   { id: "lupin", shortLabel: "Lupin", fullLabel: "Lupin" },

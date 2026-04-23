@@ -30,6 +30,14 @@ import type { BuffetMenuItem } from "@/types/buffetMenu";
 
 type Store = BuffetMenuStore;
 
+type BuffetExportMode = "zip" | "display" | "matrix" | "labels";
+const BUFFET_DOWNLOAD_FILE_NAMES: Record<BuffetExportMode, string> = {
+  zip: "buffet-menu-documents.zip",
+  display: "buffet-menu-display.pdf",
+  matrix: "buffet-allergen-matrix.pdf",
+  labels: "buffet-labels.pdf"
+};
+
 function findItemContainerLocal(store: Store, itemId: string): string | null {
   for (const k of containerKeys(store)) {
     if ((store.orderMap[k] || []).includes(itemId)) return k;
@@ -329,7 +337,7 @@ export default function BuffetMenuPage() {
     setStore((s) => ({ ...s, items: { ...s.items, [item.id]: item } }));
   };
 
-  const downloadZip = async () => {
+  const downloadExport = async (exportMode: BuffetExportMode) => {
     setError("");
     setBusy(true);
     try {
@@ -339,7 +347,8 @@ export default function BuffetMenuPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           menu,
-          venueLogoKey: venueLogoKey || null
+          venueLogoKey: venueLogoKey || null,
+          export: exportMode
         })
       });
       if (!res.ok) {
@@ -350,7 +359,7 @@ export default function BuffetMenuPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "buffet-menu-documents.zip";
+      a.download = BUFFET_DOWNLOAD_FILE_NAMES[exportMode];
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -571,10 +580,23 @@ export default function BuffetMenuPage() {
 
       <div className="panel">
         <h2>Download</h2>
-        <p className="text-muted">Zipped PDFs: A4 display menu (no allergens on menu), A4 landscape allergen matrix, A4 pages with A6 buffet labels.</p>
-        <button type="button" onClick={() => void downloadZip()} disabled={busy}>
-          {busy ? "Working…" : "Download all documents (ZIP)"}
-        </button>
+        <p className="text-muted">
+          A4 display menu (no allergens on the menu), A4 landscape allergen matrix, and A4 pages of A6 buffet labels. Get each file on its own or all three in one ZIP.
+        </p>
+        <div className="buffet-download-actions">
+          <button type="button" className="secondary" onClick={() => void downloadExport("display")} disabled={busy}>
+            {busy ? "Working…" : "Display menu (PDF)"}
+          </button>
+          <button type="button" className="secondary" onClick={() => void downloadExport("matrix")} disabled={busy}>
+            {busy ? "Working…" : "Allergen matrix (PDF)"}
+          </button>
+          <button type="button" className="secondary" onClick={() => void downloadExport("labels")} disabled={busy}>
+            {busy ? "Working…" : "Label sheets (PDF)"}
+          </button>
+          <button type="button" onClick={() => void downloadExport("zip")} disabled={busy}>
+            {busy ? "Working…" : "All documents (ZIP)"}
+          </button>
+        </div>
       </div>
     </main>
   );

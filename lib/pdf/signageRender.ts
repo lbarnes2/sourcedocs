@@ -31,7 +31,7 @@ import {
   rgb
 } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { normalizeForCormorant } from "@/lib/buffetMenu/cormorantNormalize";
+import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
 import { hexToRgb } from "@/lib/pdf/color";
 import { lucideIconPathDs, type LucideIconNode } from "@/lib/pdf/lucideIconPath";
 import type { SignageArrowDirection, SignageThemeColors } from "@/types";
@@ -410,7 +410,7 @@ function layoutSignageContent(
   const innerSpan = innerTop - innerBottom;
   const cyTarget = hasArrow ? innerBottom + innerSpan * 0.25 : 0;
 
-  const name = normalizeForCormorant(eventName.trim() || "Event");
+  const name = normalizeForCormorantLigatureSafe(eventName.trim() || "Event");
   const vRaw = venueLine.trim();
   const sRaw = subVenueLine.trim();
   const dRaw = dateLine.trim();
