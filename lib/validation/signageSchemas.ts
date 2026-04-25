@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PAPER_SIZE_VALUES } from "@/lib/paperSizes";
 import * as limits from "@/lib/validation/limits";
 import { hexColorStringSchema, profileIdSchema } from "@/lib/validation/layoutSchemas";
 
@@ -24,14 +25,20 @@ export const signageArrowSchema = z.enum([
   "upRight",
   "downLeft",
   "downRight",
-  "cornerUpRight",
   "cornerUpLeft",
+  "cornerUpRight",
+  "cornerRightUp",
+  "cornerRightDown",
+  "cornerDownRight",
+  "cornerDownLeft",
+  "cornerLeftDown",
+  "cornerLeftUp",
   "turnAround"
 ]);
 
 export const venueSignageSlotSchema = z.object({
   count: z.number().int().min(1).max(500),
-  paperSize: z.enum(["A3", "A4"]),
+  paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema
 });

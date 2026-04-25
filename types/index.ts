@@ -1,3 +1,5 @@
+import type { PaperOrientation, PaperSize } from "./paper";
+
 export type CanonicalColumn =
   | "table"
   | "name"
@@ -51,8 +53,8 @@ export interface ThemeSettings {
 }
 
 export interface TablePlanSettings {
-  paperSize: "A4" | "A3";
-  orientation: "portrait" | "landscape";
+  paperSize: PaperSize;
+  orientation: PaperOrientation;
   tablesPerSheetMode: "auto" | "manual";
   tablesPerSheet: number;
   minFontSizePt: number;
@@ -80,8 +82,8 @@ export interface MenuBookletSettings {
 }
 
 export interface FloorplanSettings {
-  paperSize: "A4" | "A3";
-  orientation: "portrait" | "landscape";
+  paperSize: PaperSize;
+  orientation: PaperOrientation;
   rows: number;
   columns: number;
   tableLayout: "aligned" | "staggered";
@@ -178,5 +180,6 @@ export interface ProjectListItem {
   eventName: string;
 }
 
+export type * from "./paper";
 export type * from "./signage";
 export type * from "./buffetMenu";

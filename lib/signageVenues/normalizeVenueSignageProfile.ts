@@ -1,4 +1,5 @@
 import { defaultSignageTheme } from "@/lib/defaults";
+import { PAPER_SIZE_VALUES } from "@/lib/paperSizes";
 import type { SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
 
 const ARROWS: SignageArrowDirection[] = [
@@ -11,8 +12,14 @@ const ARROWS: SignageArrowDirection[] = [
   "upRight",
   "downLeft",
   "downRight",
-  "cornerUpRight",
   "cornerUpLeft",
+  "cornerUpRight",
+  "cornerRightUp",
+  "cornerRightDown",
+  "cornerDownRight",
+  "cornerDownLeft",
+  "cornerLeftDown",
+  "cornerLeftUp",
   "turnAround"
 ];
 
@@ -29,7 +36,10 @@ function normalizeSlot(raw: unknown): VenueSignageSlot {
   }
   const o = raw as Record<string, unknown>;
   const count = Math.max(1, Math.min(500, Math.floor(Number(o.count) || 1)));
-  const paperSize = o.paperSize === "A3" ? "A3" : "A4";
+  const paperSize =
+    typeof o.paperSize === "string" && (PAPER_SIZE_VALUES as readonly string[]).includes(o.paperSize)
+      ? (o.paperSize as VenueSignageSlot["paperSize"])
+      : "A4";
   const orientation = o.orientation === "landscape" ? "landscape" : "portrait";
   return {
     count,

@@ -1,3 +1,5 @@
+import type { PaperOrientation, PaperSize } from "./paper";
+
 /** Cardinal + intercardinal, plus none for welcome-style signs. */
 export type SignageArrowDirection =
   | "none"
@@ -9,16 +11,23 @@ export type SignageArrowDirection =
   | "upRight"
   | "downLeft"
   | "downRight"
-  | "cornerUpRight"
+  /** Lucide `corner-up-left` … `corner-left-up` — thin double-segment turns */
   | "cornerUpLeft"
+  | "cornerUpRight"
+  | "cornerRightUp"
+  | "cornerRightDown"
+  | "cornerDownRight"
+  | "cornerDownLeft"
+  | "cornerLeftDown"
+  | "cornerLeftUp"
   /** Lucide `redo-2` rotated −90° — curved “turn back / go around” for wayfinding */
   | "turnAround";
 
 export interface VenueSignageSlot {
   /** Repeat this page N times in pack order. */
   count: number;
-  paperSize: "A3" | "A4";
-  orientation: "portrait" | "landscape";
+  paperSize: PaperSize;
+  orientation: PaperOrientation;
   arrow: SignageArrowDirection;
 }
 

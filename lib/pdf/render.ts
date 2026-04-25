@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { degrees, PDFDocument, rgb } from "pdf-lib";
+import { pdfPageDimensions } from "@/lib/paperSizes";
 import { hexToRgb } from "@/lib/pdf/color";
 import fontkit from "@pdf-lib/fontkit";
 import type {
@@ -98,11 +99,7 @@ async function createDocWithFonts(): Promise<{ doc: PDFDocument } & EmbeddedPdfF
 }
 
 function pageDimensions(settings: Pick<TablePlanSettings, "paperSize" | "orientation">): [number, number] {
-  const A4: [number, number] = [mmToPt(210), mmToPt(297)];
-  const A3: [number, number] = [mmToPt(297), mmToPt(420)];
-  const base = settings.paperSize === "A3" ? A3 : A4;
-  if (settings.orientation === "landscape") return [base[1], base[0]];
-  return base;
+  return pdfPageDimensions(settings.paperSize, settings.orientation);
 }
 
 function floorplanCellWidth(usableW: number, cols: number, gap: number, staggered: boolean): number {
@@ -127,6 +124,8 @@ function resolveTablesPerSheet(settings: TablePlanSettings): number {
     return Math.max(1, settings.tablesPerSheet);
   }
 
+  if (settings.paperSize === "16:9" && settings.orientation === "landscape") return 10;
+  if (settings.paperSize === "16:9") return 8;
   if (settings.paperSize === "A3" && settings.orientation === "landscape") return 12;
   if (settings.paperSize === "A3") return 10;
   if (settings.orientation === "landscape") return 8;

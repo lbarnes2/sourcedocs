@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { catSortableId, parseSortableId } from "@/app/buffet-menu/dndTypes";
+import { LogoPicker } from "@/app/components/LogoPicker";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import {
   BUFFET_UNCAT_CONTAINER,
@@ -491,26 +492,14 @@ export default function BuffetMenuPage() {
       <div className="panel">
         <h2>Venue logo (matrix and labels)</h2>
         <p className="text-muted">Select a logo from the library for the allergen matrix and buffet labels.</p>
-        <div className="signage-logo-grid">
-          {venueLogos.map((logo) => (
-            <button
-              key={logo.key}
-              type="button"
-              className={`signage-logo-tile${venueLogoKey === logo.key ? " signage-logo-tile--selected" : ""}`}
-              onClick={() => setVenueLogoKey(logo.key)}
-            >
-              <span className="signage-logo-tile-hit">
-                <img className="signage-logo-tile-img" src={logo.assetUrl} alt="" />
-              </span>
-              <span className="signage-logo-tile-label">{logo.label}</span>
-            </button>
-          ))}
-        </div>
-        {venueLogoKey ? (
-          <button type="button" className="secondary" style={{ marginTop: 8 }} onClick={() => setVenueLogoKey("")}>
-            Clear selection
-          </button>
-        ) : null}
+        <LogoPicker
+          title="Venue logo selection"
+          items={venueLogos}
+          value={venueLogoKey}
+          onChange={setVenueLogoKey}
+          emptyOption={{ label: "None", value: "" }}
+          disabled={!logosConfigured || busy}
+        />
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>

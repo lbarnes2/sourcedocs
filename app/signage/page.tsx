@@ -2,25 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { SignageLogoLibraryGrid } from "./LogoLibraryGrid";
+import { ArrowSymbolPicker } from "./ArrowSymbolPicker";
+import { LogoPicker } from "@/app/components/LogoPicker";
 import { defaultSignageTheme } from "@/lib/defaults";
+import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
+import { downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import * as limits from "@/lib/validation/limits";
-import type { SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
-
-const ARROW_OPTIONS: { value: SignageArrowDirection; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "up", label: "Up" },
-  { value: "down", label: "Down" },
-  { value: "left", label: "Left" },
-  { value: "right", label: "Right" },
-  { value: "upLeft", label: "Up + left" },
-  { value: "upRight", label: "Up + right" },
-  { value: "downLeft", label: "Down + left" },
-  { value: "downRight", label: "Down + right" },
-  { value: "cornerUpRight", label: "Corner Up Right" },
-  { value: "cornerUpLeft", label: "Corner Up Left" },
-  { value: "turnAround", label: "U Turn" }
-];
+import type { PaperSize, SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
 
 function newVenueId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -60,16 +48,20 @@ async function downloadPdf(response: Response, fallbackName: string) {
 }
 
 function downloadPdfBase64(base64: string, filename: string) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: "application/pdf" });
+  const blob = pdfBase64ToBlob(base64);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function pdfBase64ToBlob(base64: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: "application/pdf" });
 }
 
 export default function SignagePage() {
@@ -95,9 +87,10 @@ export default function SignagePage() {
   const [packVenueOverride, setPackVenueOverride] = useState("");
   const [packSubVenueOverride, setPackSubVenueOverride] = useState("");
   const [packEventDate, setPackEventDate] = useState("");
+  const [packOutputFormat, setPackOutputFormat] = useState<"pdf" | "png">("pdf");
 
   const [adhocEventName, setAdhocEventName] = useState("");
-  const [adhocPaper, setAdhocPaper] = useState<"A3" | "A4">("A4");
+  const [adhocPaper, setAdhocPaper] = useState<PaperSize>("A4");
   const [adhocOrientation, setAdhocOrientation] = useState<"portrait" | "landscape">("portrait");
   const [adhocArrow, setAdhocArrow] = useState<SignageArrowDirection>("left");
   const [adhocVenueKey, setAdhocVenueKey] = useState("");
@@ -106,6 +99,7 @@ export default function SignagePage() {
   const [adhocVenueLine, setAdhocVenueLine] = useState("");
   const [adhocSubVenueLine, setAdhocSubVenueLine] = useState("");
   const [adhocEventDate, setAdhocEventDate] = useState("");
+  const [adhocOutputFormat, setAdhocOutputFormat] = useState<"pdf" | "png">("pdf");
 
   const [venueProfileEditorOpen, setVenueProfileEditorOpen] = useState(false);
 
@@ -127,18 +121,6 @@ export default function SignagePage() {
     setVenueLogos(vj.items ?? []);
     setClientLogos(cj.items ?? []);
     setLogosConfigured(Boolean(vj.configured));
-  }, []);
-
-  const remapLogoKey = useCallback((oldKey: string, newKey: string) => {
-    setDraft((d) => ({
-      ...d,
-      defaultVenueLogoKey: d.defaultVenueLogoKey === oldKey ? newKey : d.defaultVenueLogoKey,
-      defaultClientLogoKey: d.defaultClientLogoKey === oldKey ? newKey : d.defaultClientLogoKey
-    }));
-    setPackVenueKey((k) => (k === oldKey ? newKey : k));
-    setPackClientKey((k) => (k === oldKey ? newKey : k));
-    setAdhocVenueKey((k) => (k === oldKey ? newKey : k));
-    setAdhocClientKey((k) => (k === oldKey ? newKey : k));
   }, []);
 
   useEffect(() => {
@@ -242,26 +224,6 @@ export default function SignagePage() {
     }));
   }
 
-  async function uploadVenue(file: File) {
-    const fd = new FormData();
-    fd.append("file", file);
-    const r = await fetch("/api/logos/venue", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error ?? "Upload failed.");
-    await loadLogos();
-    return j.key as string;
-  }
-
-  async function uploadClient(file: File) {
-    const fd = new FormData();
-    fd.append("file", file);
-    const r = await fetch("/api/logos/client", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error ?? "Upload failed.");
-    await loadLogos();
-    return j.key as string;
-  }
-
   async function generatePack() {
     if (!selectedId) {
       setError("Select or save a venue profile first.");
@@ -306,23 +268,34 @@ export default function SignagePage() {
         const data = (await r.json()) as {
           split?: boolean;
           filenameBase?: string;
-          a4Base64?: string | null;
-          a3Base64?: string | null;
+          pdfs?: Array<{ fileSuffix: string; base64: string }>;
         };
         const base = data.filenameBase?.trim() || "signage";
-        if (data.a4Base64) {
-          downloadPdfBase64(data.a4Base64, `${base}-A4.pdf`);
-        }
-        if (data.a3Base64) {
-          const a3 = data.a3Base64;
-          const delay = data.a4Base64 ? 200 : 0;
-          window.setTimeout(() => downloadPdfBase64(a3, `${base}-A3.pdf`), delay);
-        }
-        if (!data.a4Base64 && !data.a3Base64) {
+        const pdfs = data.pdfs ?? [];
+        if (!pdfs.length) {
           throw new Error("No PDFs were generated.");
         }
+        if (packOutputFormat === "png") {
+          await downloadPdfBlobsAsPngZip(
+            pdfs.map((pdf) => ({
+              blob: pdfBase64ToBlob(pdf.base64),
+              baseName: `${base}-${pdf.fileSuffix}`
+            })),
+            `${base}-png.zip`
+          );
+        } else {
+          pdfs.forEach((pdf, index) => {
+            const delay = index * 200;
+            window.setTimeout(() => downloadPdfBase64(pdf.base64, `${base}-${pdf.fileSuffix}.pdf`), delay);
+          });
+        }
       } else {
-        await downloadPdf(r, `signage-${packEventName.trim()}`);
+        const fallbackName = `signage-${packEventName.trim()}`;
+        if (packOutputFormat === "png") {
+          await downloadPdfBlobAsPngs(await r.blob(), fallbackName);
+        } else {
+          await downloadPdf(r, fallbackName);
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed.");
@@ -361,7 +334,12 @@ export default function SignagePage() {
         const j = await r.json().catch(() => ({}));
         throw new Error((j as { error?: string }).error ?? "Generation failed.");
       }
-      await downloadPdf(r, `signage-${adhocEventName.trim()}`);
+      const fallbackName = `signage-${adhocEventName.trim()}`;
+      if (adhocOutputFormat === "png") {
+        await downloadPdfBlobAsPngs(await r.blob(), fallbackName);
+      } else {
+        await downloadPdf(r, fallbackName);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed.");
     } finally {
@@ -379,7 +357,7 @@ export default function SignagePage() {
       <header className="app-header">
         <h1>Event Signage</h1>
         <p className="app-tagline">
-          Configure venue sign packs (counts, sizes, arrows), then download separate A4 and A3 PDFs (one per paper size)
+          Configure venue sign packs (counts, sizes, arrows), then download separate PDFs for each paper size
           with event branding and optional venue and client logos—ready for tray selection on multifunction printers.
         </p>
       </header>
@@ -429,9 +407,12 @@ export default function SignagePage() {
               Each profile lists the signs you need for that venue (e.g. 3× A4 portrait up, 1× A3 welcome with no arrow).
               Save defaults for venue and client logos to speed up one-click generation.
             </p>
+            <p className="text-muted" style={{ marginTop: -4 }}>
+              Need to add, rename, or delete a logo? Use the <Link href="/logo-library">Logo Library</Link>.
+            </p>
             {!logosConfigured && (
               <p className="pill" style={{ marginBottom: 12 }}>
-                R2 is not configured — logo uploads and logo keys on generated PDFs require R2 (see{" "}
+                R2 is not configured — logo keys on generated PDFs require R2 (see{" "}
                 <code>.env.example</code>). You can still generate signs with colours and arrows.
               </p>
             )}
@@ -525,16 +506,12 @@ export default function SignagePage() {
                   </label>
                   <label>
                     Arrow
-                    <select
+                    <ArrowSymbolPicker
                       value={slot.arrow}
-                      onChange={(e) => updateSlot(index, { arrow: e.target.value as SignageArrowDirection })}
-                    >
-                      {ARROW_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => updateSlot(index, { arrow: v })}
+                      disabled={busy}
+                      aria-label={`Arrow symbol for slot ${index + 1}`}
+                    />
                   </label>
                 </div>
                 <div className="grid two" style={{ marginTop: 10 }}>
@@ -542,10 +519,13 @@ export default function SignagePage() {
                     Paper
                     <select
                       value={slot.paperSize}
-                      onChange={(e) => updateSlot(index, { paperSize: e.target.value as "A3" | "A4" })}
+                      onChange={(e) => updateSlot(index, { paperSize: e.target.value as PaperSize })}
                     >
-                      <option value="A4">A4</option>
-                      <option value="A3">A3</option>
+                      {PAPER_SIZE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label>
@@ -601,9 +581,8 @@ export default function SignagePage() {
             <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Default logos (optional)</h3>
             <div className="grid two">
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Default venue logo</div>
-                <SignageLogoLibraryGrid
-                  kind="venue"
+                <LogoPicker
+                  title="Default venue logo"
                   items={venueLogos}
                   value={draft.defaultVenueLogoKey ?? ""}
                   onChange={(key) =>
@@ -614,35 +593,11 @@ export default function SignagePage() {
                   }
                   emptyOption={{ label: "None", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
-              <label>
-                Upload venue logo
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (!f) return;
-                    void (async () => {
-                      try {
-                        const key = await uploadVenue(f);
-                        setDraft((d) => ({ ...d, defaultVenueLogoKey: key }));
-                        await loadLogos();
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Upload failed.");
-                      }
-                    })();
-                  }}
-                />
-              </label>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Default client logo</div>
-                <SignageLogoLibraryGrid
-                  kind="client"
+                <LogoPicker
+                  title="Default client logo"
                   items={clientLogos}
                   value={draft.defaultClientLogoKey ?? ""}
                   onChange={(key) =>
@@ -653,31 +608,8 @@ export default function SignagePage() {
                   }
                   emptyOption={{ label: "None", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
-              <label>
-                Upload client logo
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (!f) return;
-                    void (async () => {
-                      try {
-                        const key = await uploadClient(f);
-                        setDraft((d) => ({ ...d, defaultClientLogoKey: key }));
-                        await loadLogos();
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "Upload failed.");
-                      }
-                    })();
-                  }}
-                />
-              </label>
             </div>
 
             <button type="button" style={{ marginTop: 16 }} disabled={busy} onClick={() => void saveDraft()}>
@@ -744,10 +676,9 @@ export default function SignagePage() {
               />
             </label>
             <p className="text-muted" style={{ marginBottom: 8 }}>
-              Pack download gives one PDF for all A4 signs and one for all A3 signs (you only get a file for sizes
-              present in the profile). Venue, optional sub-venue, and date appear under the event name; leave overrides
-              blank to use profile defaults. Logo choices below override profile defaults for this download only. Enable the
-              checkbox to override colours for this run.
+              Pack download gives one PDF for each paper size present in the profile. Venue, optional sub-venue, and date
+              appear under the event name; leave overrides blank to use profile defaults. Logo choices below override
+              profile defaults for this download only. Enable the checkbox to override colours for this run.
             </p>
             <label className="checkbox-row" style={{ marginBottom: 12 }}>
               <input
@@ -785,36 +716,37 @@ export default function SignagePage() {
             ) : null}
             <div className="grid two">
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Venue logo (this run)</div>
-                <SignageLogoLibraryGrid
-                  kind="venue"
+                <LogoPicker
+                  title="Venue logo (this run)"
                   items={venueLogos}
                   value={packVenueKey}
                   onChange={setPackVenueKey}
                   emptyOption={{ label: "Use profile default", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Client logo (this run)</div>
-                <SignageLogoLibraryGrid
-                  kind="client"
+                <LogoPicker
+                  title="Client logo (this run)"
                   items={clientLogos}
                   value={packClientKey}
                   onChange={setPackClientKey}
                   emptyOption={{ label: "Use profile default", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
             </div>
+            <div className="grid two" style={{ marginTop: 12 }}>
+              <label>
+                Format
+                <select value={packOutputFormat} onChange={(e) => setPackOutputFormat(e.target.value as "pdf" | "png")}>
+                  <option value="pdf">PDF</option>
+                  <option value="png">PNG image</option>
+                </select>
+              </label>
+            </div>
             <button type="button" disabled={busy} onClick={() => void generatePack()}>
-              {busy ? "Working…" : "Download sign pack PDFs (A4 & A3)"}
+              {busy ? "Working…" : `Download sign pack ${packOutputFormat === "png" ? "PNGs" : "PDFs"}`}
             </button>
           </div>
 
@@ -830,19 +762,21 @@ export default function SignagePage() {
               </label>
               <label>
                 Arrow
-                <select value={adhocArrow} onChange={(e) => setAdhocArrow(e.target.value as SignageArrowDirection)}>
-                  {ARROW_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+                <ArrowSymbolPicker
+                  value={adhocArrow}
+                  onChange={setAdhocArrow}
+                  disabled={busy}
+                  aria-label="Arrow symbol for ad-hoc sign"
+                />
               </label>
               <label>
                 Paper
-                <select value={adhocPaper} onChange={(e) => setAdhocPaper(e.target.value as "A3" | "A4")}>
-                  <option value="A4">A4</option>
-                  <option value="A3">A3</option>
+                <select value={adhocPaper} onChange={(e) => setAdhocPaper(e.target.value as PaperSize)}>
+                  {PAPER_SIZE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label>
@@ -853,6 +787,16 @@ export default function SignagePage() {
                 >
                   <option value="portrait">Portrait</option>
                   <option value="landscape">Landscape</option>
+                </select>
+              </label>
+              <label>
+                Format
+                <select
+                  value={adhocOutputFormat}
+                  onChange={(e) => setAdhocOutputFormat(e.target.value as "pdf" | "png")}
+                >
+                  <option value="pdf">PDF</option>
+                  <option value="png">PNG image</option>
                 </select>
               </label>
             </div>
@@ -913,31 +857,23 @@ export default function SignagePage() {
             </div>
             <div className="grid two">
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Venue logo</div>
-                <SignageLogoLibraryGrid
-                  kind="venue"
+                <LogoPicker
+                  title="Venue logo"
                   items={venueLogos}
                   value={adhocVenueKey}
                   onChange={setAdhocVenueKey}
                   emptyOption={{ label: "None", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Client logo</div>
-                <SignageLogoLibraryGrid
-                  kind="client"
+                <LogoPicker
+                  title="Client logo"
                   items={clientLogos}
                   value={adhocClientKey}
                   onChange={setAdhocClientKey}
                   emptyOption={{ label: "None", value: "" }}
                   disabled={!logosConfigured || busy}
-                  onRenamed={remapLogoKey}
-                  onRefresh={loadLogos}
-                  onError={setError}
                 />
               </div>
             </div>

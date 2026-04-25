@@ -7,7 +7,7 @@ export default function HomePage() {
         <h1>Event Collateral</h1>
         <p className="app-tagline">
           Choose a tool: banqueting documents from guest data, buffet menus with allergen outputs, or directional event
-          signage from venue profiles.
+          signage from venue profiles. Manage all logos in one shared logo library.
         </p>
       </header>
 
@@ -28,6 +28,12 @@ export default function HomePage() {
           <span className="home-landing-card-title">Generate Event Signage</span>
           <span className="home-landing-card-desc">
             Sign packs for venues. Directional signage, ad-hoc sign generator.
+          </span>
+        </Link>
+        <Link className="home-landing-card home-landing-card--logos" href="/logo-library">
+          <span className="home-landing-card-title">Logo Library</span>
+          <span className="home-landing-card-desc">
+            Upload, rename, and delete venue and client logos used across all tools.
           </span>
         </Link>
       </div>

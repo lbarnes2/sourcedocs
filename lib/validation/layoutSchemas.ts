@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PAPER_SIZE_VALUES } from "@/lib/paperSizes";
 import * as limits from "@/lib/validation/limits";
 
 /** #RGB or #RRGGBB */
@@ -7,7 +8,7 @@ export const hexColorStringSchema = z
   .regex(/^#[0-9a-fA-F]{3}$|^#[0-9a-fA-F]{6}$/, "Theme color must be a #RGB or #RRGGBB hex string.");
 
 export const tablePlanSchema = z.object({
-  paperSize: z.enum(["A4", "A3"]),
+  paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   tablesPerSheetMode: z.enum(["auto", "manual"]),
   tablesPerSheet: z.number().int().min(1).max(24),
@@ -34,7 +35,7 @@ export const menuBookletSchema = z.object({
 });
 
 export const floorplanSchema = z.object({
-  paperSize: z.enum(["A4", "A3"]),
+  paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   rows: z.number().int().min(1).max(limits.MAX_FLOORPLAN_GRID),
   columns: z.number().int().min(1).max(limits.MAX_FLOORPLAN_GRID),

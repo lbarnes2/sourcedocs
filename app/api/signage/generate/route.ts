@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { PAPER_SIZE_VALUES, paperSizeFileSuffix } from "@/lib/paperSizes";
 import { renderSignagePdf, type SignagePageInput } from "@/lib/pdf/signageRender";
 import { loadLogoBytesFromKey, parseDataUrlImage } from "@/lib/signage/loadLogoBytes";
 import { getVenueSignageProfile } from "@/lib/signageVenues/store";
@@ -18,7 +19,7 @@ const optionalKey = z.string().max(512).optional();
 const adhocSchema = z.object({
   mode: z.literal("adhoc"),
   eventName: z.string().min(1).max(limits.MAX_EVENT_NAME_CHARS),
-  paperSize: z.enum(["A3", "A4"]),
+  paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
   theme: signageThemeSchema,
@@ -145,21 +146,25 @@ export async function POST(request: Request) {
         profile.defaultClientLogoKey
       );
 
-      const pagesA4 = pages.filter((p) => p.paperSize === "A4");
-      const pagesA3 = pages.filter((p) => p.paperSize === "A3");
       const logoOpts = { venueBytes, clientBytes };
-
-      const [pdfA4, pdfA3] = await Promise.all([
-        pagesA4.length ? renderSignagePdf(pagesA4, logoOpts) : Promise.resolve(null),
-        pagesA3.length ? renderSignagePdf(pagesA3, logoOpts) : Promise.resolve(null)
-      ]);
+      const pdfs = await Promise.all(
+        PAPER_SIZE_VALUES.map(async (paperSize) => {
+          const sizePages = pages.filter((p) => p.paperSize === paperSize);
+          if (!sizePages.length) return null;
+          const pdf = await renderSignagePdf(sizePages, logoOpts);
+          return {
+            paperSize,
+            fileSuffix: paperSizeFileSuffix(paperSize),
+            base64: Buffer.from(pdf).toString("base64")
+          };
+        })
+      );
 
       const filenameBase = sanitizeFilename(body.eventName);
       return NextResponse.json({
         split: true as const,
         filenameBase,
-        a4Base64: pdfA4 ? Buffer.from(pdfA4).toString("base64") : null,
-        a3Base64: pdfA3 ? Buffer.from(pdfA3).toString("base64") : null
+        pdfs: pdfs.filter((pdf): pdf is NonNullable<typeof pdf> => pdf !== null)
       });
     }
 

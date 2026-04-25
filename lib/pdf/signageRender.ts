@@ -1,14 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  ArrowDown,
-  ArrowDownLeft,
-  ArrowDownRight,
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  ArrowUpLeft,
-  ArrowUpRight,
+  CornerDownLeft,
+  CornerDownRight,
+  CornerLeftDown,
+  CornerLeftUp,
+  CornerRightDown,
+  CornerRightUp,
   CornerUpLeft,
   CornerUpRight,
   MoveDown,
@@ -32,13 +30,14 @@ import {
 } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
+import { pdfPageDimensions } from "@/lib/paperSizes";
 import { hexToRgb } from "@/lib/pdf/color";
 import { lucideIconPathDs, type LucideIconNode } from "@/lib/pdf/lucideIconPath";
-import type { SignageArrowDirection, SignageThemeColors } from "@/types";
+import type { PaperOrientation, PaperSize, SignageArrowDirection, SignageThemeColors } from "@/types";
 
 export interface SignagePageInput {
-  paperSize: "A3" | "A4";
-  orientation: "portrait" | "landscape";
+  paperSize: PaperSize;
+  orientation: PaperOrientation;
   arrow: SignageArrowDirection;
   eventName: string;
   /** Shown below the event name (Noto Sans Bold); optional. */
@@ -140,12 +139,8 @@ async function createDocWithFonts(): Promise<SignagePdfFonts> {
   return { doc, title, body, bodyBold };
 }
 
-export function signagePageDimensions(paperSize: "A3" | "A4", orientation: "portrait" | "landscape"): [number, number] {
-  const A4: [number, number] = [mmToPt(210), mmToPt(297)];
-  const A3: [number, number] = [mmToPt(297), mmToPt(420)];
-  const base = paperSize === "A3" ? A3 : A4;
-  if (orientation === "landscape") return [base[1], base[0]];
-  return base;
+export function signagePageDimensions(paperSize: PaperSize, orientation: PaperOrientation): [number, number] {
+  return pdfPageDimensions(paperSize, orientation);
 }
 
 function drawSignageBorder(
@@ -204,10 +199,22 @@ function lucideForSignageArrow(
       return { node: MoveDownLeft as LucideIconNode, extraRotationRad: 0 };
     case "downRight":
       return { node: MoveDownRight as LucideIconNode, extraRotationRad: 0 };
+    case "cornerUpLeft":
+      return { node: CornerUpLeft as LucideIconNode, extraRotationRad: 0 };
     case "cornerUpRight":
       return { node: CornerUpRight as LucideIconNode, extraRotationRad: 0 };
-    case "cornerUpLeft":
-        return { node: CornerUpLeft as LucideIconNode, extraRotationRad: 0 };
+    case "cornerRightUp":
+      return { node: CornerRightUp as LucideIconNode, extraRotationRad: 0 };
+    case "cornerRightDown":
+      return { node: CornerRightDown as LucideIconNode, extraRotationRad: 0 };
+    case "cornerDownRight":
+      return { node: CornerDownRight as LucideIconNode, extraRotationRad: 0 };
+    case "cornerDownLeft":
+      return { node: CornerDownLeft as LucideIconNode, extraRotationRad: 0 };
+    case "cornerLeftDown":
+      return { node: CornerLeftDown as LucideIconNode, extraRotationRad: 0 };
+    case "cornerLeftUp":
+      return { node: CornerLeftUp as LucideIconNode, extraRotationRad: 0 };
     case "turnAround":
       return { node: Redo2 as LucideIconNode, extraRotationRad: -Math.PI / 2 };
     default:
@@ -373,7 +380,7 @@ function layoutSignageContent(
   titleFont: PDFFont,
   bodyFont: PDFFont,
   bodyBoldFont: PDFFont,
-  paperSize: "A3" | "A4",
+  paperSize: PaperSize,
   arrow: SignageArrowDirection,
   /** Min PDF y across placed logo bottoms; when no logos, top inner band reference. */
   logoRowBottomY: number

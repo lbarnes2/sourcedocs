@@ -537,10 +537,31 @@ tbody tr:nth-child(even) {
   background: linear-gradient(165deg, #f7f6fd 0%, #ffffff 100%);
 }
 
+.home-landing-card--logos .home-landing-card-title {
+  color: #9f1f53;
+}
+
+.home-landing-card--logos {
+  border-color: #efc3d8;
+  background: linear-gradient(165deg, #fff5fa 0%, #ffffff 100%);
+}
+
 /* Buffet menu tool */
 .app-buffet {
   --brand: #3a4a8f;
   --brand-soft: #e9ecf7;
+}
+
+.app-backlink {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.app-backlink:hover {
+  text-decoration: underline;
 }
 
 .app-buffet .app-header {
@@ -558,6 +579,14 @@ tbody tr:nth-child(even) {
   --brand-soft: #e8f6f6;
 }
 
+/* Stack label + control like other form fields; skip checkbox rows */
+.app-signage .grid > label:not(.checkbox-row) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
 .app-signage .app-header {
   background: linear-gradient(135deg, #0d5c5f 0%, #0f7a7e 48%, #148f94 100%);
   box-shadow: 0 16px 48px rgba(13, 92, 95, 0.28);
@@ -565,6 +594,34 @@ tbody tr:nth-child(even) {
 
 .app-signage .step-heading-badge {
   background: #0d5c5f;
+}
+
+.logo-picker-wrap {
+  margin-top: 4px;
+}
+
+.logo-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.logo-picker-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.logo-picker-manage-link {
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.logo-picker-manage-link:hover {
+  text-decoration: underline;
 }
 
 .app-signage .step-heading--collapsible {
@@ -721,17 +778,218 @@ button.signage-logo-tile:disabled {
   margin: 0;
 }
 
-/* Buffet menu editor */
-.app-buffet .app-backlink {
-  display: inline-block;
-  margin-bottom: 10px;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 0.9rem;
-  text-decoration: none;
+/* Signage — arrow symbol picker (modal + preview; trigger matches 40px inputs) */
+.signage-arrow-picker {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
 }
 
-.app-buffet .app-backlink:hover {
-  text-decoration: underline;
+.signage-arrow-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  height: 40px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  box-sizing: border-box;
+}
+
+.signage-arrow-picker-trigger:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+
+.signage-arrow-picker-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.signage-arrow-picker-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  color: var(--ink);
+}
+
+.signage-arrow-picker-preview svg {
+  flex-shrink: 0;
+}
+
+.signage-arrow-picker-chevron {
+  font-size: 10px;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.signage-arrow-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  background: rgba(22, 25, 34, 0.45);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.signage-arrow-dialog {
+  width: 100%;
+  max-width: min(560px, 100vw - 32px);
+  max-height: min(88vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.signage-arrow-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5eaf2;
+  flex-shrink: 0;
+}
+
+.signage-arrow-dialog-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.signage-arrow-dialog-body {
+  padding: 12px 16px 20px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.signage-arrow-section {
+  margin-bottom: 16px;
+}
+
+.signage-arrow-section:last-child {
+  margin-bottom: 0;
+}
+
+.signage-arrow-section-title {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+
+.signage-arrow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+}
+
+.signage-arrow-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.signage-arrow-cell:hover {
+  border-color: var(--border-focus);
+  background: #fff;
+}
+
+.signage-arrow-cell--selected {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 1px rgba(13, 92, 95, 0.25);
+}
+
+.signage-arrow-cell-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  color: var(--ink);
+}
+
+.signage-arrow-cell-label {
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--ink-muted);
+  max-width: 100%;
+  word-break: break-word;
+}
+
+.signage-arrow-dialog-close {
+  flex-shrink: 0;
+  font-size: 13px;
+  padding: 6px 12px;
+  margin: 0;
+}
+
+/* Logo library tool */
+.app-logo-library {
+  --brand: #9f1f53;
+  --brand-soft: #fff1f7;
+}
+
+.app-logo-library .app-header {
+  background: linear-gradient(135deg, #8f1748 0%, #b12463 50%, #c83a78 100%);
+  box-shadow: 0 16px 48px rgba(143, 23, 72, 0.28);
+}
+
+.app-logo-library .step-heading-badge {
+  background: #9f1f53;
+}
+
+.logo-library-section .step-heading {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.logo-library-actions {
+  display: flex;
+  width: 100%;
+  gap: 6px;
+}
+
+.logo-library-actions button {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.logo-library-tile {
+  width: 136px;
 }
 
 .buffet-saved-bar {

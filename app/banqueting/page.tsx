@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
+import { LogoPicker } from "@/app/components/LogoPicker";
 import { autoDetectMapping, canonicalColumns, getRequiredMappingIssues } from "@/lib/csv/mapping";
 import { excelFileToCsvText, isExcelFile } from "@/lib/csv/excelToCsv";
 import { normalizeDietary } from "@/lib/csv/validation";
@@ -14,6 +15,8 @@ import {
   defaultThemeSettings
 } from "@/lib/defaults";
 import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
+import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import type {
   ColumnMapping,
   DishMenuDuplicateGroup,
@@ -21,6 +24,7 @@ import type {
   DocumentType,
   EventProjectFile,
   GuestRecord,
+  PaperSize,
   ProfileSettings,
   ProjectListItem,
   RawCsvRow
@@ -35,6 +39,15 @@ const DOCUMENTS: Array<{ id: DocumentType; label: string }> = [
   { id: "floorplan", label: "Floorplan" }
 ];
 
+const DOCUMENT_IMAGE_BASENAMES: Record<DocumentType, string> = {
+  tablePlanByTable: "table-plan-by-table",
+  tablePlanByPerson: "table-plan-by-person",
+  placeCards: "place-cards",
+  menuBooklet: "menu-booklet",
+  servicePlan: "service-plan",
+  floorplan: "floorplan"
+};
+
 function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[] } {
   const parsed = Papa.parse<RawCsvRow>(csvText, {
     header: true,
@@ -47,15 +60,6 @@ function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[]
   return { headers: parsed.meta.fields ?? [], rows: parsed.data };
 }
 
-function toDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("Failed to read image."));
-    reader.readAsDataURL(file);
-  });
-}
-
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -65,12 +69,8 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const power = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const value = bytes / 1024 ** power;
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
+function exportBaseName(input: string): string {
+  return input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "event-docs";
 }
 
 function hexToRgb01(hex: string): { r: number; g: number; b: number } {
@@ -154,10 +154,10 @@ export default function HomePage() {
 
   const [selectedDocuments, setSelectedDocuments] = useState<DocumentType[]>(DOCUMENTS.map((doc) => doc.id));
   const [bundleMode, setBundleMode] = useState<"single" | "zip">("zip");
+  const [outputFormat, setOutputFormat] = useState<"pdf" | "png">("pdf");
 
   const [profiles, setProfiles] = useState<ProfileSettings[]>([]);
   const [profileName, setProfileName] = useState("New Profile");
-  const [logoSizeWarnings, setLogoSizeWarnings] = useState<Partial<Record<"clientLogoDataUrl" | "venueLogoDataUrl", string>>>({});
   const [clientLogoLuminance, setClientLogoLuminance] = useState<number | null>(null);
   const [menuLogoLegibilityWarning, setMenuLogoLegibilityWarning] = useState("");
 
@@ -166,6 +166,12 @@ export default function HomePage() {
     configured: boolean;
     items: Array<{ key: string; label: string; assetUrl: string }>;
   }>({ loaded: false, configured: false, items: [] });
+  const [clientLogoLibrary, setClientLogoLibrary] = useState<{
+    loaded: boolean;
+    configured: boolean;
+    items: Array<{ key: string; label: string; assetUrl: string }>;
+  }>({ loaded: false, configured: false, items: [] });
+  const [selectedClientLogoKey, setSelectedClientLogoKey] = useState<string | null>(null);
   const [selectedVenueLogoKey, setSelectedVenueLogoKey] = useState<string | null>(null);
   const [venueLibraryBusy, setVenueLibraryBusy] = useState(false);
 
@@ -260,6 +266,7 @@ export default function HomePage() {
     setBundleMode(file.bundleMode === "single" ? "single" : "zip");
     setProfileName(file.profileName ?? "New Profile");
     setSelectedVenueLogoKey(file.selectedVenueLogoKey ?? null);
+    setSelectedClientLogoKey(null);
     setCurrentProjectId(file.id);
     setProjectLibraryName(file.name);
     setProjectLoadSelection("");
@@ -377,58 +384,47 @@ export default function HomePage() {
     }
   }
 
+  async function refreshClientLogoLibrary() {
+    setVenueLibraryBusy(true);
+    try {
+      const response = await fetch("/api/logos/client");
+      const payload = await response.json();
+      setClientLogoLibrary({
+        loaded: true,
+        configured: Boolean(payload.configured),
+        items: Array.isArray(payload.items) ? payload.items : []
+      });
+    } catch {
+      setClientLogoLibrary({ loaded: true, configured: false, items: [] });
+    } finally {
+      setVenueLibraryBusy(false);
+    }
+  }
+
   useEffect(() => {
-    void refreshVenueLogoLibrary();
+    void Promise.all([refreshVenueLogoLibrary(), refreshClientLogoLibrary()]);
   }, []);
 
-  async function applyVenueLogoFromLibrary(item: { assetUrl: string; key: string }) {
+  async function applyLogoFromLibrary(
+    item: { assetUrl: string; key: string },
+    field: "venueLogoDataUrl" | "clientLogoDataUrl"
+  ) {
     setError("");
     try {
       const response = await fetch(item.assetUrl);
       if (!response.ok) throw new Error("Could not load that logo from storage.");
       const blob = await response.blob();
       const dataUrl = await blobToDataUrl(blob);
-      setTheme((previous) => ({ ...previous, venueLogoDataUrl: dataUrl }));
-      setSelectedVenueLogoKey(item.key);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to apply venue logo.");
-    }
-  }
-
-  async function uploadVenueLogoToLibrary(file: File) {
-    setVenueLibraryBusy(true);
-    setError("");
-    try {
-      const form = new FormData();
-      form.set("file", file);
-      const response = await fetch("/api/logos/venue", { method: "POST", body: form });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Upload failed.");
-      await refreshVenueLogoLibrary();
-      setSelectedVenueLogoKey(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed.");
-    } finally {
-      setVenueLibraryBusy(false);
-    }
-  }
-
-  async function deleteVenueLogoFromLibrary(key: string) {
-    if (!window.confirm("Remove this venue logo from the library?")) return;
-    setVenueLibraryBusy(true);
-    setError("");
-    try {
-      const response = await fetch(`/api/logos/venue?key=${encodeURIComponent(key)}`, { method: "DELETE" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Delete failed.");
-      await refreshVenueLogoLibrary();
-      if (selectedVenueLogoKey === key) {
-        setSelectedVenueLogoKey(null);
+      setTheme((previous) => ({ ...previous, [field]: dataUrl }));
+      if (field === "venueLogoDataUrl") {
+        setSelectedVenueLogoKey(item.key);
+      } else {
+        setSelectedClientLogoKey(item.key);
+        const luma = await estimateLogoLuminance(dataUrl);
+        setClientLogoLuminance(luma);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed.");
-    } finally {
-      setVenueLibraryBusy(false);
+      setError(err instanceof Error ? err.message : "Failed to apply logo.");
     }
   }
 
@@ -508,23 +504,6 @@ export default function HomePage() {
     }
   }
 
-  async function handleLogoUpload(file: File, field: "clientLogoDataUrl" | "venueLogoDataUrl") {
-    const dataUrl = await toDataUrl(file);
-    setTheme((previous) => ({ ...previous, [field]: dataUrl }));
-    const slowThreshold = 700 * 1024;
-    setLogoSizeWarnings((previous) => ({
-      ...previous,
-      [field]:
-        file.size >= slowThreshold
-          ? `${field === "clientLogoDataUrl" ? "Client" : "Venue"} logo is ${formatBytes(file.size)}. Large logos can slow PDF generation.`
-          : undefined
-    }));
-    if (field === "clientLogoDataUrl") {
-      const luma = await estimateLogoLuminance(dataUrl);
-      setClientLogoLuminance(luma);
-    }
-  }
-
   async function saveCurrentProfile() {
     const id = profileName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const profile: ProfileSettings = {
@@ -600,7 +579,7 @@ export default function HomePage() {
       setError("Select at least one output document.");
       return;
     }
-    if (bundleMode === "single" && selectedDocuments.length !== 1) {
+    if (outputFormat === "pdf" && bundleMode === "single" && selectedDocuments.length !== 1) {
       setError("Single-file mode requires exactly one selected document.");
       return;
     }
@@ -619,30 +598,61 @@ export default function HomePage() {
         return Math.min(progressCap, previous + delta);
       });
     }, progressStepMs);
-    try {
+    const buildGenerateBody = (documents: DocumentType[], requestedBundleMode: "single" | "zip") => ({
+      mode: "generate",
+      guests,
+      request: {
+        documents,
+        bundleMode: requestedBundleMode,
+        theme,
+        tablePlan,
+        tablePlanByPerson,
+        placeCard,
+        menuBooklet,
+        floorplan,
+        dishNameOverrides,
+        dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
+          canonical,
+          match
+        })),
+        normalizeGuestNamesToTitleCase
+      }
+    });
+    const fetchGeneratedPdf = async (documentType: DocumentType): Promise<Blob> => {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "generate",
-          guests,
-          request: {
-            documents: selectedDocuments,
-            bundleMode,
-            theme,
-            tablePlan,
-            tablePlanByPerson,
-            placeCard,
-            menuBooklet,
-            floorplan,
-            dishNameOverrides,
-            dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
-              canonical,
-              match
-            })),
-            normalizeGuestNamesToTitleCase
-          }
-        })
+        body: JSON.stringify(buildGenerateBody([documentType], "single"))
+      });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload.error || "Export failed.");
+      }
+      return response.blob();
+    };
+
+    try {
+      if (outputFormat === "png") {
+        const pdfs = await Promise.all(
+          selectedDocuments.map(async (documentType) => ({
+            blob: await fetchGeneratedPdf(documentType),
+            baseName: DOCUMENT_IMAGE_BASENAMES[documentType]
+          }))
+        );
+        window.clearInterval(progressTimer);
+        setExportProgressPct(100);
+        if (pdfs.length === 1) {
+          await downloadPdfBlobAsPngs(pdfs[0].blob, pdfs[0].baseName);
+        } else {
+          await downloadPdfBlobsAsPngZip(pdfs, `${exportBaseName(theme.eventName)}-png.zip`);
+        }
+        return;
+      }
+
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildGenerateBody(selectedDocuments, bundleMode))
       });
 
       if (!response.ok) {
@@ -656,14 +666,7 @@ export default function HomePage() {
       const disposition = response.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="(.+)"/);
       const filename = match?.[1] ?? (bundleMode === "single" ? "document.pdf" : "documents.zip");
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
     } catch (exportError) {
       window.clearInterval(progressTimer);
       setError(exportError instanceof Error ? exportError.message : "Export failed.");
@@ -815,138 +818,47 @@ export default function HomePage() {
             />
           </label>
         </div>
-        <div className="grid two">
-          <label>
-            Client logo
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  setSelectedVenueLogoKey(null);
-                  void handleLogoUpload(file, "clientLogoDataUrl");
-                }
-              }}
-            />
-          </label>
-          <label>
-            Venue logo
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  setSelectedVenueLogoKey(null);
-                  void handleLogoUpload(file, "venueLogoDataUrl");
-                }
-              }}
-            />
-          </label>
-        </div>
-        {venueLogoLibrary.loaded && venueLogoLibrary.configured && (
+        {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured && (
           <div style={{ marginTop: 14 }}>
-            <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Venue logo library (R2)</h3>
+            <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Shared logo library</h3>
             <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.86 }}>
-              Upload once, then click a thumbnail to use it for this event. Logos are stored in your bucket under{" "}
-              <code>logos/venue/</code>.
+              Select event logos from the shared library. To upload, rename, or delete logos, use{" "}
+              <Link href="/logo-library">Logo Library</Link>.
             </p>
-            <label>
-              Add logo to library
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
-                disabled={venueLibraryBusy}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (file) void uploadVenueLogoToLibrary(file);
+            {venueLibraryBusy && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Loading…</p>}
+            <div className="grid two" style={{ marginTop: 10 }}>
+              <LogoPicker
+                title="Client logo"
+                items={clientLogoLibrary.items}
+                value={selectedClientLogoKey ?? ""}
+                onChange={(key) => {
+                  const item = clientLogoLibrary.items.find((entry) => entry.key === key);
+                  if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
                 }}
+                manageHref="/logo-library"
               />
-            </label>
-            {venueLibraryBusy && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Working…</p>}
-            {venueLogoLibrary.items.length === 0 && !venueLibraryBusy ? (
-              <p className="pill" style={{ marginTop: 10 }}>
-                No saved venue logos yet — add one with the field above.
-              </p>
-            ) : (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 10,
-                  marginTop: 10,
-                  alignItems: "flex-start"
+              <LogoPicker
+                title="Venue logo"
+                items={venueLogoLibrary.items}
+                value={selectedVenueLogoKey ?? ""}
+                onChange={(key) => {
+                  const item = venueLogoLibrary.items.find((entry) => entry.key === key);
+                  if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
                 }}
-              >
-                {venueLogoLibrary.items.map((item) => (
-                  (() => {
-                    const isSelected = selectedVenueLogoKey === item.key;
-                    return (
-                  <div
-                    key={item.key}
-                    className="panel"
-                    style={{
-                      marginBottom: 0,
-                      padding: 8,
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: 6,
-                      minWidth: 120,
-                      borderColor: isSelected ? "#012f43" : undefined,
-                      boxShadow: isSelected ? "0 0 0 1px rgba(1,47,67,0.3)" : undefined,
-                      background: isSelected ? "#f0f5f8" : undefined
-                    }}
-                  >
-                    <img
-                      src={item.assetUrl}
-                      alt=""
-                      style={{
-                        width: 80,
-                        height: 80,
-                        objectFit: "contain",
-                        background: "#f4f6f8",
-                        borderRadius: 4
-                      }}
-                    />
-                    {isSelected && (
-                      <span style={{ fontSize: 11, color: "#012f43", fontWeight: 600 }}>Selected</span>
-                    )}
-                    <span style={{ fontSize: 11, opacity: 0.75, maxWidth: 120, textAlign: "center", wordBreak: "break-all" }}>
-                      {item.label}
-                    </span>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
-                      <button
-                        type="button"
-                        disabled={venueLibraryBusy || isSelected}
-                        onClick={() => void applyVenueLogoFromLibrary(item)}
-                      >
-                        {isSelected ? "In use" : "Use"}
-                      </button>
-                      <button type="button" disabled={venueLibraryBusy} onClick={() => void deleteVenueLogoFromLibrary(item.key)}>
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                    );
-                  })()
-                ))}
-              </div>
-            )}
+                manageHref="/logo-library"
+              />
+            </div>
           </div>
         )}
-        {venueLogoLibrary.loaded && !venueLogoLibrary.configured && (
+        {((venueLogoLibrary.loaded && !venueLogoLibrary.configured) ||
+          (clientLogoLibrary.loaded && !clientLogoLibrary.configured)) && (
           <p className="pill" style={{ marginTop: 12 }}>
-            R2 env vars not set — profiles stay in <code>data/profiles</code>; venue logo library is disabled. See{" "}
+            R2 env vars not set — profiles stay in <code>data/profiles</code>; logo library is disabled. See{" "}
             <code>.env.example</code>.
           </p>
         )}
-        {(logoSizeWarnings.clientLogoDataUrl || logoSizeWarnings.venueLogoDataUrl || menuLogoLegibilityWarning) && (
+        {menuLogoLegibilityWarning && (
           <ul>
-            {logoSizeWarnings.clientLogoDataUrl && <li className="warning">{logoSizeWarnings.clientLogoDataUrl}</li>}
-            {logoSizeWarnings.venueLogoDataUrl && <li className="warning">{logoSizeWarnings.venueLogoDataUrl}</li>}
             {menuLogoLegibilityWarning && <li className="warning">{menuLogoLegibilityWarning}</li>}
           </ul>
         )}
@@ -1188,12 +1100,15 @@ export default function HomePage() {
               onChange={(event) =>
                 setTablePlan((previous) => ({
                   ...previous,
-                  paperSize: event.target.value as "A4" | "A3"
+                  paperSize: event.target.value as PaperSize
                 }))
               }
             >
-              <option value="A4">A4</option>
-              <option value="A3">A3</option>
+              {PAPER_SIZE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -1253,12 +1168,15 @@ export default function HomePage() {
                 onChange={(event) =>
                   setTablePlanByPerson((previous) => ({
                     ...previous,
-                    paperSize: event.target.value as "A4" | "A3"
+                    paperSize: event.target.value as PaperSize
                   }))
                 }
               >
-                <option value="A4">A4</option>
-                <option value="A3">A3</option>
+                {PAPER_SIZE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -1324,12 +1242,15 @@ export default function HomePage() {
                 onChange={(event) =>
                   setFloorplan((previous) => ({
                     ...previous,
-                    paperSize: event.target.value as "A4" | "A3"
+                    paperSize: event.target.value as PaperSize
                   }))
                 }
               >
-                <option value="A4">A4</option>
-                <option value="A3">A3</option>
+                {PAPER_SIZE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -1677,13 +1598,30 @@ export default function HomePage() {
         </div>
         <div className="export-options-row">
           <label>
+            <span className="field-label-text">Format</span>
+            <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as "pdf" | "png")}>
+              <option value="pdf">PDF</option>
+              <option value="png">PNG image</option>
+            </select>
+          </label>
+          <label>
             <span className="field-label-text">Download mode</span>
-            <select value={bundleMode} onChange={(event) => setBundleMode(event.target.value as "single" | "zip")}>
+            <select
+              value={bundleMode}
+              disabled={outputFormat === "png"}
+              onChange={(event) => setBundleMode(event.target.value as "single" | "zip")}
+            >
               <option value="zip">ZIP (multiple files)</option>
               <option value="single">Single file (one selected output)</option>
             </select>
           </label>
         </div>
+        {outputFormat === "png" ? (
+          <p className="text-muted" style={{ marginTop: 8, marginBottom: 0, fontSize: 13 }}>
+            PNG export converts each generated PDF page into an image. Multi-page or multi-document exports download as a
+            ZIP of PNG files.
+          </p>
+        ) : null}
         <div className="export-name-block">
           <div className="export-name-heading">Name normalization</div>
           <label className="checkbox-row">
