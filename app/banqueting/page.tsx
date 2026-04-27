@@ -679,12 +679,10 @@ export default function HomePage() {
 
   return (
     <main>
-      <p style={{ margin: "0 0 10px" }}>
-        <Link href="/" className="text-muted" style={{ fontSize: 14, textDecoration: "none" }}>
+      <header className="app-header">
+        <Link href="/" className="app-backlink">
           ← Home
         </Link>
-      </p>
-      <header className="app-header">
         <h1>Event Document Generator</h1>
         <p className="app-tagline">
           Upload guest data, tune branding and print settings, then export table plans, place cards, menu booklets, and
@@ -1639,7 +1637,7 @@ export default function HomePage() {
             Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
           </p>
         </div>
-        <button disabled={loadingExport || loadingPreview} onClick={exportDocuments}>
+        <button style={{ marginTop: 16 }} disabled={loadingExport || loadingPreview} onClick={exportDocuments}>
           {loadingExport ? "Generating..." : "Generate and Download"}
         </button>
         {exportProgressPct > 0 && (

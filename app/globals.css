@@ -656,6 +656,8 @@ tbody tr:nth-child(even) {
   cursor: pointer;
   text-align: left;
   border-radius: 8px;
+  box-shadow: none;
+  transition: color 0.15s ease;
 }
 
 .app-signage .panel-collapsible-title {
@@ -665,11 +667,18 @@ tbody tr:nth-child(even) {
 
 .app-signage .panel-collapsible-trigger:hover {
   color: var(--brand);
+  transform: none;
+  box-shadow: none;
 }
 
 .app-signage .panel-collapsible-trigger:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+.app-signage .panel-collapsible-trigger:active {
+  transform: none;
+  box-shadow: none;
 }
 
 .app-signage .panel-collapsible-chevron {

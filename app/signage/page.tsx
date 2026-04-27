@@ -349,12 +349,10 @@ export default function SignagePage() {
 
   return (
     <main className="app-signage">
-      <p style={{ margin: "0 0 10px" }}>
-        <Link href="/" className="text-muted" style={{ fontSize: 14, textDecoration: "none" }}>
+      <header className="app-header">
+        <Link href="/" className="app-backlink">
           ← Home
         </Link>
-      </p>
-      <header className="app-header">
         <h1>Event Signage</h1>
         <p className="app-tagline">
           Configure venue sign packs (counts, sizes, arrows), then download separate PDFs for each paper size
@@ -745,7 +743,7 @@ export default function SignagePage() {
                 </select>
               </label>
             </div>
-            <button type="button" disabled={busy} onClick={() => void generatePack()}>
+            <button type="button" style={{ marginTop: 16 }} disabled={busy} onClick={() => void generatePack()}>
               {busy ? "Working…" : `Download sign pack ${packOutputFormat === "png" ? "PNGs" : "PDFs"}`}
             </button>
           </div>
@@ -877,7 +875,7 @@ export default function SignagePage() {
                 />
               </div>
             </div>
-            <button type="button" className="secondary" disabled={busy} onClick={() => void generateAdhoc()}>
+            <button type="button" className="secondary" style={{ marginTop: 16 }} disabled={busy} onClick={() => void generateAdhoc()}>
               {busy ? "Working…" : "Download single sign PDF"}
             </button>
           </div>
