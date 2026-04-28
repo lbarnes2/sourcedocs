@@ -30,6 +30,12 @@ export default function HomePage() {
             Sign packs for venues. Directional signage, ad-hoc sign generator.
           </span>
         </Link>
+        <Link className="home-landing-card" href="/floorplans">
+          <span className="home-landing-card-title">Floorplans Tool</span>
+          <span className="home-landing-card-desc">
+            Build custom floorplans with draggable tables, shapes, labels, and printable outputs.
+          </span>
+        </Link>
         <Link className="home-landing-card home-landing-card--logos" href="/logo-library">
           <span className="home-landing-card-title">Logo Library</span>
           <span className="home-landing-card-desc">

@@ -1,4 +1,6 @@
 import type {
+  FloorplanCanvasSettings,
+  FloorplanMetadata,
   FloorplanSettings,
   MenuBookletSettings,
   PlaceCardSettings,
@@ -60,6 +62,17 @@ export const defaultFloorplanSettings: FloorplanSettings = {
   tableLayout: "aligned",
   numbering: "snaked",
   startCorner: "topLeft"
+};
+
+export const defaultFloorplanCanvasSettings: FloorplanCanvasSettings = {
+  paperSize: "A4",
+  orientation: "landscape",
+  gridSize: 24
+};
+
+export const defaultFloorplanMetadata: FloorplanMetadata = {
+  title: "",
+  subtitle: ""
 };
 
 export function defaultProfile(name = "Default Profile"): ProfileSettings {

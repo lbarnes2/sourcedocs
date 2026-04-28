@@ -35,8 +35,7 @@ const DOCUMENTS: Array<{ id: DocumentType; label: string }> = [
   { id: "tablePlanByPerson", label: "Table Plan (By Person)" },
   { id: "placeCards", label: "Place Cards" },
   { id: "menuBooklet", label: "Menu Card (A4 landscape, 2 sheets half-page layout)" },
-  { id: "servicePlan", label: "Service Plan" },
-  { id: "floorplan", label: "Floorplan" }
+  { id: "servicePlan", label: "Service Plan" }
 ];
 
 const DOCUMENT_IMAGE_BASENAMES: Record<DocumentType, string> = {
@@ -260,9 +259,8 @@ export default function HomePage() {
     setDishMenuDuplicateGroups(file.dishMenuDuplicateGroups ?? []);
     setMenuMergePick([]);
     setNormalizeGuestNamesToTitleCase(file.normalizeGuestNamesToTitleCase ?? false);
-    setSelectedDocuments(
-      file.selectedDocuments?.length ? file.selectedDocuments : DOCUMENTS.map((doc) => doc.id)
-    );
+    const nextSelected = file.selectedDocuments?.filter((doc) => doc !== "floorplan") ?? [];
+    setSelectedDocuments(nextSelected.length ? nextSelected : DOCUMENTS.map((doc) => doc.id));
     setBundleMode(file.bundleMode === "single" ? "single" : "zip");
     setProfileName(file.profileName ?? "New Profile");
     setSelectedVenueLogoKey(file.selectedVenueLogoKey ?? null);
@@ -686,7 +684,7 @@ export default function HomePage() {
         <h1>Event Document Generator</h1>
         <p className="app-tagline">
           Upload guest data, tune branding and print settings, then export table plans, place cards, menu booklets, and
-          service plans as PDF.
+          service plans as PDF. Floorplans now live in the standalone <Link href="/floorplans">Floorplans tool</Link>.
         </p>
       </header>
       <div className="panel">
@@ -1225,129 +1223,11 @@ export default function HomePage() {
         </div>
 
         <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Floorplan</h3>
+          <h3 style={{ marginTop: 0 }}>Floorplans moved</h3>
           <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-            Rows × columns can be larger than your table count ({uniqueTableCount} distinct table
-            {uniqueTableCount === 1 ? "" : "s"}); extra cells stay empty. If the grid is smaller than the table count,
-            only the first tables in sort order are shown. Numbering order follows your start corner and straight vs
-            snaked settings.
+            Floorplan generation now lives in the dedicated <Link href="/floorplans">Floorplans tool</Link> so layouts can
+            be edited interactively, saved, duplicated, and printed separately from banqueting document bundles.
           </p>
-          <div className="grid two">
-            <label>
-              Paper size
-              <select
-                value={floorplan.paperSize}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    paperSize: event.target.value as PaperSize
-                  }))
-                }
-              >
-                {PAPER_SIZE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Orientation
-              <select
-                value={floorplan.orientation}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    orientation: event.target.value as "portrait" | "landscape"
-                  }))
-                }
-              >
-                <option value="portrait">Portrait</option>
-                <option value="landscape">Landscape</option>
-              </select>
-            </label>
-            <label>
-              Rows
-              <input
-                type="number"
-                min={1}
-                max={24}
-                value={floorplan.rows}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    rows: Math.max(1, Math.min(24, Number(event.target.value) || 1))
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Columns
-              <input
-                type="number"
-                min={1}
-                max={24}
-                value={floorplan.columns}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    columns: Math.max(1, Math.min(24, Number(event.target.value) || 1))
-                  }))
-                }
-              />
-            </label>
-            <label>
-              Table layout
-              <select
-                value={floorplan.tableLayout}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    tableLayout: event.target.value as "aligned" | "staggered"
-                  }))
-                }
-              >
-                <option value="aligned">Aligned grid</option>
-                <option value="staggered">Staggered (brick)</option>
-              </select>
-            </label>
-            <label>
-              Numbering
-              <select
-                value={floorplan.numbering}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    numbering: event.target.value as "straight" | "snaked"
-                  }))
-                }
-              >
-                <option value="straight">Straight (each row same direction)</option>
-                <option value="snaked">Snaked (serpentine rows)</option>
-              </select>
-            </label>
-            <label style={{ gridColumn: "1 / -1" }}>
-              Start corner (first table in the sorted list sits here)
-              <select
-                value={floorplan.startCorner}
-                onChange={(event) =>
-                  setFloorplan((previous) => ({
-                    ...previous,
-                    startCorner: event.target.value as
-                      | "topLeft"
-                      | "topRight"
-                      | "bottomLeft"
-                      | "bottomRight"
-                  }))
-                }
-              >
-                <option value="topLeft">Top left</option>
-                <option value="topRight">Top right</option>
-                <option value="bottomLeft">Bottom left</option>
-                <option value="bottomRight">Bottom right</option>
-              </select>
-            </label>
-          </div>
         </div>
 
         <div className="subpanel">

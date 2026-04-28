@@ -183,3 +183,4 @@ export interface ProjectListItem {
 export type * from "./paper";
 export type * from "./signage";
 export type * from "./buffetMenu";
+export type * from "./floorplans";
