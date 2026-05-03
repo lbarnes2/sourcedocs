@@ -39,6 +39,11 @@ export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
   textObjectSchema
 ]);
 
+/** Banqueting floorplan fields plus optional stagger direction for standalone floorplan auto-layout. */
+export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
+  staggerAxis: z.enum(["horizontal", "vertical"]).optional()
+});
+
 export const floorplanDocumentSchema = z.object({
   version: z.literal(1),
   id: z.string().uuid(),
@@ -54,7 +59,7 @@ export const floorplanDocumentSchema = z.object({
     gridSize: z.number().int().min(4).max(200)
   }),
   objects: z.array(floorplanCanvasObjectSchema).max(5000),
-  autoLayout: floorplanSchema,
+  autoLayout: autoLayoutFloorplanDocSchema,
   themeSnapshot: themeSchema,
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
   selectedVenueLogoKey: z.string().max(500).nullable().optional()
@@ -77,7 +82,7 @@ export const floorplanSavePayloadSchema = z.object({
     })
     .optional(),
   objects: z.array(floorplanCanvasObjectSchema).max(5000),
-  autoLayout: floorplanSchema.optional(),
+  autoLayout: autoLayoutFloorplanDocSchema.optional(),
   themeSnapshot: themeSchema.optional(),
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
   selectedVenueLogoKey: z.string().max(500).nullable().optional()

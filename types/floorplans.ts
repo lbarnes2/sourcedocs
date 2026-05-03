@@ -56,6 +56,11 @@ export interface FloorplanAutoLayoutSettings {
   rows: number;
   columns: number;
   tableLayout: "aligned" | "staggered";
+  /**
+   * When `tableLayout` is `staggered` (brick): offset odd rows horizontally, or odd columns vertically.
+   * Defaults to horizontal when omitted (matches classic brick / banqueting floorplan).
+   */
+  staggerAxis?: "horizontal" | "vertical";
   numbering: "straight" | "snaked";
   startCorner: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 }

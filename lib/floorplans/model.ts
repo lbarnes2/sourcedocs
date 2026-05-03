@@ -21,16 +21,25 @@ export function buildTablesFromAutoLayout(autoLayout: FloorplanAutoLayoutSetting
   const chairRingRadius = tableRadius + chairGap + chairRadius;
   const tableFootprint = chairRingRadius + chairRadius;
   const step = Math.max(defaultFloorplanCanvasSettings.gridSize * 3, Math.round(tableFootprint * 2 + 18));
+  const stagger = autoLayout.tableLayout === "staggered";
+  const axis = autoLayout.staggerAxis ?? "horizontal";
+
   return placed
     .filter((cell) => Boolean(cell.tableNumber))
-    .map((cell) => ({
-      id: `table-${cell.tableNumber}`,
-      type: "table" as const,
-      tableNumber: String(cell.tableNumber),
-      x: cell.col * step + step * 1.4,
-      y: cell.row * step + step * 1.4,
-      radius: tableRadius
-    }));
+    .map((cell) => {
+      const rowOff =
+        stagger && axis === "horizontal" && autoLayout.columns > 1 && cell.row % 2 === 1 ? step / 2 : 0;
+      const colOff =
+        stagger && axis === "vertical" && autoLayout.rows > 1 && cell.col % 2 === 1 ? step / 2 : 0;
+      return {
+        id: `table-${cell.tableNumber}`,
+        type: "table" as const,
+        tableNumber: String(cell.tableNumber),
+        x: cell.col * step + step * 1.4 + rowOff,
+        y: cell.row * step + step * 1.4 + colOff,
+        radius: tableRadius
+      };
+    });
 }
 
 export function buildEmptyFloorplanDraft(name = "Untitled floorplan"): FloorplanDocument {

@@ -5,6 +5,7 @@ import fontkit from "@pdf-lib/fontkit";
 import type { FloorplanCanvasObject, FloorplanDocument } from "@/types";
 import { pdfPageDimensions } from "@/lib/paperSizes";
 import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
+import { hexToRgb } from "@/lib/pdf/color";
 import type { PDFFont } from "pdf-lib";
 
 function pickColor(type: FloorplanCanvasObject["type"]) {
@@ -17,33 +18,58 @@ function pickColor(type: FloorplanCanvasObject["type"]) {
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
   body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
+  bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
   title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf")
 } as const;
 
-let cachedFontBytes: { body: Uint8Array; title: Uint8Array } | null = null;
+let cachedFontBytes: { body: Uint8Array; bodyBold: Uint8Array; title: Uint8Array } | null = null;
 
 async function loadFontBytes() {
   if (cachedFontBytes) return cachedFontBytes;
-  const [body, title] = await Promise.all([readFile(PDF_FONT_SOURCES.body), readFile(PDF_FONT_SOURCES.title)]);
-  cachedFontBytes = { body, title };
+  const [body, bodyBold, title] = await Promise.all([
+    readFile(PDF_FONT_SOURCES.body),
+    readFile(PDF_FONT_SOURCES.bodyBold),
+    readFile(PDF_FONT_SOURCES.title)
+  ]);
+  cachedFontBytes = { body, bodyBold, title };
   return cachedFontBytes;
 }
 
-function wrapTextToWidth(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [""];
-  const lines: string[] = [];
-  let current = words[0];
-  for (let index = 1; index < words.length; index += 1) {
-    const candidate = `${current} ${words[index]}`;
-    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) current = candidate;
-    else {
-      lines.push(current);
-      current = words[index];
-    }
+/** Outer radius from table centre including chair ring (matches draw loop). */
+function tableCanvasOuterRadius(radius: number): number {
+  const chairRadius = Math.max(2, radius * 0.18);
+  const chairGap = Math.max(2, radius * 0.14);
+  const chairRingRadius = radius + chairGap + chairRadius;
+  return chairRingRadius + chairRadius;
+}
+
+/** Shrink font until the full string fits on one line; at min size, truncate with an ellipsis. */
+function fitTextSingleLine(
+  font: PDFFont,
+  raw: string,
+  maxWidth: number,
+  maxSize: number,
+  minSize: number
+): { size: number; line: string } {
+  const text = raw.replace(/\s+/g, " ").trim() || " ";
+  let size = maxSize;
+  while (size > minSize && font.widthOfTextAtSize(text, size) > maxWidth) {
+    size -= 0.25;
   }
-  lines.push(current);
-  return lines;
+  let line = text;
+  if (font.widthOfTextAtSize(line, size) > maxWidth) {
+    const ell = "…";
+    let low = 0;
+    let high = line.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      const candidate = line.slice(0, mid) + ell;
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) low = mid;
+      else high = mid - 1;
+    }
+    line = line.slice(0, low) + ell;
+  }
+  return { size, line };
 }
 
 async function embedLogoFromDataUrl(
@@ -85,11 +111,12 @@ function includePoint(bounds: Bounds, x: number, y: number): Bounds {
 
 function estimateObjectBounds(item: FloorplanCanvasObject, textFontSizeFallback = 16): Bounds {
   if (item.type === "table") {
+    const outer = tableCanvasOuterRadius(item.radius);
     return {
-      minX: item.x - item.radius,
-      minY: item.y - item.radius,
-      maxX: item.x + item.radius,
-      maxY: item.y + item.radius
+      minX: item.x - outer,
+      minY: item.y - outer,
+      maxX: item.x + outer,
+      maxY: item.y + outer
     };
   }
   if (item.type === "rect") {
@@ -141,69 +168,61 @@ export async function renderFloorplanDocumentPdf(docInput: FloorplanDocument): P
   pdf.registerFontkit(fontkit);
   const fonts = await loadFontBytes();
   const bodyFont = await pdf.embedFont(fonts.body, { subset: true });
+  const bodyBold = await pdf.embedFont(fonts.bodyBold, { subset: true });
   const titleFont = await pdf.embedFont(fonts.title, { subset: false });
   const [width, height] = pdfPageDimensions(docInput.canvas.paperSize, docInput.canvas.orientation);
   const page = pdf.addPage([width, height]);
-  const margin = 28;
+  /** Extra room so scaled tables + chairs stay inside the frame (left/right/bottom). */
+  const margin = 40;
+  const bodyPad = 22;
   const headerH = 96;
   const bodyTop = height - headerH - margin;
   const grid = docInput.canvas.gridSize || 24;
-  const safeSideWidth = 104;
-  const logoWidth = 68;
+  const logoXInset = 24;
+  const logoGap = 16;
+  const logoWidth = 86;
+  const titleBandMaxW = Math.max(100, width - 2 * (logoXInset + logoWidth + logoGap));
 
   page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: rgb(1, 1, 1) });
   const titleText = normalizeForCormorantLigatureSafe(
     docInput.metadata.title || docInput.themeSnapshot.eventName || "Floorplan"
   );
-  let titleSize = 30;
-  const titleMaxW = Math.max(100, width - safeSideWidth * 2 - 20);
-  let titleLines = wrapTextToWidth(titleText, titleFont, titleSize, titleMaxW);
-  while (titleLines.length > 2 && titleSize > 18) {
-    titleSize -= 1;
-    titleLines = wrapTextToWidth(titleText, titleFont, titleSize, titleMaxW);
-  }
-  const lineHeight = titleSize + 3;
-  const titleBlockHeight = titleLines.length * lineHeight;
-  let startY = height - 16 - titleSize - (2 - Math.min(2, titleLines.length)) * 4;
-  if (titleBlockHeight > 44) {
-    startY -= (titleBlockHeight - 44) / 2;
-  }
-  const titleCenterY = startY - ((Math.min(2, titleLines.length) - 1) * lineHeight) / 2 + titleSize * 0.35;
-  titleLines.slice(0, 2).forEach((line, index) => {
-    const lineWidth = titleFont.widthOfTextAtSize(line, titleSize);
-    page.drawText(line, {
-      x: (width - lineWidth) / 2,
-      y: startY - index * lineHeight,
-      size: titleSize,
-      font: titleFont,
-      color: rgb(0.04, 0.18, 0.26)
-    });
+  const titleFit = fitTextSingleLine(titleFont, titleText, titleBandMaxW, 30, 12);
+  const titleBaselineY = height - 22;
+  const titleWidth = titleFont.widthOfTextAtSize(titleFit.line, titleFit.size);
+  page.drawText(titleFit.line, {
+    x: (width - titleWidth) / 2,
+    y: titleBaselineY,
+    size: titleFit.size,
+    font: titleFont,
+    color: rgb(0.04, 0.18, 0.26)
   });
 
-  if (docInput.metadata.subtitle || docInput.themeSnapshot.eventSubtitle) {
-    const subtitle = (docInput.metadata.subtitle || docInput.themeSnapshot.eventSubtitle || "").trim();
-    if (subtitle) {
-      const subtitleSize = 11;
-      const subtitleMaxW = Math.max(100, width - safeSideWidth * 2 - 20);
-      const line = wrapTextToWidth(subtitle, bodyFont, subtitleSize, subtitleMaxW)[0] ?? "";
-      const subtitleWidth = bodyFont.widthOfTextAtSize(line, subtitleSize);
-      const subtitleY = Math.max(height - headerH + 10, startY - Math.min(2, titleLines.length) * lineHeight - 6);
-      page.drawText(line, {
-        x: (width - subtitleWidth) / 2,
-        y: subtitleY,
-        size: subtitleSize,
-        font: bodyFont,
-        color: rgb(0.26, 0.33, 0.4)
-      });
-    }
+  const subtitleRaw = (docInput.metadata.subtitle || docInput.themeSnapshot.eventSubtitle || "").trim();
+  let subtitleBaselineY = titleBaselineY - 10;
+  if (subtitleRaw) {
+    const subtitleFit = fitTextSingleLine(bodyFont, subtitleRaw, titleBandMaxW, 12, 7);
+    subtitleBaselineY = titleBaselineY - titleFit.size * 0.85 - subtitleFit.size * 0.35;
+    const subtitleWidth = bodyFont.widthOfTextAtSize(subtitleFit.line, subtitleFit.size);
+    page.drawText(subtitleFit.line, {
+      x: (width - subtitleWidth) / 2,
+      y: Math.max(height - headerH + 8, subtitleBaselineY),
+      size: subtitleFit.size,
+      font: bodyFont,
+      color: rgb(0.26, 0.33, 0.4)
+    });
   }
+  const titleCenterY =
+    subtitleRaw && subtitleBaselineY < titleBaselineY
+      ? (titleBaselineY + titleFit.size * 0.35 + subtitleBaselineY + 2) / 2
+      : titleBaselineY - titleFit.size * 0.15;
   await embedLogoFromDataUrl(pdf, page, docInput.themeSnapshot.clientLogoDataUrl, {
-    x: 24,
+    x: logoXInset,
     centerY: titleCenterY,
     width: logoWidth
   });
   await embedLogoFromDataUrl(pdf, page, docInput.themeSnapshot.venueLogoDataUrl, {
-    x: width - 24 - logoWidth,
+    x: width - logoXInset - logoWidth,
     centerY: titleCenterY,
     width: logoWidth
   });
@@ -218,10 +237,10 @@ export async function renderFloorplanDocumentPdf(docInput: FloorplanDocument): P
     color: rgb(0.99, 0.995, 1)
   });
 
-  const contentLeft = margin + 10;
-  const contentBottom = margin + 10;
-  const contentWidth = width - (margin + 10) * 2;
-  const contentHeight = bodyTop - (margin + 10) - contentBottom;
+  const contentLeft = margin + bodyPad;
+  const contentBottom = margin + bodyPad;
+  const contentWidth = width - (margin + bodyPad) * 2;
+  const contentHeight = bodyTop - (margin + bodyPad) - contentBottom;
   const bounds = objectBounds(docInput.objects);
   const sourceMinX = bounds?.minX ?? 0;
   const sourceMinY = bounds?.minY ?? 0;
@@ -270,12 +289,21 @@ export async function renderFloorplanDocumentPdf(docInput: FloorplanDocument): P
         borderWidth: Math.max(0.7, scale),
         borderColor: rgb(0.5, 0.57, 0.66)
       });
-      page.drawText(`Table ${item.tableNumber}`, {
-        x: x - radius + Math.max(3, 4 * scale),
-        y: y - Math.max(4, 4 * scale),
-        size: Math.max(7, Math.min(13, 8 * scale)),
-        font: bodyFont,
-        color: rgb(0.11, 0.15, 0.2)
+      const label = `Table ${item.tableNumber}`;
+      const labelColor = hexToRgb(docInput.themeSnapshot.textColor, "#1a2430");
+      let tableLabelSize = Math.min(15, Math.max(8, (radius * 2) / 6.5));
+      let labelWidth = bodyBold.widthOfTextAtSize(label, tableLabelSize);
+      const maxLabelW = (radius * 2 - 5) * 0.95;
+      while (labelWidth > maxLabelW && tableLabelSize > 6) {
+        tableLabelSize -= 0.5;
+        labelWidth = bodyBold.widthOfTextAtSize(label, tableLabelSize);
+      }
+      page.drawText(label, {
+        x: x - labelWidth / 2,
+        y: y - tableLabelSize * 0.35,
+        font: bodyBold,
+        size: tableLabelSize,
+        color: labelColor
       });
       continue;
     }

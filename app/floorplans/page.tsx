@@ -614,7 +614,50 @@ export default function FloorplansPage() {
               <option value="bottomRight">Bottom right</option>
             </select>
           </label>
+          <label>
+            Table layout
+            <select
+              value={draft.autoLayout.tableLayout}
+              onChange={(e) =>
+                setDraft((p) => ({
+                  ...p,
+                  autoLayout: {
+                    ...p.autoLayout,
+                    tableLayout: e.target.value as "aligned" | "staggered",
+                    staggerAxis:
+                      e.target.value === "staggered" ? (p.autoLayout.staggerAxis ?? "horizontal") : undefined
+                  }
+                }))
+              }
+            >
+              <option value="aligned">Aligned grid</option>
+              <option value="staggered">Staggered (brick)</option>
+            </select>
+          </label>
+          <label>
+            Brick stagger direction
+            <select
+              value={draft.autoLayout.staggerAxis ?? "horizontal"}
+              disabled={draft.autoLayout.tableLayout !== "staggered"}
+              onChange={(e) =>
+                setDraft((p) => ({
+                  ...p,
+                  autoLayout: {
+                    ...p.autoLayout,
+                    staggerAxis: e.target.value as "horizontal" | "vertical"
+                  }
+                }))
+              }
+            >
+              <option value="horizontal">Horizontal (odd rows offset)</option>
+              <option value="vertical">Vertical (odd columns offset)</option>
+            </select>
+          </label>
         </div>
+        <p className="text-muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 13 }}>
+          Staggered layout offsets every other row or column by half a cell so tables nest like bricks. Horizontal
+          matches the classic banqueting floorplan stagger; vertical offsets alternate columns downward.
+        </p>
         <button type="button" onClick={seedFromAutoLayout}>Generate tables from settings</button>
       </div>
 
