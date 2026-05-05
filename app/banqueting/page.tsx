@@ -181,6 +181,11 @@ export default function HomePage() {
   const [projectLoadSelection, setProjectLoadSelection] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
 
+  /** True after user has used Preview and Validate at least once this session (shows mapping + report UI). */
+  const [hasAttemptedPreviewValidate, setHasAttemptedPreviewValidate] = useState(false);
+  /** True only after a successful preview with parsed guests — unlocks export. */
+  const [exportUnlocked, setExportUnlocked] = useState(false);
+
   const mappingIssues = useMemo(() => getRequiredMappingIssues(mapping), [mapping]);
 
   const uniqueTableCount = useMemo(
@@ -269,6 +274,8 @@ export default function HomePage() {
     setProjectLibraryName(file.name);
     setProjectLoadSelection("");
     setError("");
+    setHasAttemptedPreviewValidate(false);
+    setExportUnlocked(false);
     if (file.theme.clientLogoDataUrl) {
       const luma = await estimateLogoLuminance(file.theme.clientLogoDataUrl);
       setClientLogoLuminance(luma);
@@ -447,6 +454,8 @@ export default function HomePage() {
 
   async function handleGuestDataFile(file: File) {
     setError("");
+    setHasAttemptedPreviewValidate(false);
+    setExportUnlocked(false);
     try {
       const text = isExcelFile(file) ? await excelFileToCsvText(file) : await file.text();
       setCsvText(text);
@@ -460,10 +469,12 @@ export default function HomePage() {
 
   async function runPreview() {
     if (!csvText) {
+      setHasAttemptedPreviewValidate(true);
       setError("Upload a guest list file first (CSV or Excel).");
       return;
     }
     if (mappingIssues.length) {
+      setHasAttemptedPreviewValidate(true);
       setError(mappingIssues.join(" "));
       return;
     }
@@ -480,6 +491,7 @@ export default function HomePage() {
       const nextGuests: GuestRecord[] = payload.guests ?? [];
       setGuests(nextGuests);
       setIssues(payload.validation?.issues ?? []);
+      setExportUnlocked(nextGuests.length > 0);
       const menuOptions = Array.from(
         new Set(
           nextGuests.flatMap((guest) =>
@@ -496,8 +508,10 @@ export default function HomePage() {
         return next;
       });
     } catch (previewError) {
+      setExportUnlocked(false);
       setError(previewError instanceof Error ? previewError.message : "Preview failed.");
     } finally {
+      setHasAttemptedPreviewValidate(true);
       setLoadingPreview(false);
     }
   }
@@ -684,23 +698,15 @@ export default function HomePage() {
         <h1>Event Document Generator</h1>
         <p className="app-tagline">
           Upload guest data, tune branding and print settings, then export table plans, place cards, menu booklets, and
-          service plans as PDF. Floorplans now live in the standalone <Link href="/floorplans">Floorplans tool</Link>.
+          service plans as PDF.
         </p>
       </header>
       <div className="panel">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">·</span>
-          <span>Saved projects</span>
-        </h2>
+        <h2>Saved projects</h2>
         <p style={{ marginTop: 0, marginBottom: 12, fontSize: 14, opacity: 0.88 }}>
           Save or load the full workspace (guest data, guest edits, theme, logos, print settings, dish overrides).
           Nothing is saved until you click <strong>Save project</strong>.
         </p>
-        {projectStorage === "r2" && (
-          <p className="pill" style={{ marginBottom: 12 }}>
-            Projects are stored in your R2 bucket under <code>projects/</code>.
-          </p>
-        )}
         {projectStorage === "local" && (
           <p className="pill" style={{ marginBottom: 12 }}>
             R2 is not configured — projects are stored on this server in <code>data/projects/</code> (see{" "}
@@ -819,7 +825,7 @@ export default function HomePage() {
             <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Shared logo library</h3>
             <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.86 }}>
               Select event logos from the shared library. To upload, rename, or delete logos, use{" "}
-              <Link href="/logo-library">Logo Library</Link>.
+              <Link href="/logo-library" className="inline-tool-link">Logo Library</Link>.
             </p>
             {venueLibraryBusy && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Loading…</p>}
             <div className="grid two" style={{ marginTop: 10 }}>
@@ -881,7 +887,7 @@ export default function HomePage() {
             ))}
           </div>
         )}
-        {mappingIssues.length > 0 && (
+        {hasAttemptedPreviewValidate && mappingIssues.length > 0 && (
           <ul>
             {mappingIssues.map((issue) => (
               <li key={issue} className="warning">
@@ -895,14 +901,19 @@ export default function HomePage() {
         </button>
       </div>
 
-      <div className="panel">
+      <div className="panel panel--step-copy-gap">
         <h2 className="step-heading">
           <span className="step-heading-badge">2</span>
           <span>Validation report</span>
         </h2>
-        {!issues.length && <p className="pill">No validation issues reported yet.</p>}
-        {issues.length > 0 && (
-          <ul>
+        {!hasAttemptedPreviewValidate && (
+          <p className="pill step-section-intro">Run Preview and Validate to see the validation report.</p>
+        )}
+        {hasAttemptedPreviewValidate && !issues.length && (
+          <p className="pill step-section-intro">No validation issues reported yet.</p>
+        )}
+        {hasAttemptedPreviewValidate && issues.length > 0 && (
+          <ul className="step-section-intro">
             {issues.map((issue, index) => (
               <li key={`${issue.message}-${index}`} className={issue.severity === "error" ? "error" : "warning"}>
                 {issue.severity.toUpperCase()}: {issue.message}
@@ -912,12 +923,12 @@ export default function HomePage() {
         )}
       </div>
 
-      <div className="panel">
+      <div className="panel panel--step-copy-gap">
         <h2 className="step-heading">
           <span className="step-heading-badge">3</span>
           <span>Last-minute edits</span>
         </h2>
-        {guests.length === 0 && <p className="pill">Run Preview to populate the editable guest list.</p>}
+        {guests.length === 0 && <p className="pill step-section-intro">Run Preview to populate the editable guest list.</p>}
         {guests.length > 0 && (
           <details open>
             <summary style={{ cursor: "pointer", marginBottom: 10 }}>
@@ -1517,7 +1528,13 @@ export default function HomePage() {
             Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
           </p>
         </div>
-        <button style={{ marginTop: 16 }} disabled={loadingExport || loadingPreview} onClick={exportDocuments}>
+        <button
+          style={{ marginTop: 16 }}
+          type="button"
+          disabled={loadingExport || loadingPreview || !exportUnlocked}
+          title={!exportUnlocked ? "Run Preview and Validate with a valid guest list first." : undefined}
+          onClick={exportDocuments}
+        >
           {loadingExport ? "Generating..." : "Generate and Download"}
         </button>
         {exportProgressPct > 0 && (

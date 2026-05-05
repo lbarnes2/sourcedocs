@@ -11,17 +11,29 @@ import {
   optionalSignageEventDateField,
   optionalSignageVenueLabelField,
   signageArrowSchema,
+  signageDualEventArrangementSchema,
   signageThemeSchema
 } from "@/lib/validation/signageSchemas";
 
 const optionalKey = z.string().max(512).optional();
 
+const optionalEventName2 = z
+  .string()
+  .max(limits.MAX_EVENT_NAME_CHARS)
+  .optional()
+  .transform((s) => (s && s.trim() ? s.trim() : undefined));
+
 const adhocSchema = z.object({
   mode: z.literal("adhoc"),
   eventName: z.string().min(1).max(limits.MAX_EVENT_NAME_CHARS),
+  eventName2: optionalEventName2,
   paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
+  /** When set and not "none", renders a second column (paired with `eventName2` or slot default). */
+  secondaryArrow: signageArrowSchema.optional(),
+  /** Two-event layout when `secondaryArrow` is active; defaults to side-by-side in PDF. */
+  dualEventArrangement: signageDualEventArrangementSchema.optional(),
   theme: signageThemeSchema,
   venueLogoKey: optionalKey,
   clientLogoKey: optionalKey,
@@ -29,7 +41,10 @@ const adhocSchema = z.object({
   clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
   venueLabel: optionalSignageVenueLabelField,
   subVenueLabel: optionalSignageVenueLabelField,
-  eventDate: optionalSignageEventDateField
+  eventDate: optionalSignageEventDateField,
+  secondaryVenueLabel: optionalSignageVenueLabelField,
+  secondarySubVenueLabel: optionalSignageVenueLabelField,
+  secondaryEventDate: optionalSignageEventDateField
 });
 
 const packSchema = z.object({
@@ -95,10 +110,16 @@ export async function POST(request: Request) {
           paperSize: body.paperSize,
           orientation: body.orientation,
           arrow: body.arrow,
+          secondaryEventName: body.eventName2,
+          secondaryArrow: body.secondaryArrow,
+          dualEventArrangement: body.dualEventArrangement,
           eventName: body.eventName,
           venueLine: body.venueLabel ?? "",
           subVenueLine: body.subVenueLabel ?? "",
           dateLine: body.eventDate ?? "",
+          secondaryVenueLine: body.secondaryVenueLabel?.trim() || body.venueLabel?.trim() || "",
+          secondarySubVenueLine: body.secondarySubVenueLabel?.trim() || body.subVenueLabel?.trim() || "",
+          secondaryDateLine: body.secondaryEventDate?.trim() || body.eventDate?.trim() || "",
           theme: body.theme
         }
       ];

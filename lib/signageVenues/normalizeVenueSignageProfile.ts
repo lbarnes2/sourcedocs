@@ -1,6 +1,11 @@
 import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_VALUES } from "@/lib/paperSizes";
-import type { SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
+import type {
+  SignageArrowDirection,
+  SignageDualEventArrangement,
+  VenueSignageProfile,
+  VenueSignageSlot
+} from "@/types";
 
 const ARROWS: SignageArrowDirection[] = [
   "none",
@@ -30,6 +35,13 @@ function normalizeArrow(value: unknown): SignageArrowDirection {
   return "none";
 }
 
+function normalizeDualArrangement(value: unknown): SignageDualEventArrangement | undefined {
+  if (value === "stacked" || value === "sideBySide") {
+    return value;
+  }
+  return undefined;
+}
+
 function normalizeSlot(raw: unknown): VenueSignageSlot {
   if (!raw || typeof raw !== "object") {
     return { count: 1, paperSize: "A4", orientation: "portrait", arrow: "none" };
@@ -41,11 +53,39 @@ function normalizeSlot(raw: unknown): VenueSignageSlot {
       ? (o.paperSize as VenueSignageSlot["paperSize"])
       : "A4";
   const orientation = o.orientation === "landscape" ? "landscape" : "portrait";
+  const secName =
+    typeof o.secondaryEventName === "string" && o.secondaryEventName.trim()
+      ? o.secondaryEventName.trim()
+      : undefined;
+  const secArrowRaw = o.secondaryArrow;
+  const secondaryArrow =
+    typeof secArrowRaw === "string" && (ARROWS as string[]).includes(secArrowRaw) && secArrowRaw !== "none"
+      ? (secArrowRaw as SignageArrowDirection)
+      : undefined;
+  const dualEventArrangement = normalizeDualArrangement(o.dualEventArrangement);
+  const secVenue =
+    typeof o.secondaryVenueLabel === "string" && o.secondaryVenueLabel.trim()
+      ? o.secondaryVenueLabel.trim()
+      : undefined;
+  const secSubVenue =
+    typeof o.secondarySubVenueLabel === "string" && o.secondarySubVenueLabel.trim()
+      ? o.secondarySubVenueLabel.trim()
+      : undefined;
+  const secDate =
+    typeof o.secondaryEventDate === "string" && o.secondaryEventDate.trim()
+      ? o.secondaryEventDate.trim()
+      : undefined;
   return {
     count,
     paperSize,
     orientation,
-    arrow: normalizeArrow(o.arrow)
+    arrow: normalizeArrow(o.arrow),
+    ...(secName ? { secondaryEventName: secName } : {}),
+    ...(secondaryArrow ? { secondaryArrow } : {}),
+    ...(dualEventArrangement ? { dualEventArrangement } : {}),
+    ...(secVenue ? { secondaryVenueLabel: secVenue } : {}),
+    ...(secSubVenue ? { secondarySubVenueLabel: secSubVenue } : {}),
+    ...(secDate ? { secondaryEventDate: secDate } : {})
   };
 }
 
@@ -80,6 +120,18 @@ export function normalizeVenueSignageProfile(raw: unknown): VenueSignageProfile 
     typeof o.defaultClientLogoKey === "string" && o.defaultClientLogoKey.trim()
       ? o.defaultClientLogoKey.trim()
       : undefined;
+  const defaultSecondaryVenueLabel =
+    typeof o.defaultSecondaryVenueLabel === "string" && o.defaultSecondaryVenueLabel.trim()
+      ? o.defaultSecondaryVenueLabel.trim()
+      : undefined;
+  const defaultSecondarySubVenueLabel =
+    typeof o.defaultSecondarySubVenueLabel === "string" && o.defaultSecondarySubVenueLabel.trim()
+      ? o.defaultSecondarySubVenueLabel.trim()
+      : undefined;
+  const defaultSecondaryEventDate =
+    typeof o.defaultSecondaryEventDate === "string" && o.defaultSecondaryEventDate.trim()
+      ? o.defaultSecondaryEventDate.trim()
+      : undefined;
 
   return {
     id,
@@ -88,6 +140,9 @@ export function normalizeVenueSignageProfile(raw: unknown): VenueSignageProfile 
     theme,
     defaultVenueLabel,
     defaultSubVenueLabel,
+    defaultSecondaryVenueLabel,
+    defaultSecondarySubVenueLabel,
+    defaultSecondaryEventDate,
     defaultVenueLogoKey,
     defaultClientLogoKey
   };

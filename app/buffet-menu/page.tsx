@@ -478,7 +478,11 @@ export default function BuffetMenuPage() {
                   {s.name}
                 </button>
                 <span className="text-muted"> · {new Date(s.savedAt).toLocaleString()}</span>
-                <button type="button" className="secondary small" onClick={() => void deleteSaved(s.id)}>
+                <button
+                  type="button"
+                  className="secondary small buffet-saved-delete"
+                  onClick={() => void deleteSaved(s.id)}
+                >
                   Delete
                 </button>
               </li>

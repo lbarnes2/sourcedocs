@@ -8,7 +8,7 @@ import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import * as limits from "@/lib/validation/limits";
-import type { PaperSize, SignageArrowDirection, VenueSignageProfile, VenueSignageSlot } from "@/types";
+import type { PaperSize, SignageArrowDirection, SignageDualEventArrangement, VenueSignageProfile, VenueSignageSlot } from "@/types";
 
 function newVenueId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -90,15 +90,21 @@ export default function SignagePage() {
   const [packOutputFormat, setPackOutputFormat] = useState<"pdf" | "png">("pdf");
 
   const [adhocEventName, setAdhocEventName] = useState("");
+  const [adhocEventName2, setAdhocEventName2] = useState("");
   const [adhocPaper, setAdhocPaper] = useState<PaperSize>("A4");
   const [adhocOrientation, setAdhocOrientation] = useState<"portrait" | "landscape">("portrait");
   const [adhocArrow, setAdhocArrow] = useState<SignageArrowDirection>("left");
+  const [adhocSecondaryArrow, setAdhocSecondaryArrow] = useState<SignageArrowDirection>("none");
   const [adhocVenueKey, setAdhocVenueKey] = useState("");
   const [adhocClientKey, setAdhocClientKey] = useState("");
   const [adhocTheme, setAdhocTheme] = useState({ ...defaultSignageTheme });
   const [adhocVenueLine, setAdhocVenueLine] = useState("");
   const [adhocSubVenueLine, setAdhocSubVenueLine] = useState("");
   const [adhocEventDate, setAdhocEventDate] = useState("");
+  const [adhocDualArrangement, setAdhocDualArrangement] = useState<SignageDualEventArrangement>("sideBySide");
+  const [adhocSecondaryVenueLine, setAdhocSecondaryVenueLine] = useState("");
+  const [adhocSecondarySubVenueLine, setAdhocSecondarySubVenueLine] = useState("");
+  const [adhocSecondaryEventDate, setAdhocSecondaryEventDate] = useState("");
   const [adhocOutputFormat, setAdhocOutputFormat] = useState<"pdf" | "png">("pdf");
 
   const [venueProfileEditorOpen, setVenueProfileEditorOpen] = useState(false);
@@ -323,7 +329,17 @@ export default function SignagePage() {
         clientLogoKey: adhocClientKey || undefined,
         ...(adhocVenueLine.trim() ? { venueLabel: adhocVenueLine.trim() } : {}),
         ...(adhocSubVenueLine.trim() ? { subVenueLabel: adhocSubVenueLine.trim() } : {}),
-        ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {})
+        ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {}),
+        ...(adhocSecondaryArrow !== "none"
+          ? {
+              secondaryArrow: adhocSecondaryArrow,
+              dualEventArrangement: adhocDualArrangement,
+              ...(adhocEventName2.trim() ? { eventName2: adhocEventName2.trim() } : {}),
+              ...(adhocSecondaryVenueLine.trim() ? { secondaryVenueLabel: adhocSecondaryVenueLine.trim() } : {}),
+              ...(adhocSecondarySubVenueLine.trim() ? { secondarySubVenueLabel: adhocSecondarySubVenueLine.trim() } : {}),
+              ...(adhocSecondaryEventDate.trim() ? { secondaryEventDate: adhocSecondaryEventDate.trim() } : {})
+            }
+          : {})
       };
       const r = await fetch("/api/signage/generate", {
         method: "POST",
@@ -488,6 +504,47 @@ export default function SignagePage() {
               />
             </label>
 
+            <label style={{ display: "block", marginTop: 12 }}>
+              Default event 2 venue line (optional — dual-arrow slots)
+              <input
+                value={draft.defaultSecondaryVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    defaultSecondaryVenueLabel: e.target.value ? e.target.value : undefined
+                  }))
+                }
+                placeholder="Per-slot or pack override; falls back to first-event venue when blank"
+              />
+            </label>
+            <label style={{ display: "block", marginTop: 12 }}>
+              Default event 2 sub-venue (optional)
+              <input
+                value={draft.defaultSecondarySubVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    defaultSecondarySubVenueLabel: e.target.value ? e.target.value : undefined
+                  }))
+                }
+              />
+            </label>
+            <label style={{ display: "block", marginTop: 12 }}>
+              Default event 2 date line (optional)
+              <input
+                value={draft.defaultSecondaryEventDate ?? ""}
+                maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    defaultSecondaryEventDate: e.target.value ? e.target.value : undefined
+                  }))
+                }
+              />
+            </label>
+
             <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Sign slots (order = PDF page order)</h3>
             {draft.slots.map((slot, index) => (
               <div key={index} className="subpanel" style={{ marginBottom: 10 }}>
@@ -539,6 +596,102 @@ export default function SignagePage() {
                     </select>
                   </label>
                 </div>
+                <div className="grid two" style={{ marginTop: 10 }}>
+                  <label>
+                    Second event (optional, same sign)
+                    <input
+                      value={slot.secondaryEventName ?? ""}
+                      maxLength={limits.MAX_EVENT_NAME_CHARS}
+                      placeholder="e.g. Evening reception (used when second arrow is set)"
+                      onChange={(e) =>
+                        updateSlot(index, {
+                          secondaryEventName: e.target.value ? e.target.value : undefined
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Second arrow
+                    <ArrowSymbolPicker
+                      value={slot.secondaryArrow ?? "none"}
+                      onChange={(v) =>
+                        updateSlot(index, {
+                          secondaryArrow: v === "none" ? undefined : v,
+                          ...(v === "none"
+                            ? {
+                                secondaryEventName: undefined,
+                                dualEventArrangement: undefined,
+                                secondaryVenueLabel: undefined,
+                                secondarySubVenueLabel: undefined,
+                                secondaryEventDate: undefined
+                              }
+                            : {})
+                        })
+                      }
+                      disabled={busy}
+                      aria-label={`Second arrow for slot ${index + 1}`}
+                    />
+                  </label>
+                </div>
+                {slot.secondaryArrow != null && slot.secondaryArrow !== "none" ? (
+                  <>
+                    <label style={{ display: "block", marginTop: 10 }}>
+                      Two-event layout
+                      <select
+                        value={slot.dualEventArrangement ?? "sideBySide"}
+                        onChange={(e) =>
+                          updateSlot(index, {
+                            dualEventArrangement: e.target.value as SignageDualEventArrangement
+                          })
+                        }
+                      >
+                        <option value="sideBySide">Side by side (columns, arrows under titles)</option>
+                        <option value="stacked">Stacked (portrait: divider + arrows below each block; landscape: arrow beside text)</option>
+                      </select>
+                    </label>
+                    <div className="grid two" style={{ marginTop: 10 }}>
+                      <label>
+                        Event 2 venue line (optional)
+                        <input
+                          value={slot.secondaryVenueLabel ?? ""}
+                          maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                          placeholder="Falls back to event 1 venue if blank"
+                          onChange={(e) =>
+                            updateSlot(index, {
+                              secondaryVenueLabel: e.target.value ? e.target.value : undefined
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Event 2 sub-venue (optional)
+                        <input
+                          value={slot.secondarySubVenueLabel ?? ""}
+                          maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                          placeholder="Falls back to event 1 sub-venue if blank"
+                          onChange={(e) =>
+                            updateSlot(index, {
+                              secondarySubVenueLabel: e.target.value ? e.target.value : undefined
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <label style={{ display: "block", marginTop: 10 }}>
+                      Event 2 date line (optional)
+                      <input
+                        value={slot.secondaryEventDate ?? ""}
+                        maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                        placeholder="Falls back to event 1 date if blank"
+                        onChange={(e) =>
+                          updateSlot(index, {
+                            secondaryEventDate: e.target.value ? e.target.value : undefined
+                          })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : null}
                 <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={() => removeSlot(index)}>
                   Remove slot
                 </button>
@@ -674,9 +827,9 @@ export default function SignagePage() {
               />
             </label>
             <p className="text-muted" style={{ marginBottom: 8 }}>
-              Pack download gives one PDF for each paper size present in the profile. Venue, optional sub-venue, and date
-              appear under the event name; leave overrides blank to use profile defaults. Logo choices below override
-              profile defaults for this download only. Enable the checkbox to override colours for this run.
+              Pack download gives one PDF for each paper size present in the profile. Each page is a single sign using the
+              event name you enter here (one event per sign). Logo choices below override profile defaults for this
+              download only. Enable the checkbox to override colours for this run.
             </p>
             <label className="checkbox-row" style={{ marginBottom: 12 }}>
               <input
@@ -798,6 +951,78 @@ export default function SignagePage() {
                 </select>
               </label>
             </div>
+            <div className="grid two" style={{ marginTop: 10 }}>
+              <label>
+                Second event (same sign)
+                <input
+                  value={adhocEventName2}
+                  onChange={(e) => setAdhocEventName2(e.target.value)}
+                  maxLength={limits.MAX_EVENT_NAME_CHARS}
+                  placeholder="Optional — right column when second arrow is set"
+                />
+              </label>
+              <label>
+                Second arrow
+                <ArrowSymbolPicker
+                  value={adhocSecondaryArrow}
+                  onChange={(v) => {
+                    setAdhocSecondaryArrow(v);
+                    if (v === "none") {
+                      setAdhocEventName2("");
+                      setAdhocDualArrangement("sideBySide");
+                      setAdhocSecondaryVenueLine("");
+                      setAdhocSecondarySubVenueLine("");
+                      setAdhocSecondaryEventDate("");
+                    }
+                  }}
+                  disabled={busy}
+                  aria-label="Second arrow for ad-hoc sign"
+                />
+              </label>
+            </div>
+            {adhocSecondaryArrow !== "none" ? (
+              <>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Two-event layout
+                  <select
+                    value={adhocDualArrangement}
+                    onChange={(e) => setAdhocDualArrangement(e.target.value as SignageDualEventArrangement)}
+                  >
+                    <option value="sideBySide">Side by side (columns, arrows under titles)</option>
+                    <option value="stacked">Stacked (portrait: divider + arrows below; landscape: arrow beside text)</option>
+                  </select>
+                </label>
+                <div className="grid two" style={{ marginTop: 10 }}>
+                  <label>
+                    Event 2 venue line
+                    <input
+                      value={adhocSecondaryVenueLine}
+                      maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                      onChange={(e) => setAdhocSecondaryVenueLine(e.target.value)}
+                      placeholder="Blank uses event 1 venue line"
+                    />
+                  </label>
+                  <label>
+                    Event 2 sub-venue
+                    <input
+                      value={adhocSecondarySubVenueLine}
+                      maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                      onChange={(e) => setAdhocSecondarySubVenueLine(e.target.value)}
+                      placeholder="Blank uses event 1 sub-venue"
+                    />
+                  </label>
+                </div>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Event 2 date line
+                  <input
+                    value={adhocSecondaryEventDate}
+                    maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                    onChange={(e) => setAdhocSecondaryEventDate(e.target.value)}
+                    placeholder="Blank uses event 1 date line"
+                  />
+                </label>
+              </>
+            ) : null}
             <div className="grid two">
               <label>
                 Venue line

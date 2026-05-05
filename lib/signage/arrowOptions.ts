@@ -40,7 +40,7 @@ export const ARROW_PICKER_SECTIONS: { title: string; options: SignageArrowOption
     options: ARROW_OPTIONS.slice(1, 1 + 8)
   },
   {
-    title: "Corners (Lucide)",
+    title: "Corners",
     options: ARROW_OPTIONS.slice(1 + 8, 1 + 8 + 8)
   },
   {

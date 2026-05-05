@@ -92,10 +92,7 @@ export default function LogoLibraryPage() {
   function renderSection(kind: LogoKind, title: string, items: LogoItem[]) {
     return (
       <section className="panel logo-library-section">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">•</span>
-          <span>{title}</span>
-        </h2>
+        <h2>{title}</h2>
         <label>
           Upload logo
           <input
