@@ -742,6 +742,8 @@ export async function renderPlaceCardsPdf(
   const borderInset = placeCardCutLineInsetPt + innerFrameGapPt;
   const innerPadH = 5;
   const innerPadV = 5;
+  /** Smaller bottom pad so the text block can sit a touch closer to the bottom border. */
+  const innerPadVBottom = 2;
   const safeEdge = Math.max(mmToPt(settings.safeMarginMm), 2);
 
   const primary = hexToRgb(theme.primaryColor, "#012f43");
@@ -826,36 +828,44 @@ export async function renderPlaceCardsPdf(
 
         const textLeft = x + borderInset + innerPadH + safeEdge;
         const textRight = x + cardWidth - borderInset - innerPadH - safeEdge;
-        const textBottom = y + borderInset + innerPadV + safeEdge;
+        const textBottom = y + borderInset + innerPadVBottom + safeEdge;
         const textTop = y + cardHeight - borderInset - innerPadV - safeEdge;
         const maxTextW = Math.max(40, textRight - textLeft);
         const innerH = textTop - textBottom;
 
-        const maxNameStart = Math.min(18 * settings.fontScale, 20);
+        // Shrink the whole block together (name + every detail line) rather than
+        // collapsing only the name. Both sizes are derived from a single scale so
+        // the name keeps its relative prominence even on dense cards (table +
+        // starter + main + dessert + wrapping dietary).
+        const nameStart = Math.min(18 * settings.fontScale, 20);
+        const detailStart = detailSizeBase;
+        const minNameSize = 6;
+        const minDetailSize = 6;
         let chosenLines: PlaceCardLine[] = [];
         let chosenGap = 3;
 
-        outer: for (let d = Math.floor(detailSizeBase); d >= 8; d -= 1) {
+        outer: for (let scalePct = 100; scalePct >= 36; scalePct -= 2) {
+          const scale = scalePct / 100;
+          const ns = Math.max(minNameSize, Math.round(nameStart * scale));
+          const ds = Math.max(minDetailSize, Math.round(detailStart * scale));
           for (let g = 4; g >= 1; g -= 1) {
-            for (let ns = Math.floor(maxNameStart); ns >= 6; ns -= 1) {
-              const lines = buildPlaceCardLines({
-                card,
-                theme,
-                nameSize: ns,
-                detailSize: d,
-                nameColor,
-                subtitleColor,
-                mutedGrey,
-                dietaryColor,
-                maxTextW,
-                font,
-                bold
-              });
-              if (placeCardLinesHeight(lines, g) <= innerH) {
-                chosenLines = lines;
-                chosenGap = g;
-                break outer;
-              }
+            const lines = buildPlaceCardLines({
+              card,
+              theme,
+              nameSize: ns,
+              detailSize: ds,
+              nameColor,
+              subtitleColor,
+              mutedGrey,
+              dietaryColor,
+              maxTextW,
+              font,
+              bold
+            });
+            if (placeCardLinesHeight(lines, g) <= innerH) {
+              chosenLines = lines;
+              chosenGap = g;
+              break outer;
             }
           }
         }
@@ -864,8 +874,8 @@ export async function renderPlaceCardsPdf(
           chosenLines = buildPlaceCardLines({
             card,
             theme,
-            nameSize: 7,
-            detailSize: 8,
+            nameSize: minNameSize,
+            detailSize: minDetailSize,
             nameColor,
             subtitleColor,
             mutedGrey,
