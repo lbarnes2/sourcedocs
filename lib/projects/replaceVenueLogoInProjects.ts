@@ -7,3 +7,9 @@ export async function replaceVenueLogoKeyInAllProjects(oldKey: string, newKey: s
   if (isR2Configured()) return r2Store.replaceVenueLogoKeyInAllProjectsR2(oldKey, newKey);
   return fsStore.replaceVenueLogoKeyInAllProjectsFs(oldKey, newKey);
 }
+
+/** Rewrites `selectedClientLogoKey` in every stored project when a client library logo is renamed. */
+export async function replaceClientLogoKeyInAllProjects(oldKey: string, newKey: string): Promise<void> {
+  if (isR2Configured()) return r2Store.replaceClientLogoKeyInAllProjectsR2(oldKey, newKey);
+  return fsStore.replaceClientLogoKeyInAllProjectsFs(oldKey, newKey);
+}

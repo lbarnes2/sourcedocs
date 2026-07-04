@@ -113,3 +113,39 @@ export async function deleteFloorplanR2(id: string): Promise<void> {
   await writeManifest(next);
 }
 
+export async function replaceVenueLogoKeyInAllFloorplansR2(oldKey: string, newKey: string): Promise<void> {
+  const keys = (await r2ListObjectKeys(FLOORPLAN_PREFIX)).filter(isFloorplanDataKey);
+  for (const key of keys) {
+    const raw = await r2GetObjectUtf8(key);
+    if (!raw) continue;
+    let data: FloorplanDocument;
+    try {
+      data = JSON.parse(raw) as FloorplanDocument;
+    } catch {
+      continue;
+    }
+    if (data.selectedVenueLogoKey === oldKey) {
+      data.selectedVenueLogoKey = newKey;
+      await r2PutObjectUtf8(key, JSON.stringify(data, null, 2));
+    }
+  }
+}
+
+export async function replaceClientLogoKeyInAllFloorplansR2(oldKey: string, newKey: string): Promise<void> {
+  const keys = (await r2ListObjectKeys(FLOORPLAN_PREFIX)).filter(isFloorplanDataKey);
+  for (const key of keys) {
+    const raw = await r2GetObjectUtf8(key);
+    if (!raw) continue;
+    let data: FloorplanDocument;
+    try {
+      data = JSON.parse(raw) as FloorplanDocument;
+    } catch {
+      continue;
+    }
+    if (data.selectedClientLogoKey === oldKey) {
+      data.selectedClientLogoKey = newKey;
+      await r2PutObjectUtf8(key, JSON.stringify(data, null, 2));
+    }
+  }
+}
+

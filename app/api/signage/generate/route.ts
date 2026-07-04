@@ -15,7 +15,11 @@ import {
   signageThemeSchema
 } from "@/lib/validation/signageSchemas";
 
-const optionalKey = z.string().max(512).optional();
+/** `undefined` / omit / empty string: use defaults where applicable; `null`: never load a logo from storage for this slot. */
+const signageLogoKeyField = z.preprocess(
+  (v) => (v === "" ? undefined : v),
+  z.union([z.string().min(1).max(512), z.null()]).optional()
+);
 
 const optionalEventName2 = z
   .string()
@@ -35,8 +39,8 @@ const adhocSchema = z.object({
   /** Two-event layout when `secondaryArrow` is active; defaults to side-by-side in PDF. */
   dualEventArrangement: signageDualEventArrangementSchema.optional(),
   theme: signageThemeSchema,
-  venueLogoKey: optionalKey,
-  clientLogoKey: optionalKey,
+  venueLogoKey: signageLogoKeyField,
+  clientLogoKey: signageLogoKeyField,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
   clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
   venueLabel: optionalSignageVenueLabelField,
@@ -52,8 +56,8 @@ const packSchema = z.object({
   venueProfileId: profileIdSchema,
   eventName: z.string().min(1).max(limits.MAX_EVENT_NAME_CHARS),
   themeOverride: signageThemeSchema.partial().optional(),
-  venueLogoKey: optionalKey,
-  clientLogoKey: optionalKey,
+  venueLogoKey: signageLogoKeyField,
+  clientLogoKey: signageLogoKeyField,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
   clientLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
   venueLabel: optionalSignageVenueLabelField,
@@ -64,7 +68,7 @@ const packSchema = z.object({
 const generateSchema = z.discriminatedUnion("mode", [adhocSchema, packSchema]);
 
 async function resolveVenueLogo(
-  explicitKey: string | undefined,
+  explicitKey: string | null | undefined,
   dataUrl: string | undefined,
   defaultKey: string | undefined
 ): Promise<{ bytes: Uint8Array; contentType?: string } | null> {
@@ -72,6 +76,7 @@ async function resolveVenueLogo(
     const parsed = parseDataUrlImage(dataUrl);
     if (parsed) return parsed;
   }
+  if (explicitKey === null) return null;
   const key = explicitKey ?? defaultKey;
   if (key?.trim() && isR2Configured()) {
     return loadLogoBytesFromKey(key.trim());
@@ -80,7 +85,7 @@ async function resolveVenueLogo(
 }
 
 async function resolveClientLogo(
-  explicitKey: string | undefined,
+  explicitKey: string | null | undefined,
   dataUrl: string | undefined,
   defaultKey: string | undefined
 ): Promise<{ bytes: Uint8Array; contentType?: string } | null> {
@@ -88,6 +93,7 @@ async function resolveClientLogo(
     const parsed = parseDataUrlImage(dataUrl);
     if (parsed) return parsed;
   }
+  if (explicitKey === null) return null;
   const key = explicitKey ?? defaultKey;
   if (key?.trim() && isR2Configured()) {
     return loadLogoBytesFromKey(key.trim());

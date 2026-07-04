@@ -171,6 +171,7 @@ export interface EventProjectFile {
   bundleMode: "single" | "zip";
   profileName: string;
   selectedVenueLogoKey: string | null;
+  selectedClientLogoKey: string | null;
 }
 
 export interface ProjectListItem {

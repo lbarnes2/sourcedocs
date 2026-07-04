@@ -8,7 +8,14 @@ import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import * as limits from "@/lib/validation/limits";
+import { SIGNAGE_LOGO_NONE_SENTINEL } from "@/lib/signage/logoSelection";
 import type { PaperSize, SignageArrowDirection, SignageDualEventArrangement, VenueSignageProfile, VenueSignageSlot } from "@/types";
+
+function signageLogoKeyForApi(key: string): string | null | undefined {
+  if (key === SIGNAGE_LOGO_NONE_SENTINEL) return null;
+  const t = key.trim();
+  return t ? t : undefined;
+}
 
 function newVenueId(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -249,13 +256,15 @@ export default function SignagePage() {
             textColor: packText.trim()
           }
         : undefined;
+      const venueLogoKey = signageLogoKeyForApi(packVenueKey);
+      const clientLogoKey = signageLogoKeyForApi(packClientKey);
       const body = {
         mode: "pack" as const,
         venueProfileId: selectedId,
         eventName: packEventName.trim(),
         themeOverride,
-        venueLogoKey: packVenueKey || undefined,
-        clientLogoKey: packClientKey || undefined,
+        ...(venueLogoKey !== undefined ? { venueLogoKey } : {}),
+        ...(clientLogoKey !== undefined ? { clientLogoKey } : {}),
         ...(packVenueOverride.trim() ? { venueLabel: packVenueOverride.trim() } : {}),
         ...(packSubVenueOverride.trim() ? { subVenueLabel: packSubVenueOverride.trim() } : {}),
         ...(packEventDate.trim() ? { eventDate: packEventDate.trim() } : {})
@@ -828,8 +837,9 @@ export default function SignagePage() {
             </label>
             <p className="text-muted" style={{ marginBottom: 8 }}>
               Pack download gives one PDF for each paper size present in the profile. Each page is a single sign using the
-              event name you enter here (one event per sign). Logo choices below override profile defaults for this
-              download only. Enable the checkbox to override colours for this run.
+              event name you enter here (one event per sign). Logos: use profile defaults, pick a library asset, or choose{" "}
+              <strong>No logo</strong> to omit one or both even when the profile has defaults. Enable the checkbox to
+              override colours for this run.
             </p>
             <label className="checkbox-row" style={{ marginBottom: 12 }}>
               <input
@@ -873,6 +883,7 @@ export default function SignagePage() {
                   value={packVenueKey}
                   onChange={setPackVenueKey}
                   emptyOption={{ label: "Use profile default", value: "" }}
+                  secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
                   disabled={!logosConfigured || busy}
                 />
               </div>
@@ -883,6 +894,7 @@ export default function SignagePage() {
                   value={packClientKey}
                   onChange={setPackClientKey}
                   emptyOption={{ label: "Use profile default", value: "" }}
+                  secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
                   disabled={!logosConfigured || busy}
                 />
               </div>

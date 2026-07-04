@@ -130,3 +130,21 @@ export async function replaceVenueLogoKeyInAllProjectsR2(oldKey: string, newKey:
     }
   }
 }
+
+export async function replaceClientLogoKeyInAllProjectsR2(oldKey: string, newKey: string): Promise<void> {
+  const keys = (await r2ListObjectKeys(PROJECT_PREFIX)).filter(isProjectDataKey);
+  for (const key of keys) {
+    const raw = await r2GetObjectUtf8(key);
+    if (!raw) continue;
+    let data: EventProjectFile;
+    try {
+      data = JSON.parse(raw) as EventProjectFile;
+    } catch {
+      continue;
+    }
+    if (data.selectedClientLogoKey === oldKey) {
+      data.selectedClientLogoKey = newKey;
+      await r2PutObjectUtf8(key, JSON.stringify(data, null, 2));
+    }
+  }
+}

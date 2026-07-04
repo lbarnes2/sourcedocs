@@ -23,3 +23,13 @@ export async function deleteFloorplan(id: string): Promise<void> {
   return fsStore.deleteFloorplanFs(id);
 }
 
+export async function replaceVenueLogoKeyInAllFloorplans(oldKey: string, newKey: string): Promise<void> {
+  if (isR2Configured()) return r2Store.replaceVenueLogoKeyInAllFloorplansR2(oldKey, newKey);
+  return fsStore.replaceVenueLogoKeyInAllFloorplansFs(oldKey, newKey);
+}
+
+export async function replaceClientLogoKeyInAllFloorplans(oldKey: string, newKey: string): Promise<void> {
+  if (isR2Configured()) return r2Store.replaceClientLogoKeyInAllFloorplansR2(oldKey, newKey);
+  return fsStore.replaceClientLogoKeyInAllFloorplansFs(oldKey, newKey);
+}
+

@@ -212,6 +212,7 @@ const lineGray = rgb(0.35, 0.35, 0.35);
 
 /**
  * A4 landscape allergen matrix with grid lines and Lucide "check" marks in cells.
+ * Paginates when items do not fit on a single page (up to MAX_BUFFET_MENU_ITEMS).
  */
 export async function renderBuffetAllergenMatrixPdf(
   menu: BuffetMenuState,
@@ -222,39 +223,18 @@ export async function renderBuffetAllergenMatrixPdf(
   doc.registerFontkit(fontkit);
   const { body, bodyBold, bodyItalic: _i } = await loadEmbeddedFonts(doc);
   void _i;
-  const page = doc.addPage([A4_LAND_W, A4_LAND_H]);
   const W = A4_LAND_W;
   const H = A4_LAND_H;
   const items = allItemsInOrderForLabels(menu);
 
   const margin = mmToPt(8);
   const titleY = H - margin - 16;
-  const title = "Allergen Matrix";
-  const titleW = bodyBold.widthOfTextAtSize(title, 16);
-  page.drawText(title, { x: (W - titleW) / 2, y: titleY, size: 16, font: bodyBold, color: ink });
-
-  if (logoBytes && logoBytes.length > 0) {
-    try {
-      const logoImg = await embedImageFromBytes(doc, logoBytes, logoContentType);
-      const maxLogoW = mmToPt(42);
-      const maxLogoH = mmToPt(16);
-      const r = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height);
-      const logoW = logoImg.width * r;
-      const logoH = logoImg.height * r;
-      page.drawImage(logoImg, { x: W - margin - logoW, y: H - margin - logoH, width: logoW, height: logoH });
-    } catch {
-      /* skip */
-    }
-  }
-
   const tableTop = titleY - 30;
   const tableLeft = margin;
   const tableRight = W - margin;
   const tableBottom = margin + 6;
   const nameColW = (tableRight - tableLeft) * 0.27;
   const colW = (tableRight - tableLeft - nameColW) / ALLERGENS.length;
-  const n = items.length;
-  const maxRows = 40;
   const namePadBot = 2.4;
   const maxNameLines = 4;
 
@@ -273,113 +253,152 @@ export async function renderBuffetAllergenMatrixPdf(
     return Math.min(80, Math.max(34, w * headerSin + hs * 0.85 + 10));
   };
 
-  let lineStep = fontSize * 1.12;
-  let headerH = headerHForTilted(headerSize);
   /** Distance from top grid line to first text baseline: cap height + small gap (keeps glyphs below the line). */
   const nameTopToFirstBaseline = (s: number) => s * 0.72 + 1.2;
   const rowHFor = (s: number, maxLines: number) => {
     const ls = s * 1.12;
     return nameTopToFirstBaseline(s) + (maxLines - 1) * ls + s * 0.22 + namePadBot;
   };
-  let rowH = rowHFor(fontSize, maxNameLines);
-  for (let pass = 0; pass < 40; pass++) {
-    lineStep = fontSize * 1.12;
+
+  const maxLinesForItems = (slice: typeof items, size: number) => {
     let maxLines = 1;
-    for (const it of items) {
+    for (const it of slice) {
       const raw = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
-      const lines = wrapWords(raw, body, fontSize, nameColW - 3);
+      const lines = wrapWords(raw, body, size, nameColW - 3);
       maxLines = Math.max(maxLines, Math.min(maxNameLines, lines.length));
     }
+    return maxLines;
+  };
+
+  // Shrink until at least one data row fits under the header (pagination handles the rest).
+  let maxLines = maxLinesForItems(items, fontSize);
+  let rowH = rowHFor(fontSize, maxLines);
+  let headerH = headerHForTilted(headerSize);
+  for (let pass = 0; pass < 40; pass++) {
+    maxLines = maxLinesForItems(items, fontSize);
     rowH = rowHFor(fontSize, maxLines);
     headerH = headerHForTilted(headerSize);
-    const bodyH = n * rowH;
-    if (headerH + bodyH <= tableTop - tableBottom && n <= maxRows) break;
+    if (headerH + rowH <= tableTop - tableBottom) break;
     fontSize = Math.max(3.4, fontSize * 0.97);
     headerSize = Math.max(3.0, fontSize * 0.82);
   }
   headerSize = Math.min(10.5, headerSize * 1.1);
   headerH = headerHForTilted(headerSize);
-  lineStep = fontSize * 1.12;
+  maxLines = maxLinesForItems(items, fontSize);
+  rowH = rowHFor(fontSize, maxLines);
+  const lineStep = fontSize * 1.12;
 
-  const dataTop = tableTop - headerH;
-  const bottomY = dataTop - n * rowH;
-  const lineT = 0.5;
-
-  /* Full grid: horizontals then verticals, then text on top. */
-  const horizYs: number[] = [tableTop, dataTop];
-  for (let k = 1; k <= n; k++) {
-    horizYs.push(dataTop - k * rowH);
-  }
-  for (const yH of horizYs) {
-    page.drawLine({
-      start: { x: tableLeft, y: yH },
-      end: { x: tableRight, y: yH },
-      thickness: lineT,
-      color: lineGray
-    });
-  }
-  const vertXs2: number[] = [tableLeft];
-  for (let c = 0; c <= ALLERGENS.length; c++) {
-    vertXs2.push(tableLeft + nameColW + c * colW);
-  }
-  for (const vx of vertXs2) {
-    page.drawLine({ start: { x: vx, y: tableTop }, end: { x: vx, y: bottomY }, thickness: lineT, color: lineGray });
+  const bodyAvail = tableTop - tableBottom - headerH;
+  const rowsPerPage = Math.max(1, Math.floor(bodyAvail / rowH));
+  const pageChunks: (typeof items)[] =
+    items.length === 0 ? [[]] : [];
+  for (let i = 0; i < items.length; i += rowsPerPage) {
+    pageChunks.push(items.slice(i, i + rowsPerPage));
   }
 
-  /* Header row text — vertically centred in the header band between tableTop and dataTop */
-  const headerBandMidY = (tableTop + dataTop) / 2;
-  const nameHead = "Menu item";
-  const headLines = wrapWords(nameHead, bodyBold, headerSize, nameColW - 2);
-  const headBlockH = headLines.length * headerSize * 0.88;
-  let hy = headerBandMidY + headBlockH / 2 - headerSize * 0.22;
-  for (const ln of headLines) {
-    const lw = bodyBold.widthOfTextAtSize(ln, headerSize);
-    page.drawText(ln, { x: tableLeft + (nameColW - lw) / 2, y: hy, size: headerSize, font: bodyBold, color: ink });
-    hy -= headerSize * 0.88;
-  }
-  for (let c = 0; c < ALLERGENS.length; c++) {
-    const a = ALLERGENS[c]!;
-    const colLeft = tableLeft + nameColW + c * colW;
-    const label = a.shortLabel;
-    const w = bodyBold.widthOfTextAtSize(label, headerSize);
-    const cap = headerSize * 0.7;
-    const cx = colLeft + colW / 2;
-    const cy = headerBandMidY;
-    /* Anchor lower-left; rotate 45° around (x,y) so label sits in narrow column. */
-    const x = cx - (w / 2) * headerCos - cap * 0.35 * headerSin;
-    const y = cy - (w / 2) * headerSin - cap * 0.35 * headerCos;
-    page.drawText(label, {
-      x,
-      y,
-      size: headerSize,
-      font: bodyBold,
-      color: ink,
-      rotate: degrees(HEADER_ROT_DEG)
-    });
-  }
-
-  /* Data: name block top-padded to row (aligns to grid); up to 4 wrapped lines; checks centred in cell */
-  for (let r = 0; r < n; r++) {
-    const it = items[r]!;
-    const name = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
-    const rowTopY = dataTop - r * rowH;
-    const rowBotY = rowTopY - rowH;
-    const nameLines = wrapWords(name, body, fontSize, nameColW - 3);
-    const showLines = nameLines.slice(0, maxNameLines);
-    /* First baseline: below top row line by cap+gap so outlines stay inside the cell */
-    let ny = rowTopY - nameTopToFirstBaseline(fontSize);
-    for (const nl of showLines) {
-      page.drawText(nl, { x: tableLeft + 2, y: ny, size: fontSize, font: body, color: ink });
-      ny -= lineStep;
+  let logoImg: PDFImage | null = null;
+  if (logoBytes && logoBytes.length > 0) {
+    try {
+      logoImg = await embedImageFromBytes(doc, logoBytes, logoContentType);
+    } catch {
+      /* skip */
     }
-    const rowMidY = (rowTopY + rowBotY) / 2;
-    const cell = Math.min(rowH, colW);
-    const iconPt = Math.max(9, Math.min(20, cell * 0.72));
+  }
+
+  for (let pageIndex = 0; pageIndex < pageChunks.length; pageIndex++) {
+    const pageItems = pageChunks[pageIndex]!;
+    const n = pageItems.length;
+    const page = doc.addPage([W, H]);
+
+    const title =
+      pageChunks.length > 1 ? `Allergen Matrix (${pageIndex + 1}/${pageChunks.length})` : "Allergen Matrix";
+    const titleW = bodyBold.widthOfTextAtSize(title, 16);
+    page.drawText(title, { x: (W - titleW) / 2, y: titleY, size: 16, font: bodyBold, color: ink });
+
+    if (logoImg) {
+      const maxLogoW = mmToPt(42);
+      const maxLogoH = mmToPt(16);
+      const r = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height);
+      const logoW = logoImg.width * r;
+      const logoH = logoImg.height * r;
+      page.drawImage(logoImg, { x: W - margin - logoW, y: H - margin - logoH, width: logoW, height: logoH });
+    }
+
+    const dataTop = tableTop - headerH;
+    const bottomY = dataTop - n * rowH;
+    const lineT = 0.5;
+
+    const horizYs: number[] = [tableTop, dataTop];
+    for (let k = 1; k <= n; k++) {
+      horizYs.push(dataTop - k * rowH);
+    }
+    for (const yH of horizYs) {
+      page.drawLine({
+        start: { x: tableLeft, y: yH },
+        end: { x: tableRight, y: yH },
+        thickness: lineT,
+        color: lineGray
+      });
+    }
+    const vertXs2: number[] = [tableLeft];
+    for (let c = 0; c <= ALLERGENS.length; c++) {
+      vertXs2.push(tableLeft + nameColW + c * colW);
+    }
+    for (const vx of vertXs2) {
+      page.drawLine({ start: { x: vx, y: tableTop }, end: { x: vx, y: bottomY }, thickness: lineT, color: lineGray });
+    }
+
+    const headerBandMidY = (tableTop + dataTop) / 2;
+    const nameHead = "Menu item";
+    const headLines = wrapWords(nameHead, bodyBold, headerSize, nameColW - 2);
+    const headBlockH = headLines.length * headerSize * 0.88;
+    let hy = headerBandMidY + headBlockH / 2 - headerSize * 0.22;
+    for (const ln of headLines) {
+      const lw = bodyBold.widthOfTextAtSize(ln, headerSize);
+      page.drawText(ln, { x: tableLeft + (nameColW - lw) / 2, y: hy, size: headerSize, font: bodyBold, color: ink });
+      hy -= headerSize * 0.88;
+    }
     for (let c = 0; c < ALLERGENS.length; c++) {
-      const id = ALLERGENS[c]!.id as AllergenId;
-      if (it.allergens[id]) {
-        const cellCx = tableLeft + nameColW + (c + 0.5) * colW;
-        drawLucideIconStroke(page, lucideCheck, cellCx, rowMidY, iconPt, ink);
+      const a = ALLERGENS[c]!;
+      const colLeft = tableLeft + nameColW + c * colW;
+      const label = a.shortLabel;
+      const w = bodyBold.widthOfTextAtSize(label, headerSize);
+      const cap = headerSize * 0.7;
+      const cx = colLeft + colW / 2;
+      const cy = headerBandMidY;
+      const x = cx - (w / 2) * headerCos - cap * 0.35 * headerSin;
+      const y = cy - (w / 2) * headerSin - cap * 0.35 * headerCos;
+      page.drawText(label, {
+        x,
+        y,
+        size: headerSize,
+        font: bodyBold,
+        color: ink,
+        rotate: degrees(HEADER_ROT_DEG)
+      });
+    }
+
+    for (let r = 0; r < n; r++) {
+      const it = pageItems[r]!;
+      const name = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
+      const rowTopY = dataTop - r * rowH;
+      const rowBotY = rowTopY - rowH;
+      const nameLines = wrapWords(name, body, fontSize, nameColW - 3);
+      const showLines = nameLines.slice(0, maxNameLines);
+      let ny = rowTopY - nameTopToFirstBaseline(fontSize);
+      for (const nl of showLines) {
+        page.drawText(nl, { x: tableLeft + 2, y: ny, size: fontSize, font: body, color: ink });
+        ny -= lineStep;
+      }
+      const rowMidY = (rowTopY + rowBotY) / 2;
+      const cell = Math.min(rowH, colW);
+      const iconPt = Math.max(9, Math.min(20, cell * 0.72));
+      for (let c = 0; c < ALLERGENS.length; c++) {
+        const id = ALLERGENS[c]!.id as AllergenId;
+        if (it.allergens[id]) {
+          const cellCx = tableLeft + nameColW + (c + 0.5) * colW;
+          drawLucideIconStroke(page, lucideCheck, cellCx, rowMidY, iconPt, ink);
+        }
       }
     }
   }

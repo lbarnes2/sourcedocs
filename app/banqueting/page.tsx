@@ -269,7 +269,7 @@ export default function HomePage() {
     setBundleMode(file.bundleMode === "single" ? "single" : "zip");
     setProfileName(file.profileName ?? "New Profile");
     setSelectedVenueLogoKey(file.selectedVenueLogoKey ?? null);
-    setSelectedClientLogoKey(null);
+    setSelectedClientLogoKey(file.selectedClientLogoKey ?? null);
     setCurrentProjectId(file.id);
     setProjectLibraryName(file.name);
     setProjectLoadSelection("");
@@ -311,7 +311,8 @@ export default function HomePage() {
         selectedDocuments,
         bundleMode,
         profileName,
-        selectedVenueLogoKey
+        selectedVenueLogoKey,
+        selectedClientLogoKey
       };
       const response = await fetch("/api/projects", {
         method: "POST",
@@ -834,9 +835,16 @@ export default function HomePage() {
                 items={clientLogoLibrary.items}
                 value={selectedClientLogoKey ?? ""}
                 onChange={(key) => {
+                  if (!key) {
+                    setSelectedClientLogoKey(null);
+                    setTheme((previous) => ({ ...previous, clientLogoDataUrl: undefined }));
+                    setClientLogoLuminance(null);
+                    return;
+                  }
                   const item = clientLogoLibrary.items.find((entry) => entry.key === key);
                   if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
                 }}
+                emptyOption={{ label: "No client logo", value: "" }}
                 manageHref="/logo-library"
               />
               <LogoPicker
@@ -844,9 +852,15 @@ export default function HomePage() {
                 items={venueLogoLibrary.items}
                 value={selectedVenueLogoKey ?? ""}
                 onChange={(key) => {
+                  if (!key) {
+                    setSelectedVenueLogoKey(null);
+                    setTheme((previous) => ({ ...previous, venueLogoDataUrl: undefined }));
+                    return;
+                  }
                   const item = venueLogoLibrary.items.find((entry) => entry.key === key);
                   if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
                 }}
+                emptyOption={{ label: "No venue logo", value: "" }}
                 manageHref="/logo-library"
               />
             </div>

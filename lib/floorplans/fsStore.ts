@@ -122,3 +122,45 @@ export async function deleteFloorplanFs(id: string): Promise<void> {
   await writeManifestToDisk(next);
 }
 
+export async function replaceVenueLogoKeyInAllFloorplansFs(oldKey: string, newKey: string): Promise<void> {
+  await ensureFloorplanDir();
+  const files = await fs.readdir(FLOORPLAN_DIR);
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    const id = file.slice(0, -".json".length);
+    if (!isValidFloorplanUuid(id)) continue;
+    let data: FloorplanDocument;
+    try {
+      const raw = await fs.readFile(path.join(FLOORPLAN_DIR, file), "utf8");
+      data = JSON.parse(raw) as FloorplanDocument;
+    } catch {
+      continue;
+    }
+    if (data.selectedVenueLogoKey === oldKey) {
+      data.selectedVenueLogoKey = newKey;
+      await fs.writeFile(path.join(FLOORPLAN_DIR, file), JSON.stringify(data, null, 2), "utf8");
+    }
+  }
+}
+
+export async function replaceClientLogoKeyInAllFloorplansFs(oldKey: string, newKey: string): Promise<void> {
+  await ensureFloorplanDir();
+  const files = await fs.readdir(FLOORPLAN_DIR);
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    const id = file.slice(0, -".json".length);
+    if (!isValidFloorplanUuid(id)) continue;
+    let data: FloorplanDocument;
+    try {
+      const raw = await fs.readFile(path.join(FLOORPLAN_DIR, file), "utf8");
+      data = JSON.parse(raw) as FloorplanDocument;
+    } catch {
+      continue;
+    }
+    if (data.selectedClientLogoKey === oldKey) {
+      data.selectedClientLogoKey = newKey;
+      await fs.writeFile(path.join(FLOORPLAN_DIR, file), JSON.stringify(data, null, 2), "utf8");
+    }
+  }
+}
+

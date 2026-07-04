@@ -64,15 +64,22 @@ const savePayloadBaseSchema = z.object({
   selectedDocuments: z.array(documentTypeSchema),
   bundleMode: z.enum(["single", "zip"]),
   profileName: z.string().max(200),
-  selectedVenueLogoKey: z.string().max(500).nullable()
+  selectedVenueLogoKey: z.string().max(500).nullable(),
+  /** Older saves omit this; treat as null. */
+  selectedClientLogoKey: z.string().max(500).nullable().optional()
 });
 
-const savePayloadSchema = savePayloadBaseSchema.superRefine((data, ctx) => {
+function refineDishOverrideUniqueness(
+  data: { dishNameOverrides: Record<string, { shortName: string; longName: string }> },
+  ctx: z.RefinementCtx
+) {
   const err = validateDishOverrideShortNameUniqueness(data.dishNameOverrides);
   if (err) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: err });
   }
-});
+}
+
+const savePayloadSchema = savePayloadBaseSchema.superRefine(refineDishOverrideUniqueness);
 
 export type ProjectSavePayload = z.infer<typeof savePayloadSchema>;
 
@@ -102,16 +109,19 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,
-    selectedVenueLogoKey: parsed.selectedVenueLogoKey
+    selectedVenueLogoKey: parsed.selectedVenueLogoKey,
+    selectedClientLogoKey: parsed.selectedClientLogoKey ?? null
   };
 }
 
-const loadedFileSchema = savePayloadBaseSchema.extend({
-  version: z.literal(1),
-  id: z.string().uuid(),
-  name: z.string().min(1).max(500),
-  savedAt: z.string().min(1)
-});
+const loadedFileSchema = savePayloadBaseSchema
+  .extend({
+    version: z.literal(1),
+    id: z.string().uuid(),
+    name: z.string().min(1).max(500),
+    savedAt: z.string().min(1)
+  })
+  .superRefine(refineDishOverrideUniqueness);
 
 /** Drops legacy menu-merge rows that cannot satisfy `match.length >= 2` so older saves still load. */
 function normalizeStoredProjectRaw(raw: unknown): unknown {
@@ -154,6 +164,7 @@ export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,
-    selectedVenueLogoKey: parsed.selectedVenueLogoKey
+    selectedVenueLogoKey: parsed.selectedVenueLogoKey,
+    selectedClientLogoKey: parsed.selectedClientLogoKey ?? null
   };
 }

@@ -78,3 +78,25 @@ export async function deleteSavedBuffetMenu(keyOrId: string): Promise<void> {
   assertBuffetMenuKey(key);
   await r2DeleteObject(key);
 }
+
+/** Rewrites `venueLogoKey` in every saved buffet menu when a venue library logo is renamed. */
+export async function replaceVenueLogoKeyInAllBuffetMenus(oldKey: string, newKey: string): Promise<void> {
+  const keys = (await r2ListObjectKeys(BUFFET_MENU_PREFIX)).filter((k) => k.endsWith(".json"));
+  for (const key of keys) {
+    const raw = await r2GetObjectUtf8(key);
+    if (!raw) continue;
+    let data: BuffetMenuSavedFile;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      const doc = buffetMenuSavedFileSchema.safeParse(parsed);
+      if (!doc.success) continue;
+      data = doc.data;
+    } catch {
+      continue;
+    }
+    if (data.venueLogoKey === oldKey) {
+      data.venueLogoKey = newKey;
+      await r2PutObjectUtf8(key, JSON.stringify(data));
+    }
+  }
+}

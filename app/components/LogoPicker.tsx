@@ -10,6 +10,8 @@ type Props = {
   value: string;
   onChange: (key: string) => void;
   emptyOption?: { label: string; value: string };
+  /** Extra leading tile (e.g. “No logo” vs “Use profile default”) with its own `value`. */
+  secondaryEmptyOption?: { label: string; value: string };
   disabled?: boolean;
   manageHref?: string;
   manageLabel?: string;
@@ -21,6 +23,7 @@ export function LogoPicker({
   value,
   onChange,
   emptyOption,
+  secondaryEmptyOption,
   disabled,
   manageHref = "/logo-library",
   manageLabel = "Manage logos"
@@ -56,6 +59,21 @@ export function LogoPicker({
             onClick={() => !off && onChange(emptyOption.value)}
           >
             <span className="signage-logo-tile-empty">{emptyOption.label}</span>
+          </button>
+        ) : null}
+        {secondaryEmptyOption ? (
+          <button
+            type="button"
+            aria-pressed={value === secondaryEmptyOption.value}
+            disabled={off}
+            className={
+              value === secondaryEmptyOption.value
+                ? "signage-logo-tile signage-logo-tile--selected"
+                : "signage-logo-tile"
+            }
+            onClick={() => !off && onChange(secondaryEmptyOption.value)}
+          >
+            <span className="signage-logo-tile-empty">{secondaryEmptyOption.label}</span>
           </button>
         ) : null}
         {items.map((item) => {
