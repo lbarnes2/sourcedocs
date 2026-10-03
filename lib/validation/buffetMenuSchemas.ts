@@ -51,13 +51,13 @@ export const buffetMenuStateSchema = z
     }
   });
 
-const buffetExportModeSchema = z.enum(["zip", "display", "matrix", "labels"]);
+const buffetExportModeSchema = z.enum(["zip", "display", "matrix", "labels", "labelsA7"]);
 
 export const buffetMenuGenerateBodySchema = z.object({
   menu: buffetMenuStateSchema,
   venueLogoKey: optionalKey,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
-  /** Omitted or `"zip"`: return a ZIP of all three PDFs; otherwise a single PDF. */
+  /** Omitted or `"zip"`: return a ZIP of all PDFs; otherwise a single PDF (`"labels"` = A6, `"labelsA7"` = A7). */
   export: buffetExportModeSchema.optional().default("zip")
 });
 

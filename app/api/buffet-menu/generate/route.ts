@@ -37,13 +37,14 @@ export async function POST(request: Request) {
   const { menu, venueLogoKey, venueLogoDataUrl, export: exportMode } = parsed.data;
   const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
 
-  const { display, matrix, labels } = await renderAllBuffetPdfs(menu, logo);
+  const { display, matrix, labelsA6, labelsA7 } = await renderAllBuffetPdfs(menu, logo);
 
   if (exportMode === "zip") {
     const zip = new JSZip();
     zip.file("buffet-menu-display.pdf", display);
     zip.file("buffet-allergen-matrix.pdf", matrix);
-    zip.file("buffet-labels.pdf", labels);
+    zip.file("buffet-labels-a6.pdf", labelsA6);
+    zip.file("buffet-labels-a7.pdf", labelsA7);
     const zipBytes = await zip.generateAsync({ type: "uint8array" });
     return new NextResponse(Buffer.from(zipBytes), {
       status: 200,
@@ -59,7 +60,9 @@ export async function POST(request: Request) {
       ? { bytes: display, filename: "buffet-menu-display.pdf" as const }
       : exportMode === "matrix"
         ? { bytes: matrix, filename: "buffet-allergen-matrix.pdf" as const }
-        : { bytes: labels, filename: "buffet-labels.pdf" as const };
+        : exportMode === "labelsA7"
+          ? { bytes: labelsA7, filename: "buffet-labels-a7.pdf" as const }
+          : { bytes: labelsA6, filename: "buffet-labels-a6.pdf" as const };
   return new NextResponse(Buffer.from(out.bytes), {
     status: 200,
     headers: {

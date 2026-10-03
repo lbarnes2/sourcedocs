@@ -31,12 +31,13 @@ import type { BuffetMenuItem } from "@/types/buffetMenu";
 
 type Store = BuffetMenuStore;
 
-type BuffetExportMode = "zip" | "display" | "matrix" | "labels";
+type BuffetExportMode = "zip" | "display" | "matrix" | "labels" | "labelsA7";
 const BUFFET_DOWNLOAD_FILE_NAMES: Record<BuffetExportMode, string> = {
   zip: "buffet-menu-documents.zip",
   display: "buffet-menu-display.pdf",
   matrix: "buffet-allergen-matrix.pdf",
-  labels: "buffet-labels.pdf"
+  labels: "buffet-labels-a6.pdf",
+  labelsA7: "buffet-labels-a7.pdf"
 };
 
 function findItemContainerLocal(store: Store, itemId: string): string | null {
@@ -574,7 +575,7 @@ export default function BuffetMenuPage() {
       <div className="panel">
         <h2>Download</h2>
         <p className="text-muted">
-          A4 display menu (no allergens on the menu), A4 landscape allergen matrix, and A4 pages of A6 buffet labels. Get each file on its own or all three in one ZIP.
+          A4 display menu (no allergens on the menu), A4 landscape allergen matrix, and A4 pages of buffet labels at A6 (4 per sheet) or A7 (8 per sheet). Get each file on its own or all of them in one ZIP.
         </p>
         <div className="buffet-download-actions">
           <button type="button" className="secondary" onClick={() => void downloadExport("display")} disabled={busy}>
@@ -584,7 +585,10 @@ export default function BuffetMenuPage() {
             {busy ? "Working…" : "Allergen matrix (PDF)"}
           </button>
           <button type="button" className="secondary" onClick={() => void downloadExport("labels")} disabled={busy}>
-            {busy ? "Working…" : "Label sheets (PDF)"}
+            {busy ? "Working…" : "A6 label sheets (PDF)"}
+          </button>
+          <button type="button" className="secondary" onClick={() => void downloadExport("labelsA7")} disabled={busy}>
+            {busy ? "Working…" : "A7 label sheets (PDF)"}
           </button>
           <button type="button" onClick={() => void downloadExport("zip")} disabled={busy}>
             {busy ? "Working…" : "All documents (ZIP)"}

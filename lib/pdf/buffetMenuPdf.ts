@@ -5,7 +5,7 @@ import fontkit from "@pdf-lib/fontkit";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import { allItemsInOrderForLabels, flattenForDisplayMenu, type DisplayLine } from "@/lib/buffetMenu/flattenMenu";
 import { drawLucideIconStroke, lucideCheck, lucideSquare, lucideSquareCheck } from "@/lib/pdf/lucidePdfDraw";
-import type { BuffetMenuState } from "@/types/buffetMenu";
+import type { BuffetLabelSize, BuffetMenuState } from "@/types/buffetMenu";
 
 function mmToPt(mm: number): number {
   return (mm * 72) / 25.4;
@@ -26,9 +26,23 @@ const A4_PORTRAIT_H = mmToPt(297);
 const A4_LAND_W = mmToPt(297);
 const A4_LAND_H = mmToPt(210);
 
-const A6_W = mmToPt(105);
-const A6_H = mmToPt(148.5);
-const LABELS_PER_SHEET = 4;
+/** Labels tile an A4 sheet exactly; label size = sheet size / grid. */
+type LabelSheetFormat = {
+  sheetW: number;
+  sheetH: number;
+  cols: number;
+  rows: number;
+  allergenCols: number;
+  /** Max logo height as a fraction of label height. */
+  logoMaxHRatio: number;
+};
+
+const LABEL_SHEET_FORMATS: Record<BuffetLabelSize, LabelSheetFormat> = {
+  /* 105 × 148.5 mm, 2×2 on A4 portrait */
+  a6: { sheetW: A4_PORTRAIT_W, sheetH: A4_PORTRAIT_H, cols: 2, rows: 2, allergenCols: 4, logoMaxHRatio: 0.28 },
+  /* 74.25 × 105 mm, 4×2 on A4 landscape */
+  a7: { sheetW: A4_LAND_W, sheetH: A4_LAND_H, cols: 4, rows: 2, allergenCols: 3, logoMaxHRatio: 0.22 }
+};
 
 /** Spacing after each food item (not after category title lines, except small gap). */
 const DISPLAY_ITEM_GAP_RATIO = 0.38; /* of item line height (extra between consecutive items) */
@@ -407,13 +421,19 @@ export async function renderBuffetAllergenMatrixPdf(
 }
 
 /**
- * A6 labels: 2×2 on A4; top 75% logo, title, diet; bottom 25% allergen grid (4 cols, Lucide Square / SquareCheck).
+ * Buffet labels tiled on A4 (A6: 2×2 portrait sheet, A7: 4×2 landscape sheet);
+ * top 75% logo, title, diet; bottom 25% allergen grid (Lucide Square / SquareCheck).
  */
 export async function renderBuffetLabelSheetsPdf(
   menu: BuffetMenuState,
   logoBytes: Uint8Array | null,
-  logoContentType?: string
+  logoContentType?: string,
+  size: BuffetLabelSize = "a6"
 ): Promise<Uint8Array> {
+  const { sheetW, sheetH, cols, rows, allergenCols, logoMaxHRatio } = LABEL_SHEET_FORMATS[size];
+  const labelW = sheetW / cols;
+  const labelH = sheetH / rows;
+  const labelsPerSheet = cols * rows;
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const { body, bodyBold, bodyItalic } = await loadEmbeddedFonts(doc);
@@ -429,32 +449,27 @@ export async function renderBuffetLabelSheetsPdf(
   }
 
   if (items.length === 0) {
-    const page = doc.addPage([A4_PORTRAIT_W, A4_PORTRAIT_H]);
+    const page = doc.addPage([sheetW, sheetH]);
     const msg = "No menu items to print.";
     const w = body.widthOfTextAtSize(msg, 12);
-    page.drawText(msg, { x: (A4_PORTRAIT_W - w) / 2, y: A4_PORTRAIT_H - mmToPt(40), size: 12, font: body, color: ink });
+    page.drawText(msg, { x: (sheetW - w) / 2, y: sheetH - mmToPt(40), size: 12, font: body, color: ink });
     return doc.save();
   }
 
-  const slots: [number, number][] = [
-    [0, 1],
-    [1, 1],
-    [0, 0],
-    [1, 0]
-  ];
-
-  for (let i = 0; i < items.length; i += LABELS_PER_SHEET) {
-    const page = doc.addPage([A4_PORTRAIT_W, A4_PORTRAIT_H]);
-    const batch = items.slice(i, i + LABELS_PER_SHEET);
+  for (let i = 0; i < items.length; i += labelsPerSheet) {
+    const page = doc.addPage([sheetW, sheetH]);
+    const batch = items.slice(i, i + labelsPerSheet);
     for (let s = 0; s < batch.length; s++) {
       const it = batch[s]!;
-      const [gx, gy] = slots[s]!;
-      const x0 = gx * A6_W;
-      const y0 = gy * A6_H;
+      /* Fill left-to-right, top-to-bottom. */
+      const gx = s % cols;
+      const gy = rows - 1 - Math.floor(s / cols);
+      const x0 = gx * labelW;
+      const y0 = gy * labelH;
       const pad = mmToPt(2.5);
       const borderInset = mmToPt(1.5);
-      const innerW = A6_W - pad * 2;
-      const innerTop = y0 + A6_H - pad;
+      const innerW = labelW - pad * 2;
+      const innerTop = y0 + labelH - pad;
       const innerBot = y0 + pad;
       const innerH = innerTop - innerBot;
       const allergenH = innerH * 0.25;
@@ -464,8 +479,8 @@ export async function renderBuffetLabelSheetsPdf(
       page.drawRectangle({
         x: x0 + borderInset,
         y: y0 + borderInset,
-        width: A6_W - 2 * borderInset,
-        height: A6_H - 2 * borderInset,
+        width: labelW - 2 * borderInset,
+        height: labelH - 2 * borderInset,
         borderColor: rgb(0.25, 0.32, 0.42),
         borderWidth: 1
       });
@@ -473,17 +488,17 @@ export async function renderBuffetLabelSheetsPdf(
       let cursorY = innerTop;
       if (logoImg) {
         const maxW = innerW;
-        const maxH = Math.min(A6_H * 0.28, mainH * 0.5);
+        const maxH = Math.min(labelH * logoMaxHRatio, mainH * 0.5);
         const r = Math.min(maxW / logoImg.width, maxH / logoImg.height, 1);
         const lw = logoImg.width * r;
         const lh = logoImg.height * r;
-        page.drawImage(logoImg, { x: x0 + (A6_W - lw) / 2, y: cursorY - lh, width: lw, height: lh });
+        page.drawImage(logoImg, { x: x0 + (labelW - lw) / 2, y: cursorY - lh, width: lw, height: lh });
         cursorY -= lh + mmToPt(2);
       }
       const title = it.title.trim() || "Item";
       const dietLine = it.vegan ? "Vegan" : it.vegetarian ? "Vegetarian" : null;
       const nAllergen = ALLERGENS.length;
-      const gridCols = 4;
+      const gridCols = allergenCols;
       const gridRows = Math.ceil(nAllergen / gridCols);
       const colGap = mmToPt(0.35);
       const wCol = (innerW - (gridCols - 1) * colGap) / gridCols;
@@ -496,22 +511,27 @@ export async function renderBuffetLabelSheetsPdf(
       for (let t = 0; t < 200 && titleSize >= 6.5; t++) {
         titleLines = wrapWords(title, bodyBold, titleSize, innerW);
         const titleBlockH = titleLines.length * titleSize * 1.1;
-        const dietH = dietLine ? titleToDietGapH + Math.max(8, titleSize * 0.45) * 1.22 : 0;
-        if (titleBlockH + dietH <= availForTitle) break;
+        const dietSize = Math.max(8, titleSize * 0.45);
+        const dietH = dietLine ? titleToDietGapH + dietSize * 1.22 : 0;
+        /* wrapWords never splits a word, so a single long word can still be wider than the label. */
+        const fitsWidth =
+          titleLines.every((l) => bodyBold.widthOfTextAtSize(l, titleSize) <= innerW) &&
+          (!dietLine || bodyItalic.widthOfTextAtSize(dietLine, dietSize) <= innerW);
+        if (fitsWidth && titleBlockH + dietH <= availForTitle) break;
         titleSize -= 0.5;
       }
 
       for (const line of titleLines) {
         cursorY -= titleSize * 1.1;
         const tw = bodyBold.widthOfTextAtSize(line, titleSize);
-        page.drawText(line, { x: x0 + (A6_W - tw) / 2, y: cursorY, size: titleSize, font: bodyBold, color: ink });
+        page.drawText(line, { x: x0 + (labelW - tw) / 2, y: cursorY, size: titleSize, font: bodyBold, color: ink });
       }
       if (dietLine) {
         cursorY -= titleToDietGapH;
         const dietSize = Math.max(8, titleSize * 0.45);
         cursorY -= dietSize * 1.22;
         const dw = bodyItalic.widthOfTextAtSize(dietLine, dietSize);
-        page.drawText(dietLine, { x: x0 + (A6_W - dw) / 2, y: cursorY, size: dietSize, font: bodyItalic, color: ink });
+        page.drawText(dietLine, { x: x0 + (labelW - dw) / 2, y: cursorY, size: dietSize, font: bodyItalic, color: ink });
       }
 
       const zonePad = mmToPt(1.2);
@@ -548,11 +568,12 @@ export async function renderBuffetLabelSheetsPdf(
 export async function renderAllBuffetPdfs(
   menu: BuffetMenuState,
   logo: { bytes: Uint8Array; contentType?: string } | null
-): Promise<{ display: Uint8Array; matrix: Uint8Array; labels: Uint8Array }> {
-  const [display, matrix, labels] = await Promise.all([
+): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
+  const [display, matrix, labelsA6, labelsA7] = await Promise.all([
     renderBuffetDisplayMenuPdf(menu),
     renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, logo?.contentType),
-    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, logo?.contentType)
+    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, logo?.contentType, "a6"),
+    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, logo?.contentType, "a7")
   ]);
-  return { display, matrix, labels };
+  return { display, matrix, labelsA6, labelsA7 };
 }

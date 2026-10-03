@@ -20,6 +20,8 @@ export type BuffetMenuState = {
   items: BuffetMenuItem[];
 };
 
+export type BuffetLabelSize = "a6" | "a7";
+
 export const BUFFET_MENU_JSON_SCHEMA_VERSION = 1 as const;
 
 export type BuffetMenuSavedFile = {
