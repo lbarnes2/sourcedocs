@@ -99,6 +99,7 @@ export default function SignagePage() {
   const [adhocVenueLine, setAdhocVenueLine] = useState("");
   const [adhocSubVenueLine, setAdhocSubVenueLine] = useState("");
   const [adhocEventDate, setAdhocEventDate] = useState("");
+  const [adhocMessage, setAdhocMessage] = useState("");
   const [adhocDualArrangement, setAdhocDualArrangement] = useState<SignageDualEventArrangement>("sideBySide");
   const [adhocSecondaryVenueLine, setAdhocSecondaryVenueLine] = useState("");
   const [adhocSecondarySubVenueLine, setAdhocSecondarySubVenueLine] = useState("");
@@ -336,6 +337,7 @@ export default function SignagePage() {
         ...(adhocVenueLine.trim() ? { venueLabel: adhocVenueLine.trim() } : {}),
         ...(adhocSubVenueLine.trim() ? { subVenueLabel: adhocSubVenueLine.trim() } : {}),
         ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {}),
+        ...(adhocSecondaryArrow === "none" && adhocMessage.trim() ? { message: adhocMessage.trim() } : {}),
         ...(adhocSecondaryArrow !== "none"
           ? {
               secondaryArrow: adhocSecondaryArrow,
@@ -1076,6 +1078,18 @@ export default function SignagePage() {
                 placeholder="Optional — same size as venue, regular weight, under venue"
               />
             </label>
+            {adhocSecondaryArrow === "none" ? (
+              <label style={{ display: "block", marginTop: 10 }}>
+                Sign message
+                <textarea
+                  rows={2}
+                  value={adhocMessage}
+                  maxLength={limits.MAX_SIGNAGE_MESSAGE_CHARS}
+                  onChange={(e) => setAdhocMessage(e.target.value)}
+                  placeholder="Optional — e.g. Please use the left hand entrance (bold, above the arrow)"
+                />
+              </label>
+            ) : null}
             <div className="grid two">
               <label>
                 Primary
