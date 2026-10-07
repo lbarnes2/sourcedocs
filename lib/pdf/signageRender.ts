@@ -419,8 +419,10 @@ type SignageLayout = {
   dateSize: number;
   dateLineHeight: number;
   dateFirstBaselineY: number;
-  /** Venue-profile slot message (single-event signs only); same size as the venue line. */
+  /** Slot / ad-hoc message (single-event signs only); starts at venue size, may shrink to date size to fit. */
   messageLines?: string[];
+  messageSize?: number;
+  messageLineHeight?: number;
   messageFirstBaselineY?: number;
   /** Event 2 meta (dual signs only). Uses the same `venueSize` / `dateSize` / line heights as event 1. */
   rightVenueLines: string[];
@@ -591,11 +593,6 @@ function layoutSignageContent(
 
   const hasArrow = arrow !== "none";
   const minDim = Math.min(pageWidth, pageHeight);
-  const arrowSize = hasArrow ? minDim * 0.28 : 0;
-  const arrowHalf = arrowSize * 0.52;
-
-  const cyMin = hasArrow ? innerBottom + arrowHalf + arrowEdgePad : 0;
-  const cyMax = hasArrow ? innerTop - arrowHalf - arrowEdgePad : 0;
   /** Preferred arrow centre: ¼ of inner height above inner bottom (pinned low on the sign). */
   const innerSpan = innerTop - innerBottom;
   const cyTarget = hasArrow ? innerBottom + innerSpan * 0.25 : 0;
@@ -606,16 +603,40 @@ function layoutSignageContent(
   const dRaw = dateLine.trim();
   const mRaw = messageLine.trim();
 
-  const tryLayoutAtSize = (titleSize: number): SignageLayout | null => {
+  /** Signage-scale body lines: ~2× previous sizing so venue/date read from a distance. */
+  const bodySizesForTitle = (titleSize: number) => ({
+    venueSize: Math.min(40, Math.max(20, Math.round(titleSize * 0.52))),
+    dateSize: Math.min(28, Math.max(16, Math.round(titleSize * 0.38)))
+  });
+
+  /**
+   * Fallbacks used only to make room for a message:
+   * - `messageSize`: message font size (default: venue size).
+   * - `arrowScale`: fraction of the normal arrow size.
+   * - `tightArrowBox`: reserve the arrow's real vertical extent (left/right arrows are much shorter than wide)
+   *   instead of the square box used by default.
+   */
+  const tryLayoutAtSize = (
+    titleSize: number,
+    fit: { messageSize?: number; arrowScale?: number; tightArrowBox?: boolean } = {}
+  ): SignageLayout | null => {
+    const { messageSize: messageSizeOverride, arrowScale = 1, tightArrowBox = false } = fit;
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
     const titleLines = breakSignageTitleIntoLines(name, measure, titleMaxW);
     const n = titleLines.length;
     const { capH, desc, lineHeight } = titleMetricsAtSize(titleSize);
 
-    /** Signage-scale body lines: ~2× previous sizing so venue/date read from a distance. */
-    const venueSize = Math.min(40, Math.max(20, Math.round(titleSize * 0.52)));
-    const dateSize = Math.min(28, Math.max(16, Math.round(titleSize * 0.38)));
+    const arrowSize = hasArrow ? minDim * 0.28 * arrowScale : 0;
+    /** Lucide move-left / move-right span y 8–16 of 24 (+ stroke), so ~0.21 of the size each side of centre. */
+    const horizontalArrow = arrow === "left" || arrow === "right";
+    const arrowHalf = arrowSize * (tightArrowBox && horizontalArrow ? 0.25 : 0.52);
+    const cyMin = hasArrow ? innerBottom + arrowHalf + arrowEdgePad : 0;
+    const cyMax = hasArrow ? innerTop - arrowHalf - arrowEdgePad : 0;
+
+    const { venueSize, dateSize } = bodySizesForTitle(titleSize);
+    const messageSize = messageSizeOverride ?? venueSize;
     const { capH: vCap, desc: vDesc, lineHeight: vLh } = bodyMetricsAtSize(venueSize);
+    const { capH: mCap, desc: mDesc, lineHeight: mLh } = bodyMetricsAtSize(messageSize);
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const metaMaxW = borderW - mmToPt(28);
     const venueLines = vRaw
@@ -628,7 +649,7 @@ function layoutSignageContent(
       ? breakSignageTitleIntoLines(dRaw, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
     const messageLines = mRaw
-      ? breakMultilineText(mRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? breakMultilineText(mRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, messageSize), metaMaxW)
       : [];
 
     const vn = venueLines.length;
@@ -650,7 +671,7 @@ function layoutSignageContent(
         k += g + dCap + (dn - 1) * dLh + dDesc;
       }
       if (mn > 0) {
-        k += gapBeforeMessage + vCap + (mn - 1) * vLh + vDesc;
+        k += gapBeforeMessage + mCap + (mn - 1) * mLh + mDesc;
       }
       return k;
     };
@@ -690,7 +711,7 @@ function layoutSignageContent(
       }
 
       if (mn > 0) {
-        messageFirstBaselineY = bottomAfterTitle - gapBeforeMessage - vCap;
+        messageFirstBaselineY = bottomAfterTitle - gapBeforeMessage - mCap;
       }
 
       return { venueFirstBaselineY, subVenueFirstBaselineY, dateFirstBaselineY, messageFirstBaselineY };
@@ -724,6 +745,8 @@ function layoutSignageContent(
         dateLineHeight: dLh,
         dateFirstBaselineY,
         messageLines,
+        messageSize,
+        messageLineHeight: mLh,
         messageFirstBaselineY,
         rightVenueLines: [],
         rightSubVenueLines: [],
@@ -778,21 +801,42 @@ function layoutSignageContent(
     return buildLayout(firstLineY, cy, arrowSize);
   };
 
+  /**
+   * A message should not shrink the whole sign: at each title size, first reserve only the arrow's real height,
+   * then let the message get smaller (and so wrap differently) down to the date size, then let the arrow shrink a
+   * little, before giving up on that title size.
+   * Signs without a message keep the original title-only shrink.
+   */
+  const tryFitAtSize = (titleSize: number): SignageLayout | null => {
+    const fitted = tryLayoutAtSize(titleSize);
+    if (fitted || !mRaw) return fitted;
+    const { venueSize, dateSize } = bodySizesForTitle(titleSize);
+    for (let messageSize = venueSize; messageSize > dateSize; messageSize -= 2) {
+      const l = tryLayoutAtSize(titleSize, { messageSize, tightArrowBox: true });
+      if (l) return l;
+    }
+    for (const arrowScale of hasArrow ? [1, 0.9, 0.8, 0.7] : [1]) {
+      const l = tryLayoutAtSize(titleSize, { messageSize: dateSize, arrowScale, tightArrowBox: true });
+      if (l) return l;
+    }
+    return null;
+  };
+
   let titleSize = preferredTitleSize;
   const minTitleSize = 12;
-  let layout: SignageLayout | null = tryLayoutAtSize(titleSize);
+  let layout: SignageLayout | null = tryFitAtSize(titleSize);
 
   while (!layout && titleSize > minTitleSize) {
     titleSize -= 1;
-    layout = tryLayoutAtSize(titleSize);
+    layout = tryFitAtSize(titleSize);
   }
 
   if (!layout) {
-    layout = tryLayoutAtSize(minTitleSize);
+    layout = tryFitAtSize(minTitleSize);
   }
   if (!layout) {
     for (let s = minTitleSize - 1; s >= 8; s -= 1) {
-      layout = tryLayoutAtSize(s);
+      layout = tryFitAtSize(s);
       if (layout) break;
     }
   }
@@ -2063,15 +2107,17 @@ export async function renderSignagePdf(
 
     if (!layout.dualColumn && layout.messageLines && layout.messageLines.length > 0) {
       const firstY = layout.messageFirstBaselineY ?? 0;
+      const size = layout.messageSize ?? layout.venueSize;
+      const step = layout.messageLineHeight ?? layout.venueLineHeight;
       for (let i = 0; i < layout.messageLines.length; i++) {
         const line = layout.messageLines[i]!;
-        const lw = bodyBold.widthOfTextAtSize(line, layout.venueSize);
+        const lw = bodyBold.widthOfTextAtSize(line, size);
         const x = margin + (borderW - lw) / 2;
         page.drawText(line, {
           x,
-          y: firstY - i * layout.venueLineHeight,
+          y: firstY - i * step,
           font: bodyBold,
-          size: layout.venueSize,
+          size,
           color: primary
         });
       }
