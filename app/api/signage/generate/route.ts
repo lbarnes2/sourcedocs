@@ -153,6 +153,7 @@ export async function POST(request: Request) {
             orientation: slot.orientation,
             arrow: slot.arrow,
             eventName: body.eventName,
+            messageLine: slot.message ?? "",
             venueLine,
             subVenueLine,
             dateLine,

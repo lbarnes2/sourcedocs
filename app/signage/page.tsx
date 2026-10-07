@@ -429,7 +429,8 @@ export default function SignagePage() {
             <div id="venue-profile-editor" hidden={!venueProfileEditorOpen}>
             <p className="text-muted" style={{ marginTop: 0 }}>
               Each profile lists the signs you need for that venue (e.g. 3× A4 portrait up, 1× A3 welcome with no arrow).
-              Save defaults for venue and client logos to speed up one-click generation.
+              Give a slot a sign message (e.g. “Please use the left hand entrance”) to print the same directions on it for
+              every event. Save defaults for venue and client logos to speed up one-click generation.
             </p>
             <p className="text-muted" style={{ marginTop: -4 }}>
               Need to add, rename, or delete a logo? Use the <Link href="/logo-library">Logo Library</Link>.
@@ -579,6 +580,16 @@ export default function SignagePage() {
                     />
                   </label>
                 </div>
+                <label style={{ display: "block", marginTop: 10 }}>
+                  Sign message (optional, saved with the profile)
+                  <textarea
+                    rows={2}
+                    value={slot.message ?? ""}
+                    maxLength={limits.MAX_SIGNAGE_MESSAGE_CHARS}
+                    placeholder="e.g. Please use the left hand entrance — printed on this sign for every event, above the arrow"
+                    onChange={(e) => updateSlot(index, { message: e.target.value ? e.target.value : undefined })}
+                  />
+                </label>
                 <div className="grid two" style={{ marginTop: 10 }}>
                   <label>
                     Paper

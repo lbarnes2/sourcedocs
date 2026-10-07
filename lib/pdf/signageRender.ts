@@ -69,6 +69,11 @@ export interface SignagePageInput {
   secondaryVenueLine?: string;
   secondarySubVenueLine?: string;
   secondaryDateLine?: string;
+  /**
+   * Fixed free-text message from the venue profile slot (single-event signs only), drawn in Noto Sans Bold
+   * in the primary colour below the venue / date lines and above the arrow. Line breaks are kept.
+   */
+  messageLine?: string;
   theme: SignageThemeColors;
 }
 
@@ -115,6 +120,15 @@ function breakSignageTitleIntoLines(
   }
   if (line) lines.push(line);
   return lines.length ? lines : [""];
+}
+
+/** Like `breakSignageTitleIntoLines`, but keeps the author's explicit line breaks (blank lines dropped). */
+function breakMultilineText(text: string, measure: (t: string) => number, maxWidth: number): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((para) => para.trim())
+    .filter(Boolean)
+    .flatMap((para) => breakSignageTitleIntoLines(para, measure, maxWidth));
 }
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
@@ -405,6 +419,9 @@ type SignageLayout = {
   dateSize: number;
   dateLineHeight: number;
   dateFirstBaselineY: number;
+  /** Venue-profile slot message (single-event signs only); same size as the venue line. */
+  messageLines?: string[];
+  messageFirstBaselineY?: number;
   /** Event 2 meta (dual signs only). Uses the same `venueSize` / `dateSize` / line heights as event 1. */
   rightVenueLines: string[];
   rightSubVenueLines: string[];
@@ -540,6 +557,7 @@ function layoutSignageContent(
   venueLine: string,
   subVenueLine: string,
   dateLine: string,
+  messageLine: string,
   titleFont: PDFFont,
   bodyFont: PDFFont,
   bodyBoldFont: PDFFont,
@@ -565,6 +583,8 @@ function layoutSignageContent(
   /** Between main venue block and sub-venue line. */
   const gapVenueSub = mmToPt(4);
   const gapVenueDate = mmToPt(5);
+  /** Between the title / venue / date block and the profile message (set apart so it reads with the arrow). */
+  const gapBeforeMessage = mmToPt(10);
 
   const innerBottom = margin + INNER_BORDER_INSET;
   const innerTop = margin + borderH - INNER_BORDER_INSET;
@@ -584,6 +604,7 @@ function layoutSignageContent(
   const vRaw = venueLine.trim();
   const sRaw = subVenueLine.trim();
   const dRaw = dateLine.trim();
+  const mRaw = messageLine.trim();
 
   const tryLayoutAtSize = (titleSize: number): SignageLayout | null => {
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
@@ -606,10 +627,14 @@ function layoutSignageContent(
     const dateLines = dRaw
       ? breakSignageTitleIntoLines(dRaw, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
+    const messageLines = mRaw
+      ? breakMultilineText(mRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      : [];
 
     const vn = venueLines.length;
     const sn = subVenueLines.length;
     const dn = dateLines.length;
+    const mn = messageLines.length;
 
     const computeK0 = (): number => {
       let k = (n - 1) * lineHeight + desc;
@@ -624,16 +649,25 @@ function layoutSignageContent(
         const g = vn > 0 || sn > 0 ? gapVenueDate : gapAfterTitle;
         k += g + dCap + (dn - 1) * dLh + dDesc;
       }
+      if (mn > 0) {
+        k += gapBeforeMessage + vCap + (mn - 1) * vLh + vDesc;
+      }
       return k;
     };
 
     const computeBaselines = (
       firstLineY: number
-    ): { venueFirstBaselineY: number; subVenueFirstBaselineY: number; dateFirstBaselineY: number } => {
+    ): {
+      venueFirstBaselineY: number;
+      subVenueFirstBaselineY: number;
+      dateFirstBaselineY: number;
+      messageFirstBaselineY: number;
+    } => {
       const titleBottom = firstLineY - (n - 1) * lineHeight - desc;
       let venueFirstBaselineY = 0;
       let subVenueFirstBaselineY = 0;
       let dateFirstBaselineY = 0;
+      let messageFirstBaselineY = 0;
 
       let bottomAfterTitle = titleBottom;
       if (vn > 0) {
@@ -652,9 +686,14 @@ function layoutSignageContent(
       if (dn > 0) {
         const g = vn > 0 || sn > 0 ? gapVenueDate : gapAfterTitle;
         dateFirstBaselineY = bottomAfterTitle - g - dCap;
+        bottomAfterTitle = dateFirstBaselineY - (dn - 1) * dLh - dDesc;
       }
 
-      return { venueFirstBaselineY, subVenueFirstBaselineY, dateFirstBaselineY };
+      if (mn > 0) {
+        messageFirstBaselineY = bottomAfterTitle - gapBeforeMessage - vCap;
+      }
+
+      return { venueFirstBaselineY, subVenueFirstBaselineY, dateFirstBaselineY, messageFirstBaselineY };
     };
 
     const buildLayout = (
@@ -662,7 +701,8 @@ function layoutSignageContent(
       cy: number | null,
       asz: number
     ): SignageLayout => {
-      const { venueFirstBaselineY, subVenueFirstBaselineY, dateFirstBaselineY } = computeBaselines(firstLineY);
+      const { venueFirstBaselineY, subVenueFirstBaselineY, dateFirstBaselineY, messageFirstBaselineY } =
+        computeBaselines(firstLineY);
       return {
         titleSize,
         titleLines,
@@ -683,6 +723,8 @@ function layoutSignageContent(
         dateSize,
         dateLineHeight: dLh,
         dateFirstBaselineY,
+        messageLines,
+        messageFirstBaselineY,
         rightVenueLines: [],
         rightSubVenueLines: [],
         rightDateLines: [],
@@ -1714,6 +1756,7 @@ export async function renderSignagePdf(
           spec.venueLine ?? "",
           spec.subVenueLine ?? "",
           spec.dateLine ?? "",
+          spec.messageLine ?? "",
           title,
           body,
           bodyBold,
@@ -2014,6 +2057,22 @@ export async function renderSignagePdf(
           font: body,
           size: layout.dateSize,
           color: textColor
+        });
+      }
+    }
+
+    if (!layout.dualColumn && layout.messageLines && layout.messageLines.length > 0) {
+      const firstY = layout.messageFirstBaselineY ?? 0;
+      for (let i = 0; i < layout.messageLines.length; i++) {
+        const line = layout.messageLines[i]!;
+        const lw = bodyBold.widthOfTextAtSize(line, layout.venueSize);
+        const x = margin + (borderW - lw) / 2;
+        page.drawText(line, {
+          x,
+          y: firstY - i * layout.venueLineHeight,
+          font: bodyBold,
+          size: layout.venueSize,
+          color: primary
         });
       }
     }
