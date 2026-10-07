@@ -5,8 +5,20 @@ import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { buildEmptyFloorplanDraft, buildTablesFromAutoLayout, copyForDuplicate } from "@/lib/floorplans/model";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
-import { downloadPdfBlobAsPngs } from "@/lib/pdf/pdfToPngExport";
+import { readResponseError } from "@/lib/http/readError";
+import { downloadBlob, downloadPdfBlobAsPngs } from "@/lib/pdf/pdfToPngExport";
 import type { FloorplanCanvasObject, FloorplanDocument, FloorplanListItem } from "@/types";
+
+/** Next free table number: one past the highest numeric table (shapes and labels don't count). */
+function nextTableNumber(objects: FloorplanCanvasObject[]): string {
+  let highest = 0;
+  for (const obj of objects) {
+    if (obj.type !== "table") continue;
+    const n = Number(obj.tableNumber);
+    if (Number.isInteger(n) && n > highest) highest = n;
+  }
+  return String(highest + 1);
+}
 
 function snap(value: number, grid: number, free: boolean): number {
   if (free) return value;
@@ -72,8 +84,8 @@ export default function FloorplansPage() {
 
   async function refreshList() {
     const response = await fetch("/api/floorplans/saved");
+    if (!response.ok) throw new Error(await readResponseError(response, "Failed to list floorplans."));
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Failed to list floorplans.");
     setItems(Array.isArray(payload.items) ? payload.items : []);
   }
 
@@ -144,8 +156,8 @@ export default function FloorplansPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft)
       });
+      if (!response.ok) throw new Error(await readResponseError(response, "Save failed."));
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Save failed.");
       setDraft((prev) => ({ ...prev, id: payload.id as string, savedAt: payload.savedAt as string }));
       await refreshList();
     } catch (err) {
@@ -160,8 +172,8 @@ export default function FloorplansPage() {
     setError("");
     try {
       const response = await fetch(`/api/floorplans/saved/${encodeURIComponent(id)}`);
+      if (!response.ok) throw new Error(await readResponseError(response, "Load failed."));
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Load failed.");
       setDraft(payload.floorplan as FloorplanDocument);
       setActiveId(null);
       setSelectedIds([]);
@@ -174,13 +186,22 @@ export default function FloorplansPage() {
   }
 
   async function deleteCurrent() {
+    const isSaved = items.some((item) => item.id === draft.id);
+    if (!isSaved) {
+      // Never-saved draft: nothing to delete on the server, so treat this as "discard".
+      if (!window.confirm("This floorplan has not been saved. Discard it and start a new one?")) return;
+      pushUndoSnapshot();
+      setDraft(buildEmptyFloorplanDraft());
+      setActiveId(null);
+      setSelectedIds([]);
+      return;
+    }
     if (!window.confirm("Delete this saved floorplan?")) return;
     setBusy(true);
     setError("");
     try {
       const response = await fetch(`/api/floorplans/saved/${encodeURIComponent(draft.id)}`, { method: "DELETE" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Delete failed.");
+      if (!response.ok) throw new Error(await readResponseError(response, "Delete failed."));
       setDraft(buildEmptyFloorplanDraft());
       setActiveId(null);
       setSelectedIds([]);
@@ -202,20 +223,12 @@ export default function FloorplansPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ floorplan: draft })
       });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.error || "Print failed.");
-      }
+      if (!response.ok) throw new Error(await readResponseError(response, "Print failed."));
       const blob = await response.blob();
       if (outputFormat === "png") {
         await downloadPdfBlobAsPngs(blob, "floorplan");
       } else {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = "floorplan.pdf";
-        anchor.click();
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, "floorplan.pdf");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Print failed.");
@@ -225,6 +238,7 @@ export default function FloorplansPage() {
   }
 
   function seedFromAutoLayout() {
+    pushUndoSnapshot();
     const nextTables = buildTablesFromAutoLayout(draft.autoLayout, tableCount);
     setDraft((prev) => ({
       ...prev,
@@ -241,7 +255,7 @@ export default function FloorplansPage() {
     if (kind === "table") {
       setDraft((prev) => ({
         ...prev,
-        objects: [...prev.objects, { id, type: "table", tableNumber: String(prev.objects.length + 1), x: 96, y: 96, radius: 18 }]
+        objects: [...prev.objects, { id, type: "table", tableNumber: nextTableNumber(prev.objects), x: 96, y: 96, radius: 18 }]
       }));
       return;
     }
@@ -477,7 +491,8 @@ export default function FloorplansPage() {
           </label>
           <label>
             Load floorplan
-            <select onChange={(e) => { if (e.target.value) void loadItem(e.target.value); }} defaultValue="">
+            {/* Resets after each pick so the same plan can be re-loaded to discard unsaved changes. */}
+            <select value="" onChange={(e) => { if (e.target.value) void loadItem(e.target.value); }}>
               <option value="">-- choose --</option>
               {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>

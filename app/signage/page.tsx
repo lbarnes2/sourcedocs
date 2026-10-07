@@ -6,7 +6,8 @@ import { ArrowSymbolPicker } from "./ArrowSymbolPicker";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
-import { downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
+import { readResponseError } from "@/lib/http/readError";
+import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import * as limits from "@/lib/validation/limits";
 import { SIGNAGE_LOGO_NONE_SENTINEL } from "@/lib/signage/logoSelection";
 import type { PaperSize, SignageArrowDirection, SignageDualEventArrangement, VenueSignageProfile, VenueSignageSlot } from "@/types";
@@ -46,22 +47,11 @@ async function downloadPdf(response: Response, fallbackName: string) {
   const cd = response.headers.get("Content-Disposition");
   const m = cd?.match(/filename="([^"]+)"/);
   const name = m?.[1] ?? fallbackName;
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name.endsWith(".pdf") ? name : `${name}.pdf`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, name.endsWith(".pdf") ? name : `${name}.pdf`);
 }
 
 function downloadPdfBase64(base64: string, filename: string) {
-  const blob = pdfBase64ToBlob(base64);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(pdfBase64ToBlob(base64), filename.endsWith(".pdf") ? filename : `${filename}.pdf`);
 }
 
 function pdfBase64ToBlob(base64: string): Blob {
@@ -75,6 +65,7 @@ export default function SignagePage() {
   const [profiles, setProfiles] = useState<VenueSignageProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [draft, setDraft] = useState<VenueSignageProfile>(() => defaultProfile());
@@ -177,8 +168,7 @@ export default function SignagePage() {
         body: JSON.stringify(draft)
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error((j as { error?: string }).error ?? "Save failed.");
+        throw new Error(await readResponseError(r, "Save failed."));
       }
       await loadProfiles();
       setSelectedId(draft.id);
@@ -198,7 +188,7 @@ export default function SignagePage() {
       const r = await fetch(`/api/signage/venues?id=${encodeURIComponent(selectedId)}`, {
         method: "DELETE"
       });
-      if (!r.ok) throw new Error("Delete failed.");
+      if (!r.ok) throw new Error(await readResponseError(r, "Delete failed."));
       setSelectedId(null);
       setDraft(defaultProfile());
       await loadProfiles();
@@ -248,6 +238,7 @@ export default function SignagePage() {
     }
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       const themeOverride = packOverrideTheme
         ? {
@@ -275,8 +266,7 @@ export default function SignagePage() {
         body: JSON.stringify(body)
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error((j as { error?: string }).error ?? "Generation failed.");
+        throw new Error(await readResponseError(r, "Generation failed."));
       }
       const ct = r.headers.get("content-type") ?? "";
       if (ct.includes("application/json")) {
@@ -299,10 +289,17 @@ export default function SignagePage() {
             `${base}-png.zip`
           );
         } else {
+          // One PDF per paper size (for printer tray selection). Space the downloads out so
+          // browsers treat them as separate user-initiated files.
           pdfs.forEach((pdf, index) => {
-            const delay = index * 200;
+            const delay = index * 700;
             window.setTimeout(() => downloadPdfBase64(pdf.base64, `${base}-${pdf.fileSuffix}.pdf`), delay);
           });
+          if (pdfs.length > 1) {
+            setNotice(
+              `Downloading ${pdfs.length} PDFs (one per paper size). If your browser asks, allow multiple downloads for this site.`
+            );
+          }
         }
       } else {
         const fallbackName = `signage-${packEventName.trim()}`;
@@ -334,8 +331,8 @@ export default function SignagePage() {
         orientation: adhocOrientation,
         arrow: adhocArrow,
         theme: adhocTheme,
-        venueLogoKey: adhocVenueKey || undefined,
-        clientLogoKey: adhocClientKey || undefined,
+        venueLogoKey: signageLogoKeyForApi(adhocVenueKey),
+        clientLogoKey: signageLogoKeyForApi(adhocClientKey),
         ...(adhocVenueLine.trim() ? { venueLabel: adhocVenueLine.trim() } : {}),
         ...(adhocSubVenueLine.trim() ? { subVenueLabel: adhocSubVenueLine.trim() } : {}),
         ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {}),
@@ -356,8 +353,7 @@ export default function SignagePage() {
         body: JSON.stringify(body)
       });
       if (!r.ok) {
-        const j = await r.json().catch(() => ({}));
-        throw new Error((j as { error?: string }).error ?? "Generation failed.");
+        throw new Error(await readResponseError(r, "Generation failed."));
       }
       const fallbackName = `signage-${adhocEventName.trim()}`;
       if (adhocOutputFormat === "png") {
@@ -388,6 +384,11 @@ export default function SignagePage() {
       {error ? (
         <p className="error" role="alert">
           {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="pill" role="status">
+          {notice}
         </p>
       ) : null}
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { defaultThemeSettings } from "@/lib/defaults";
 import { listFloorplans, saveFloorplan } from "@/lib/floorplans/store";
 import { floorplanSavePayloadSchema, withFloorplanSaveDefaults } from "@/lib/validation/floorplanSchemas";
@@ -11,7 +12,7 @@ export async function GET() {
     const items = await listFloorplans();
     return NextResponse.json({ storage: isR2Configured() ? "r2" : "local", items });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to list floorplans.";
+    const message = errorMessage(error, "Failed to list floorplans.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -26,7 +27,7 @@ export async function PUT(request: Request) {
   const parsed = floorplanSavePayloadSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid payload.", details: parsed.error.flatten() },
+      { error: `Invalid payload — ${errorMessage(parsed.error, "check the fields")}`, details: parsed.error.flatten() },
       { status: 400 }
     );
   }
@@ -56,7 +57,7 @@ export async function PUT(request: Request) {
     await saveFloorplan(doc);
     return NextResponse.json({ ok: true, id: doc.id, savedAt: doc.savedAt });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Save failed.";
+    const message = errorMessage(error, "Save failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

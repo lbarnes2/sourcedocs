@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { renderAllBuffetPdfs } from "@/lib/pdf/buffetMenuPdf";
 import { loadLogoBytesFromKey, parseDataUrlImage } from "@/lib/signage/loadLogoBytes";
 import { isR2Configured } from "@/lib/storage/r2";
@@ -30,14 +31,19 @@ export async function POST(request: Request) {
   const parsed = buffetMenuGenerateBodySchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid payload.", details: parsed.error.flatten() },
+      { error: `Invalid payload — ${errorMessage(parsed.error, "check the fields")}`, details: parsed.error.flatten() },
       { status: 400 }
     );
   }
   const { menu, venueLogoKey, venueLogoDataUrl, export: exportMode } = parsed.data;
-  const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
-
-  const { display, matrix, labelsA6, labelsA7 } = await renderAllBuffetPdfs(menu, logo);
+  let rendered: Awaited<ReturnType<typeof renderAllBuffetPdfs>>;
+  try {
+    const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
+    rendered = await renderAllBuffetPdfs(menu, logo);
+  } catch (error) {
+    return NextResponse.json({ error: errorMessage(error, "Generation failed.") }, { status: 500 });
+  }
+  const { display, matrix, labelsA6, labelsA7 } = rendered;
 
   if (exportMode === "zip") {
     const zip = new JSZip();

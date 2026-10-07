@@ -11,6 +11,10 @@ import {
   themeSchema
 } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
+import { isValidProjectUuid } from "@/lib/projects/projectKeys";
+
+/** Same rule the storage layer enforces, so bad ids fail validation with a clear message. */
+const projectIdSchema = z.string().refine(isValidProjectUuid, "Invalid project id (expected a v1–v5 UUID).");
 
 const documentTypeSchema = z.enum([
   "tablePlanByTable",
@@ -29,7 +33,7 @@ const guestRecordSchema = z.object({
   main: z.string().max(2000),
   dessert: z.string().max(2000),
   dietaryOriginal: z.string().max(4000),
-  dietaryNormalized: z.array(z.string().max(500))
+  dietaryNormalized: z.array(z.string().max(4000))
 });
 
 const dishOverrideSchema = z.object({
@@ -45,7 +49,7 @@ const duplicateGroupSchema = z.object({
 
 /** Client omits `id` / `savedAt` / `version` on create; may send existing `id` to overwrite. */
 const savePayloadBaseSchema = z.object({
-  id: z.string().uuid().optional().nullable(),
+  id: projectIdSchema.optional().nullable(),
   name: z.string().min(1).max(500),
   csvText: z.string().max(limits.MAX_CSV_TEXT_CHARS),
   headers: z.array(z.string().max(500)).max(2000),
@@ -117,7 +121,7 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
 const loadedFileSchema = savePayloadBaseSchema
   .extend({
     version: z.literal(1),
-    id: z.string().uuid(),
+    id: projectIdSchema,
     name: z.string().min(1).max(500),
     savedAt: z.string().min(1)
   })

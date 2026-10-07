@@ -100,3 +100,20 @@ export async function replaceVenueLogoKeyInAllBuffetMenus(oldKey: string, newKey
     }
   }
 }
+
+/** Saved buffet menus that reference `key` as their venue logo. */
+export async function listBuffetMenusUsingLogoKey(key: string): Promise<string[]> {
+  const keys = (await r2ListObjectKeys(BUFFET_MENU_PREFIX)).filter((k) => k.endsWith(".json"));
+  const names: string[] = [];
+  for (const objectKey of keys) {
+    const raw = await r2GetObjectUtf8(objectKey);
+    if (!raw) continue;
+    try {
+      const doc = buffetMenuSavedFileSchema.safeParse(JSON.parse(raw) as unknown);
+      if (doc.success && doc.data.venueLogoKey === key) names.push(doc.data.name);
+    } catch {
+      continue;
+    }
+  }
+  return names;
+}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { BUFFET_MENU_PREFIX, deleteSavedBuffetMenu, getSavedBuffetMenu } from "@/lib/buffetMenu/savedR2";
 import { isR2Configured } from "@/lib/storage/r2";
 
@@ -32,7 +33,7 @@ export async function DELETE(_request: Request, context: Ctx) {
     await deleteSavedBuffetMenu(key);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Delete failed.";
+    const message = errorMessage(error, "Delete failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

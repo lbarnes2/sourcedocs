@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { embedRasterDataUrl } from "@/lib/pdf/imageFormat";
 import path from "node:path";
 import { PDFDocument, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
@@ -78,13 +79,9 @@ async function embedLogoFromDataUrl(
   logoDataUrl: string | undefined,
   options: { x: number; centerY: number; width: number }
 ) {
-  if (!logoDataUrl) return;
-  const split = logoDataUrl.split(",");
-  if (split.length !== 2) return;
-  const mime = split[0];
-  const bytes = Uint8Array.from(Buffer.from(split[1], "base64"));
+  const image = await embedRasterDataUrl(doc, logoDataUrl);
+  if (!image) return;
   try {
-    const image = mime.includes("png") ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
     const width = options.width;
     const height = (image.height / image.width) * width;
     page.drawImage(image, {

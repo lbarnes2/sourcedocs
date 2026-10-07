@@ -33,8 +33,18 @@ export async function renameLogoObject(
     const taken = await r2ObjectExists(candidate);
     if (!taken) {
       await r2CopyObject(oldKey, candidate);
-      await afterReplace(oldKey, candidate);
-      await r2DeleteObject(oldKey);
+      try {
+        await afterReplace(oldKey, candidate);
+      } catch (error) {
+        // Point anything already rewritten back at the original and drop the copy,
+        // so saved items never reference a mix of old and new keys.
+        await afterReplace(candidate, oldKey).catch(() => undefined);
+        await r2DeleteObject(candidate).catch(() => undefined);
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Rename failed while updating saved items, so it was rolled back. (${reason})`);
+      }
+      // References now use the new key; a failed cleanup only leaves an unused duplicate behind.
+      await r2DeleteObject(oldKey).catch(() => undefined);
       return { key: candidate };
     }
   }

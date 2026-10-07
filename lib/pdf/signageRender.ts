@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { embedRasterBytes } from "@/lib/pdf/imageFormat";
 import path from "node:path";
 import {
   CornerDownLeft,
@@ -324,31 +325,6 @@ function computeLogoPlacement(
       ? margin + logoPad
       : pageWidth - margin - logoPad - dw;
   return { dw, dh, bottomY, x };
-}
-
-async function embedRasterImage(
-  doc: PDFDocument,
-  bytes: Uint8Array,
-  contentType?: string
-): Promise<PDFImage | null> {
-  const ct = (contentType || "").toLowerCase();
-  try {
-    if (ct.includes("png") || bytes[0] === 0x89) {
-      return await doc.embedPng(bytes);
-    }
-    if (ct.includes("jpeg") || ct.includes("jpg") || (bytes[0] === 0xff && bytes[1] === 0xd8)) {
-      return await doc.embedJpg(bytes);
-    }
-    if (bytes[0] === 0x89) {
-      return await doc.embedPng(bytes);
-    }
-    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
-      return await doc.embedJpg(bytes);
-    }
-  } catch {
-    return null;
-  }
-  return null;
 }
 
 /** Approximate cap-height / descender for Cormorant embedded at size s (PDF baseline metrics). */
@@ -1652,10 +1628,10 @@ export async function renderSignagePdf(
   let venueImg: PDFImage | null = null;
   let clientImg: PDFImage | null = null;
   if (options.venueBytes) {
-    venueImg = await embedRasterImage(doc, options.venueBytes.bytes, options.venueBytes.contentType);
+    venueImg = await embedRasterBytes(doc, options.venueBytes.bytes);
   }
   if (options.clientBytes) {
-    clientImg = await embedRasterImage(doc, options.clientBytes.bytes, options.clientBytes.contentType);
+    clientImg = await embedRasterBytes(doc, options.clientBytes.bytes);
   }
   const logos = { venue: venueImg, client: clientImg };
 

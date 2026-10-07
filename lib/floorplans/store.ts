@@ -33,3 +33,7 @@ export async function replaceClientLogoKeyInAllFloorplans(oldKey: string, newKey
   return fsStore.replaceClientLogoKeyInAllFloorplansFs(oldKey, newKey);
 }
 
+export async function listFloorplanLogoUsage() {
+  if (isR2Configured()) return r2Store.listFloorplanLogoUsageR2();
+  return fsStore.listFloorplanLogoUsageFs();
+}

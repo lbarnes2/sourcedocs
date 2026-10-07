@@ -15,6 +15,8 @@ import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { catSortableId, parseSortableId } from "@/app/buffet-menu/dndTypes";
+import { readResponseError } from "@/lib/http/readError";
+import { downloadBlob } from "@/lib/pdf/pdfToPngExport";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import {
@@ -353,17 +355,8 @@ export default function BuffetMenuPage() {
           export: exportMode
         })
       });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || "Generation failed.");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = BUFFET_DOWNLOAD_FILE_NAMES[exportMode];
-      a.click();
-      URL.revokeObjectURL(url);
+      if (!res.ok) throw new Error(await readResponseError(res, "Generation failed."));
+      downloadBlob(await res.blob(), BUFFET_DOWNLOAD_FILE_NAMES[exportMode]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
     } finally {
@@ -386,10 +379,7 @@ export default function BuffetMenuPage() {
           venueLogoKey: venueLogoKey || null
         })
       });
-      if (!res.ok) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || "Save failed.");
-      }
+      if (!res.ok) throw new Error(await readResponseError(res, "Save failed."));
       const j = (await res.json()) as { id: string };
       setSavedId(j.id);
       await refreshSaved();
@@ -405,7 +395,7 @@ export default function BuffetMenuPage() {
     setBusy(true);
     try {
       const res = await fetch(`/api/buffet-menu/saved/${encodeURIComponent(id)}`);
-      if (!res.ok) throw new Error("Could not load.");
+      if (!res.ok) throw new Error(await readResponseError(res, "Could not load."));
       const doc = (await res.json()) as { name: string; venueLogoKey: string | null; menu: import("@/types/buffetMenu").BuffetMenuState };
       setSavedName(doc.name);
       setSavedId(id);
@@ -423,7 +413,7 @@ export default function BuffetMenuPage() {
     setError("");
     try {
       const res = await fetch(`/api/buffet-menu/saved/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Delete failed.");
+      if (!res.ok) throw new Error(await readResponseError(res, "Delete failed."));
       if (savedId === id) {
         setSavedId(null);
         setStore(createEmptyMenuStore());

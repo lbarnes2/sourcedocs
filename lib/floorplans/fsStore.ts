@@ -164,3 +164,20 @@ export async function replaceClientLogoKeyInAllFloorplansFs(oldKey: string, newK
   }
 }
 
+/** Logo keys referenced by each saved floorplan (used to warn before deleting a library logo). */
+export async function listFloorplanLogoUsageFs(): Promise<Array<{ name: string; venueKey: string | null; clientKey: string | null }>> {
+  await ensureFloorplanDir();
+  const files = await fs.readdir(FLOORPLAN_DIR);
+  const out: Array<{ name: string; venueKey: string | null; clientKey: string | null }> = [];
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    if (!isValidFloorplanUuid(file.slice(0, -".json".length))) continue;
+    try {
+      const data = JSON.parse(await fs.readFile(path.join(FLOORPLAN_DIR, file), "utf8")) as FloorplanDocument;
+      out.push({ name: data.name, venueKey: data.selectedVenueLogoKey ?? null, clientKey: data.selectedClientLogoKey ?? null });
+    } catch {
+      // skip corrupt
+    }
+  }
+  return out;
+}

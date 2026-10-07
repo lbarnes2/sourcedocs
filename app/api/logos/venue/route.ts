@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { isR2Configured } from "@/lib/storage/r2";
 import { deleteVenueLogo, listVenueLogos, renameVenueLogo, saveVenueLogoUpload } from "@/lib/logos/venueR2";
-
-const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
+import { isPrintableLogoKey, logoContentTypeFromBytes } from "@/lib/logos/logoUpload";
+import { findLogoKeyReferences } from "@/lib/logos/replaceLogoKeyRefs";
 
 export async function GET() {
   if (!isR2Configured()) {
-    return NextResponse.json({ configured: false, items: [] as { key: string; label: string; assetUrl: string }[] });
+    return NextResponse.json({ configured: false, items: [] as { key: string; label: string; printable: boolean; assetUrl: string }[] });
   }
   const items = (await listVenueLogos()).map((item) => ({
     key: item.key,
     label: item.label,
+    printable: isPrintableLogoKey(item.key),
     assetUrl: `/api/logos/venue/asset?key=${encodeURIComponent(item.key)}`
   }));
   return NextResponse.json({ configured: true, items });
@@ -26,16 +28,10 @@ export async function POST(request: Request) {
     if (!(file instanceof File) || file.size === 0) {
       return NextResponse.json({ error: "Expected multipart field \"file\" with image data." }, { status: 400 });
     }
-    const contentType = (file.type || "application/octet-stream").toLowerCase();
-    if (!ALLOWED_TYPES.has(contentType)) {
-      return NextResponse.json(
-        { error: "Unsupported type. Use PNG, JPEG, WebP, or GIF." },
-        { status: 400 }
-      );
-    }
     const buffer = Buffer.from(await file.arrayBuffer());
+    const contentType = logoContentTypeFromBytes(buffer);
     const { key } = await saveVenueLogoUpload(buffer, {
-      contentType: contentType === "image/jpg" ? "image/jpeg" : contentType,
+      contentType,
       originalName: file.name
     });
     return NextResponse.json({
@@ -44,7 +40,7 @@ export async function POST(request: Request) {
       assetUrl: `/api/logos/venue/asset?key=${encodeURIComponent(key)}`
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Upload failed.";
+    const message = errorMessage(error, "Upload failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -67,7 +63,7 @@ export async function PATCH(request: Request) {
       assetUrl: `/api/logos/venue/asset?key=${encodeURIComponent(newKey)}`
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Rename failed.";
+    const message = errorMessage(error, "Rename failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -82,10 +78,19 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "Missing key query parameter." }, { status: 400 });
   }
   try {
+    if (url.searchParams.get("force") !== "1") {
+      const references = await findLogoKeyReferences(key);
+      if (references.length) {
+        return NextResponse.json(
+          { error: "This logo is still in use.", references },
+          { status: 409 }
+        );
+      }
+    }
     await deleteVenueLogo(key);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Delete failed.";
+    const message = errorMessage(error, "Delete failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

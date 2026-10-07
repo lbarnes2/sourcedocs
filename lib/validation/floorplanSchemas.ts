@@ -2,6 +2,10 @@ import { z } from "zod";
 import { defaultFloorplanCanvasSettings, defaultFloorplanMetadata, defaultFloorplanSettings } from "@/lib/defaults";
 import { floorplanSchema, themeSchema } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
+import { isValidFloorplanUuid } from "@/lib/floorplans/floorplanKeys";
+
+/** Same rule the storage layer enforces, so bad ids fail validation with a clear message. */
+const floorplanIdSchema = z.string().refine(isValidFloorplanUuid, "Invalid floorplan id (expected a v1–v5 UUID).");
 
 const objectBase = z.object({
   id: z.string().min(1).max(100),
@@ -46,7 +50,7 @@ export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
 
 export const floorplanDocumentSchema = z.object({
   version: z.literal(1),
-  id: z.string().uuid(),
+  id: floorplanIdSchema,
   name: z.string().min(1).max(500),
   savedAt: z.string().min(1),
   metadata: z.object({
@@ -66,7 +70,7 @@ export const floorplanDocumentSchema = z.object({
 });
 
 export const floorplanSavePayloadSchema = z.object({
-  id: z.string().uuid().optional().nullable(),
+  id: floorplanIdSchema.optional().nullable(),
   name: z.string().min(1).max(500),
   metadata: z
     .object({

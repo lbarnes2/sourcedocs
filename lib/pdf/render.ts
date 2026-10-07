@@ -3,6 +3,7 @@ import path from "node:path";
 import { degrees, PDFDocument, rgb } from "pdf-lib";
 import { pdfPageDimensions } from "@/lib/paperSizes";
 import { hexToRgb } from "@/lib/pdf/color";
+import { embedRasterDataUrl } from "@/lib/pdf/imageFormat";
 import fontkit from "@pdf-lib/fontkit";
 import type {
   DishMenuDuplicateGroup,
@@ -234,7 +235,17 @@ function drawPseudoBoldText(
   page.drawText(text, { ...options, x: options.x + 0.22 });
 }
 
-type PlaceCardLine = { text: string; fontRef: PDFFont; size: number; color: ReturnType<typeof rgb> };
+type PlaceCardLineKind = "name" | "subtitle" | "table" | "course" | "dietary";
+
+type PlaceCardLine = {
+  text: string;
+  fontRef: PDFFont;
+  size: number;
+  color: ReturnType<typeof rgb>;
+  kind: PlaceCardLineKind;
+  /** Lines from one wrapped entry (e.g. a single course) share a group so they are dropped together. */
+  group: string;
+};
 
 function placeCardLinesHeight(lines: PlaceCardLine[], lineGap: number): number {
   if (lines.length === 0) return 0;
@@ -253,6 +264,8 @@ function buildPlaceCardLines(options: {
   maxTextW: number;
   font: PDFFont;
   bold: PDFFont;
+  /** Drop the event subtitle (decorative) before anything safety-relevant. */
+  omitSubtitle?: boolean;
 }): PlaceCardLine[] {
   const {
     card,
@@ -265,44 +278,45 @@ function buildPlaceCardLines(options: {
     dietaryColor,
     maxTextW,
     font,
-    bold
+    bold,
+    omitSubtitle
   } = options;
   const bodyColor = rgb(0.1, 0.12, 0.17);
   const flatLines: PlaceCardLine[] = [];
 
   wrapTextToWidthClamped(card.name, bold, nameSize, maxTextW).forEach((line) => {
-    flatLines.push({ text: line, fontRef: bold, size: nameSize, color: nameColor });
+    flatLines.push({ text: line, fontRef: bold, size: nameSize, color: nameColor, kind: "name", group: "name" });
   });
 
-  if (theme.eventSubtitle?.trim()) {
+  if (!omitSubtitle && theme.eventSubtitle?.trim()) {
     wrapTextToWidthClamped(theme.eventSubtitle.trim(), font, detailSize, maxTextW).forEach((line) => {
-      flatLines.push({ text: line, fontRef: font, size: detailSize, color: subtitleColor });
+      flatLines.push({ text: line, fontRef: font, size: detailSize, color: subtitleColor, kind: "subtitle", group: "subtitle" });
     });
   }
 
   wrapTextToWidthClamped(`Table ${card.tableNumber}`, font, detailSize, maxTextW).forEach((line) => {
-    flatLines.push({ text: line, fontRef: font, size: detailSize, color: mutedGrey });
+    flatLines.push({ text: line, fontRef: font, size: detailSize, color: mutedGrey, kind: "table", group: "table" });
   });
 
   if (card.courses.starter) {
     wrapTextToWidthClamped(`Starter: ${card.courses.starter}`, font, detailSize, maxTextW).forEach((line) => {
-      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor });
+      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor, kind: "course", group: "starter" });
     });
   }
   if (card.courses.main) {
     wrapTextToWidthClamped(`Main: ${card.courses.main}`, font, detailSize, maxTextW).forEach((line) => {
-      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor });
+      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor, kind: "course", group: "main" });
     });
   }
   if (card.courses.dessert) {
     wrapTextToWidthClamped(`Dessert: ${card.courses.dessert}`, font, detailSize, maxTextW).forEach((line) => {
-      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor });
+      flatLines.push({ text: line, fontRef: font, size: detailSize, color: bodyColor, kind: "course", group: "dessert" });
     });
   }
 
   if (card.dietary.length) {
     wrapTextToWidthClamped(card.dietary.join(", "), bold, detailSize, maxTextW).forEach((line) => {
-      flatLines.push({ text: line, fontRef: bold, size: detailSize, color: dietaryColor });
+      flatLines.push({ text: line, fontRef: bold, size: detailSize, color: dietaryColor, kind: "dietary", group: "dietary" });
     });
   }
 
@@ -321,13 +335,9 @@ async function embedLogoFromDataUrl(
     rotate?: ReturnType<typeof degrees>;
   }
 ) {
-  if (!logoDataUrl) return;
-  const split = logoDataUrl.split(",");
-  if (split.length !== 2) return;
-  const mime = split[0];
-  const bytes = Uint8Array.from(Buffer.from(split[1], "base64"));
+  const image = await embedRasterDataUrl(doc, logoDataUrl);
+  if (!image) return;
   try {
-    const image = mime.includes("png") ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
     const width = options?.width ?? 80;
     const height = (image.height / image.width) * width;
     const x = options?.x ?? page.getWidth() - width - 30;
@@ -726,7 +736,8 @@ export async function renderTablePlanByPersonPdf(
 export async function renderPlaceCardsPdf(
   model: EventModel,
   settings: PlaceCardSettings,
-  theme: ThemeSettings
+  theme: ThemeSettings,
+  options: { warnings?: string[] } = {}
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const pageWidth = PLACE_CARD_STOCK.pageWidthPt;
@@ -755,6 +766,13 @@ export async function renderPlaceCardsPdf(
 
   const cardsPerPage = PLACE_CARD_STOCK.frontSlotsPerPage;
   const detailSizeBase = clamp(10 * settings.fontScale, 9, 10);
+
+  // Embed the back-of-card logo once and reuse it on every card (avoids one copy per card).
+  let backLogo: Awaited<ReturnType<typeof embedRasterDataUrl>> | undefined;
+  const getBackLogo = async () => {
+    if (backLogo === undefined) backLogo = await embedRasterDataUrl(doc, theme.clientLogoDataUrl);
+    return backLogo;
+  };
 
   const batches = chunk(cards, cardsPerPage);
   for (const batch of batches) {
@@ -790,14 +808,10 @@ export async function renderPlaceCardsPdf(
         if (isBackRow) {
           const logoCenterX = x + cardWidth / 2;
           const logoCenterY = y + cardHeight / 2;
-          const logoData = theme.clientLogoDataUrl;
-          if (logoData) {
-            const split = logoData.split(",");
-            if (split.length === 2) {
-              const mime = split[0];
-              const bytes = Uint8Array.from(Buffer.from(split[1], "base64"));
+          const image = await getBackLogo();
+          if (image) {
+            {
               try {
-                const image = mime.includes("png") ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
                 const maxW = cardWidth - 2 * borderInset - 2 * innerPadH;
                 const maxH = cardHeight - 2 * borderInset - 2 * innerPadV;
                 const cap = Math.min(maxW, maxH, mmToPt(42));
@@ -871,34 +885,56 @@ export async function renderPlaceCardsPdf(
         }
 
         if (chosenLines.length === 0) {
+          // Nothing fits at the normal minimum: go smaller and drop the decorative subtitle
+          // before ever touching dietary / allergy text.
+          const fallbackSize = 5;
           chosenLines = buildPlaceCardLines({
             card,
             theme,
-            nameSize: minNameSize,
-            detailSize: minDetailSize,
+            nameSize: fallbackSize,
+            detailSize: fallbackSize,
             nameColor,
             subtitleColor,
             mutedGrey,
             dietaryColor,
             maxTextW,
             font,
-            bold
+            bold,
+            omitSubtitle: true
           });
           chosenGap = 1;
         }
 
-        while (chosenLines.length > 0 && placeCardLinesHeight(chosenLines, chosenGap) > innerH) {
-          if (chosenLines.length > 1) {
-            chosenLines = chosenLines.slice(0, -1);
-          } else {
-            chosenLines[0].text = truncateToWidth(
-              chosenLines[0].text,
-              chosenLines[0].fontRef,
-              chosenLines[0].size,
-              maxTextW
-            );
-            break;
+        // Still overflowing: remove lowest-priority lines first. Dietary lines are never
+        // removed while anything else can go; the overflow is reported to the caller.
+        const dropOrder: PlaceCardLineKind[] = ["subtitle", "course", "name", "table"];
+        let droppedSomething = false;
+        for (const kind of dropOrder) {
+          while (placeCardLinesHeight(chosenLines, chosenGap) > innerH) {
+            const candidates = chosenLines
+              .map((line, index) => ({ line, index }))
+              .filter(({ line }) => line.kind === kind);
+            // Keep the first name line and the table line so the card still identifies the guest.
+            const removable = kind === "name" ? candidates.slice(1) : kind === "table" ? [] : candidates;
+            if (!removable.length) break;
+            const { line: victim, index } = removable[removable.length - 1];
+            // Courses go whole (never half a dish name); extra name lines go one at a time.
+            chosenLines =
+              kind === "course"
+                ? chosenLines.filter((line) => line.group !== victim.group)
+                : chosenLines.filter((_, lineIndex) => lineIndex !== index);
+            droppedSomething = true;
           }
+        }
+        if (placeCardLinesHeight(chosenLines, chosenGap) > innerH) {
+          // Only dietary text remains too tall: draw it anyway (it may touch the border) rather than hide it.
+          options.warnings?.push(
+            `Place card for ${card.name} (table ${card.tableNumber}): dietary text is too long for the card and may overlap the border — check the printed card.`
+          );
+        } else if (droppedSomething) {
+          options.warnings?.push(
+            `Place card for ${card.name} (table ${card.tableNumber}): some menu lines were left off so the dietary requirements fit.`
+          );
         }
 
         const totalBlockHeight = placeCardLinesHeight(chosenLines, chosenGap);
@@ -1464,113 +1500,192 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     }
   };
 
-  data.tables.forEach((table) => {
-    const pax =
-      table.courseBlocks[0]?.groupedByDish.reduce((sum, group) => sum + group.guests.length, 0) ?? 0;
-    const outerX = 18;
-    const outerW = width - 36;
-    const leftX = 24;
-    const splitX = width - 170;
-    const notesW = width - splitX - 24;
-    const guestLines = table.courseBlocks.reduce((sum, block) => {
-      const dishLines = block.groupedByDish.reduce((acc, group) => acc + 1 + group.guests.length, 0);
-      return sum + 1 + 1 + dishLines + 1;
-    }, 0);
-    const leftContentH = 46 + guestLines * 10 + 12;
-    const rowHeight = Math.max(120, leftContentH);
-    ensureSpace(rowHeight + 8);
-    const rowTop = y;
-    const rowBottom = y - rowHeight;
-    const headerY = rowTop - 14;
-    const headerDividerY = rowTop - 20;
-    const bodyStartY = rowTop - 36;
+  type ServiceLine = {
+    text: string;
+    x: number;
+    font: PDFFont;
+    size: number;
+    color: ReturnType<typeof rgb>;
+    /** Vertical advance after drawing this line. */
+    step: number;
+    /**
+     * Set on the first line of an entry: the height that must fit before starting it, so wrapped
+     * entries never split across boxes and headings are not stranded without a following line.
+     */
+    keepHeight?: number;
+  };
 
-    page.drawRectangle({
-      x: outerX,
-      y: rowBottom,
-      width: outerW,
-      height: rowHeight,
-      borderWidth: 1.1,
-      borderColor: rgb(0.74, 0.78, 0.86)
-    });
-    page.drawLine({
-      start: { x: splitX - 8, y: rowBottom + 8 },
-      end: { x: splitX - 8, y: rowTop - 8 },
-      thickness: 0.8,
-      color: rgb(0.83, 0.86, 0.92)
-    });
-    page.drawLine({
-      start: { x: outerX + 1, y: headerDividerY },
-      end: { x: splitX - 10, y: headerDividerY },
-      thickness: 0.8,
-      color: rgb(0.86, 0.88, 0.93)
-    });
+  const outerX = 18;
+  const outerW = width - 36;
+  const leftX = 24;
+  const splitX = width - 170;
+  const notesW = width - splitX - 24;
+  const leftColW = splitX - leftX - 16;
+  const headerBlockH = 36;
+  const boxBottomPad = 12;
+  const pageBottom = 20;
+  const minBoxH = 120;
 
-    page.drawText(`Table ${table.tableNumber}`, {
-      x: leftX,
-      y: headerY,
-      font: bold,
-      size: 13,
-      color: rgb(0.11, 0.13, 0.18)
-    });
-    page.drawText(`PAX: ${pax}`, {
-      x: leftX + 102,
-      y: headerY,
-      font: bold,
-      size: 10,
-      color: rgb(0.16, 0.2, 0.26)
-    });
-    drawCourseCheckboxes(leftX + 150, headerY + 9);
+  /** Pre-wraps every left-column entry so row heights reflect the real number of printed lines. */
+  const buildTableLines = (table: (typeof data.tables)[number]): ServiceLine[] => {
+    const lines: ServiceLine[] = [];
+    const push = (
+      text: string,
+      opts: {
+        x: number;
+        font: PDFFont;
+        size: number;
+        color: ReturnType<typeof rgb>;
+        step: number;
+        maxW: number;
+        /** Headings reserve room for at least one line of what follows them. */
+        isHeading?: boolean;
+      }
+    ) => {
+      const wrapped = wrapTextToWidthClamped(text, opts.font, opts.size, opts.maxW);
+      const continuationStep = opts.size * 1.12;
+      const entryHeight = (wrapped.length - 1) * continuationStep + opts.size;
+      wrapped.forEach((line, index) => {
+        lines.push({
+          text: line,
+          x: index === 0 ? opts.x : opts.x + 8,
+          font: opts.font,
+          size: opts.size,
+          color: opts.color,
+          step: index === wrapped.length - 1 ? opts.step : continuationStep,
+          keepHeight: index === 0 ? entryHeight + (opts.isHeading ? opts.step + 10 : 0) : undefined
+        });
+      });
+    };
+    const addGap = (gap: number) => {
+      if (lines.length) lines[lines.length - 1].step += gap;
+    };
 
-    let localY = bodyStartY;
     table.courseBlocks.forEach((block) => {
-      page.drawText(block.label, {
+      push(block.label, {
         x: leftX,
-        y: localY,
         font: bold,
         size: 10.5,
-        color: rgb(0.11, 0.13, 0.18)
+        color: rgb(0.11, 0.13, 0.18),
+        step: 11,
+        maxW: leftColW,
+        isHeading: true
       });
-      localY -= 11;
-      page.drawText(
-        `Dish totals: ${block.dishCounts.map((entry) => `${entry.dish} (${entry.count})`).join(", ")}`,
-        {
-          x: leftX,
-          y: localY,
-          font,
-          size: 9.3,
-          color: rgb(0.33, 0.37, 0.45),
-          maxWidth: splitX - leftX - 16
-        }
-      );
-      localY -= 10;
+      push(`Dish totals: ${block.dishCounts.map((entry) => `${entry.dish} (${entry.count})`).join(", ")}`, {
+        x: leftX,
+        font,
+        size: 9.3,
+        color: rgb(0.33, 0.37, 0.45),
+        step: 10,
+        maxW: leftColW
+      });
       block.groupedByDish.forEach((group) => {
-        page.drawText(`${block.label}: ${group.dish}`, {
+        push(`${block.label}: ${group.dish}`, {
           x: leftX + 4,
-          y: localY,
           font: bold,
-          size: 10
+          size: 10,
+          color: rgb(0, 0, 0),
+          step: 11,
+          maxW: leftColW - 4,
+          isHeading: true
         });
-        localY -= 11;
         group.guests.forEach((guest) => {
           const dietary = guest.dietary.length ? ` [${guest.dietary.join(", ")}]` : "";
-          page.drawText(`- ${guest.name}${dietary}`, {
+          push(`- ${guest.name}${dietary}`, {
             x: leftX + 14,
-            y: localY,
             font,
             size: 9.2,
             color: guest.dietary.length ? rgb(0.66, 0.2, 0.06) : rgb(0.1, 0.12, 0.17),
-            maxWidth: splitX - leftX - 26
+            step: 10,
+            maxW: leftColW - 22
           });
-          localY -= 10;
         });
-        localY -= 2;
+        addGap(2);
       });
-      localY -= 4;
+      addGap(4);
     });
+    return lines;
+  };
 
-    drawScribbleArea(splitX, rowTop - 10, notesW, rowHeight - 16);
-    y -= rowHeight + 8;
+  data.tables.forEach((table) => {
+    const pax =
+      table.courseBlocks[0]?.groupedByDish.reduce((sum, group) => sum + group.guests.length, 0) ?? 0;
+    const lines = buildTableLines(table);
+    let lineIndex = 0;
+    let part = 0;
+
+    // A table that does not fit on the current page continues in a new box on the next page.
+    while (part === 0 || lineIndex < lines.length) {
+      const remainingH = lines.slice(lineIndex).reduce((sum, line) => sum + line.step, 0);
+      const wantedH = Math.max(minBoxH, headerBlockH + remainingH + boxBottomPad);
+      const minUsefulH = Math.min(wantedH, headerBlockH + 6 * 10 + boxBottomPad);
+      if (y - minUsefulH < pageBottom) {
+        page = doc.addPage([width, height]);
+        y = height - 28;
+      }
+      const rowHeight = Math.min(wantedH, y - pageBottom);
+      const rowTop = y;
+      const rowBottom = y - rowHeight;
+      const headerY = rowTop - 14;
+      const headerDividerY = rowTop - 20;
+
+      page.drawRectangle({
+        x: outerX,
+        y: rowBottom,
+        width: outerW,
+        height: rowHeight,
+        borderWidth: 1.1,
+        borderColor: rgb(0.74, 0.78, 0.86)
+      });
+      page.drawLine({
+        start: { x: splitX - 8, y: rowBottom + 8 },
+        end: { x: splitX - 8, y: rowTop - 8 },
+        thickness: 0.8,
+        color: rgb(0.83, 0.86, 0.92)
+      });
+      page.drawLine({
+        start: { x: outerX + 1, y: headerDividerY },
+        end: { x: splitX - 10, y: headerDividerY },
+        thickness: 0.8,
+        color: rgb(0.86, 0.88, 0.93)
+      });
+
+      page.drawText(part === 0 ? `Table ${table.tableNumber}` : `Table ${table.tableNumber} (cont.)`, {
+        x: leftX,
+        y: headerY,
+        font: bold,
+        size: 13,
+        color: rgb(0.11, 0.13, 0.18)
+      });
+      if (part === 0) {
+        page.drawText(`PAX: ${pax}`, {
+          x: leftX + 102,
+          y: headerY,
+          font: bold,
+          size: 10,
+          color: rgb(0.16, 0.2, 0.26)
+        });
+        drawCourseCheckboxes(leftX + 150, headerY + 9);
+      }
+
+      let localY = rowTop - headerBlockH;
+      const drawnBefore = lineIndex;
+      const floorY = rowBottom + boxBottomPad - 4;
+      while (lineIndex < lines.length && localY >= floorY) {
+        const line = lines[lineIndex];
+        // Start a new entry only if all of it fits (unless the box is still empty).
+        if (line.keepHeight && lineIndex > drawnBefore && localY - line.keepHeight + line.size < floorY) break;
+        page.drawText(line.text, { x: line.x, y: localY, font: line.font, size: line.size, color: line.color });
+        localY -= line.step;
+        lineIndex += 1;
+      }
+      // Always make progress, even if a pathological page size leaves no room for a line.
+      if (lineIndex === drawnBefore && lineIndex < lines.length) lineIndex += 1;
+
+      drawScribbleArea(splitX, rowTop - 10, notesW, rowHeight - 16);
+      y -= rowHeight + 8;
+      part += 1;
+    }
   });
 
   const prettyDietaryLabel = (raw: string): string => {
@@ -1905,6 +2020,8 @@ export async function renderDocumentPdf(
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
     dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
+    /** Collects human-readable notices about content that could not be laid out as requested. */
+    warnings?: string[];
   }
 ): Promise<Uint8Array> {
   if (documentType === "tablePlanByTable") {
@@ -1918,7 +2035,7 @@ export async function renderDocumentPdf(
     );
   }
   if (documentType === "placeCards") {
-    return renderPlaceCardsPdf(model, options.placeCard, options.theme);
+    return renderPlaceCardsPdf(model, options.placeCard, options.theme, { warnings: options.warnings });
   }
   if (documentType === "menuBooklet") {
     return renderMenuBookletPdf(
