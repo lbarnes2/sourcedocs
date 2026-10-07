@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { listSavedBuffetMenus, putSavedBuffetMenu } from "@/lib/buffetMenu/savedR2";
 import { isR2Configured } from "@/lib/storage/r2";
 import { BUFFET_MENU_JSON_SCHEMA_VERSION, type BuffetMenuSavedFile } from "@/types/buffetMenu";
@@ -13,7 +14,7 @@ export async function GET() {
     const items = await listSavedBuffetMenus();
     return NextResponse.json({ configured: true, items });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "List failed.";
+    const message = errorMessage(error, "List failed.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -31,7 +32,7 @@ export async function PUT(request: Request) {
   const parsed = buffetMenuSavePutBodySchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid payload.", details: parsed.error.flatten() },
+      { error: `Invalid payload — ${errorMessage(parsed.error, "check the fields")}`, details: parsed.error.flatten() },
       { status: 400 }
     );
   }
@@ -49,7 +50,7 @@ export async function PUT(request: Request) {
     const { key, id: storedId } = await putSavedBuffetMenu(id, doc);
     return NextResponse.json({ ok: true, id: storedId, key });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Save failed.";
+    const message = errorMessage(error, "Save failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

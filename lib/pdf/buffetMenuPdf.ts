@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { embedRasterBytes } from "@/lib/pdf/imageFormat";
 import path from "node:path";
 import { degrees, PDFDocument, type PDFFont, type PDFImage, type PDFPage, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
@@ -91,21 +92,10 @@ async function loadEmbeddedFonts(doc: PDFDocument): Promise<EmbeddedFonts> {
   return { body, bodyBold, bodyItalic };
 }
 
-async function embedImageFromBytes(
-  doc: PDFDocument,
-  bytes: Uint8Array,
-  contentType?: string
-): Promise<PDFImage> {
-  const ct = (contentType || "").toLowerCase();
-  if (ct.includes("png")) return doc.embedPng(bytes);
-  if (ct.includes("jpeg") || ct.includes("jpg")) return doc.embedJpg(bytes);
-  if (bytes.length >= 2 && bytes[0] === 0x89 && bytes[1] === 0x50) return doc.embedPng(bytes);
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return doc.embedJpg(bytes);
-  try {
-    return await doc.embedPng(bytes);
-  } catch {
-    return doc.embedJpg(bytes);
-  }
+async function embedImageFromBytes(doc: PDFDocument, bytes: Uint8Array): Promise<PDFImage> {
+  const image = await embedRasterBytes(doc, bytes);
+  if (!image) throw new Error("Logo is not a PNG or JPEG image.");
+  return image;
 }
 
 function totalDisplayHeight(
@@ -230,8 +220,7 @@ const lineGray = rgb(0.35, 0.35, 0.35);
  */
 export async function renderBuffetAllergenMatrixPdf(
   menu: BuffetMenuState,
-  logoBytes: Uint8Array | null,
-  logoContentType?: string
+  logoBytes: Uint8Array | null
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
@@ -313,7 +302,7 @@ export async function renderBuffetAllergenMatrixPdf(
   let logoImg: PDFImage | null = null;
   if (logoBytes && logoBytes.length > 0) {
     try {
-      logoImg = await embedImageFromBytes(doc, logoBytes, logoContentType);
+      logoImg = await embedImageFromBytes(doc, logoBytes);
     } catch {
       /* skip */
     }
@@ -399,6 +388,14 @@ export async function renderBuffetAllergenMatrixPdf(
       const rowBotY = rowTopY - rowH;
       const nameLines = wrapWords(name, body, fontSize, nameColW - 3);
       const showLines = nameLines.slice(0, maxNameLines);
+      if (nameLines.length > maxNameLines) {
+        // Make it obvious the item name continues rather than silently cutting it off.
+        let last = `${showLines[maxNameLines - 1]}…`;
+        while (last.length > 1 && body.widthOfTextAtSize(last, fontSize) > nameColW - 3) {
+          last = `${last.slice(0, -2)}…`;
+        }
+        showLines[maxNameLines - 1] = last;
+      }
       let ny = rowTopY - nameTopToFirstBaseline(fontSize);
       for (const nl of showLines) {
         page.drawText(nl, { x: tableLeft + 2, y: ny, size: fontSize, font: body, color: ink });
@@ -427,7 +424,6 @@ export async function renderBuffetAllergenMatrixPdf(
 export async function renderBuffetLabelSheetsPdf(
   menu: BuffetMenuState,
   logoBytes: Uint8Array | null,
-  logoContentType?: string,
   size: BuffetLabelSize = "a6"
 ): Promise<Uint8Array> {
   const { sheetW, sheetH, cols, rows, allergenCols, logoMaxHRatio } = LABEL_SHEET_FORMATS[size];
@@ -442,7 +438,7 @@ export async function renderBuffetLabelSheetsPdf(
   let logoImg: PDFImage | null = null;
   if (logoBytes && logoBytes.length > 0) {
     try {
-      logoImg = await embedImageFromBytes(doc, logoBytes, logoContentType);
+      logoImg = await embedImageFromBytes(doc, logoBytes);
     } catch {
       logoImg = null;
     }
@@ -571,9 +567,9 @@ export async function renderAllBuffetPdfs(
 ): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
   const [display, matrix, labelsA6, labelsA7] = await Promise.all([
     renderBuffetDisplayMenuPdf(menu),
-    renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, logo?.contentType),
-    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, logo?.contentType, "a6"),
-    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, logo?.contentType, "a7")
+    renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null),
+    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
+    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")
   ]);
   return { display, matrix, labelsA6, labelsA7 };
 }

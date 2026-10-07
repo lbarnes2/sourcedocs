@@ -163,3 +163,21 @@ export async function replaceClientLogoKeyInAllProjectsFs(oldKey: string, newKey
     }
   }
 }
+
+/** Logo keys referenced by each saved project (used to warn before deleting a library logo). */
+export async function listProjectLogoUsageFs(): Promise<Array<{ name: string; venueKey: string | null; clientKey: string | null }>> {
+  await ensureProjectDir();
+  const files = await fs.readdir(PROJECT_DIR);
+  const out: Array<{ name: string; venueKey: string | null; clientKey: string | null }> = [];
+  for (const file of files) {
+    if (!file.endsWith(".json") || file === "__manifest.json") continue;
+    if (!isValidProjectUuid(file.slice(0, -".json".length))) continue;
+    try {
+      const data = JSON.parse(await fs.readFile(path.join(PROJECT_DIR, file), "utf8")) as EventProjectFile;
+      out.push({ name: data.name, venueKey: data.selectedVenueLogoKey ?? null, clientKey: data.selectedClientLogoKey ?? null });
+    } catch {
+      // skip corrupt
+    }
+  }
+  return out;
+}

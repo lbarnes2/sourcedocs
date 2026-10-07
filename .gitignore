@@ -8,3 +8,6 @@ data/signage-venues/*.json
 .env
 .env.local
 .env.*.local
+data/floorplans/*.json
+.DS_Store
+*.tsbuildinfo

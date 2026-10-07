@@ -1,9 +1,11 @@
-import { replaceVenueLogoKeyInAllBuffetMenus } from "@/lib/buffetMenu/savedR2";
+import { listBuffetMenusUsingLogoKey, replaceVenueLogoKeyInAllBuffetMenus } from "@/lib/buffetMenu/savedR2";
 import {
+  listFloorplanLogoUsage,
   replaceClientLogoKeyInAllFloorplans,
   replaceVenueLogoKeyInAllFloorplans
 } from "@/lib/floorplans/store";
 import {
+  listProjectLogoUsage,
   replaceClientLogoKeyInAllProjects,
   replaceVenueLogoKeyInAllProjects
 } from "@/lib/projects/replaceVenueLogoInProjects";
@@ -33,4 +35,22 @@ export async function replaceClientLogoKeyAfterRename(oldKey: string, newKey: st
   }
   await replaceClientLogoKeyInAllProjects(oldKey, newKey);
   await replaceClientLogoKeyInAllFloorplans(oldKey, newKey);
+}
+
+/** Human-readable list of saved items that still point at a library logo key. */
+export async function findLogoKeyReferences(key: string): Promise<string[]> {
+  const refs: string[] = [];
+  for (const p of await listVenueSignageProfiles()) {
+    if (p.defaultVenueLogoKey === key || p.defaultClientLogoKey === key) refs.push(`Signage venue profile “${p.name}”`);
+  }
+  for (const item of await listProjectLogoUsage()) {
+    if (item.venueKey === key || item.clientKey === key) refs.push(`Banqueting project “${item.name}”`);
+  }
+  for (const item of await listFloorplanLogoUsage()) {
+    if (item.venueKey === key || item.clientKey === key) refs.push(`Floorplan “${item.name}”`);
+  }
+  if (isR2Configured()) {
+    for (const name of await listBuffetMenusUsingLogoKey(key)) refs.push(`Buffet menu “${name}”`);
+  }
+  return refs;
 }

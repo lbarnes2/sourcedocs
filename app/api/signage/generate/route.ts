@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { z } from "zod";
 import { PAPER_SIZE_VALUES, paperSizeFileSuffix } from "@/lib/paperSizes";
 import { renderSignagePdf, type SignagePageInput } from "@/lib/pdf/signageRender";
@@ -162,6 +163,12 @@ export async function POST(request: Request) {
       if (pages.length === 0) {
         return NextResponse.json({ error: "Venue profile has no sign slots." }, { status: 400 });
       }
+      if (pages.length > limits.MAX_SIGNAGE_PAGES_PER_REQUEST) {
+        return NextResponse.json(
+          { error: `This venue pack has ${pages.length} signs; the maximum is ${limits.MAX_SIGNAGE_PAGES_PER_REQUEST}.` },
+          { status: 400 }
+        );
+      }
       venueBytes = await resolveVenueLogo(
         body.venueLogoKey,
         body.venueLogoDataUrl,
@@ -205,7 +212,7 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Generation failed.";
+    const message = errorMessage(error, "Generation failed.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

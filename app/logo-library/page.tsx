@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { LOGO_UPLOAD_ACCEPT } from "@/lib/logos/logoUpload";
 
 type LogoKind = "venue" | "client";
-type LogoItem = { key: string; label: string; assetUrl: string };
+type LogoItem = { key: string; label: string; assetUrl: string; printable?: boolean };
 
-async function parseApiResponse(response: Response): Promise<{ error?: string; items?: LogoItem[]; configured?: boolean; key?: string }> {
+async function parseApiResponse(
+  response: Response
+): Promise<{ error?: string; items?: LogoItem[]; configured?: boolean; key?: string; references?: string[] }> {
   return response.json().catch(() => ({}));
 }
 
@@ -78,8 +81,19 @@ export default function LogoLibraryPage() {
     setWorkingKey(key);
     setError("");
     try {
-      const response = await fetch(`/api/logos/${kind}?key=${encodeURIComponent(key)}`, { method: "DELETE" });
-      const payload = await parseApiResponse(response);
+      const url = `/api/logos/${kind}?key=${encodeURIComponent(key)}`;
+      let response = await fetch(url, { method: "DELETE" });
+      let payload = await parseApiResponse(response);
+      if (response.status === 409 && payload.references?.length) {
+        const list = payload.references.slice(0, 12).join("\n• ");
+        const more = payload.references.length > 12 ? `\n…and ${payload.references.length - 12} more` : "";
+        const proceed = window.confirm(
+          `This logo is still used by:\n• ${list}${more}\n\nThose items will print without it. Delete anyway?`
+        );
+        if (!proceed) return;
+        response = await fetch(`${url}&force=1`, { method: "DELETE" });
+        payload = await parseApiResponse(response);
+      }
       if (!response.ok) throw new Error(payload.error || "Delete failed.");
       await loadLogos();
     } catch (err) {
@@ -97,7 +111,7 @@ export default function LogoLibraryPage() {
           Upload logo
           <input
             type="file"
-            accept="image/png,image/jpeg,image/jpg,image/webp,image/gif"
+            accept={LOGO_UPLOAD_ACCEPT}
             disabled={busy || !configured}
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -120,6 +134,11 @@ export default function LogoLibraryPage() {
                 <span className="signage-logo-tile-label" title={item.label}>
                   {item.label}
                 </span>
+                {item.printable === false ? (
+                  <span className="warning" style={{ fontSize: 12 }}>
+                    Can’t be printed (not PNG/JPEG) — re-upload as PNG or JPEG.
+                  </span>
+                ) : null}
                 <div className="logo-library-actions">
                   <button type="button" className="secondary" disabled={workingKey === item.key} onClick={() => void renameLogo(kind, item)}>
                     {workingKey === item.key ? "Working…" : "Rename"}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { assertSafeProfileId } from "@/lib/profiles/profileId";
 import {
   deleteVenueSignageProfile,
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     await saveVenueSignageProfile(parsed);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to save venue profile";
+    const message = errorMessage(error, "Failed to save venue profile");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -35,7 +36,7 @@ export async function DELETE(request: Request) {
     await deleteVenueSignageProfile(id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to delete venue profile.";
+    const message = errorMessage(error, "Failed to delete venue profile.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

@@ -6,7 +6,7 @@ import Papa from "papaparse";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { autoDetectMapping, canonicalColumns, getRequiredMappingIssues } from "@/lib/csv/mapping";
 import { excelFileToCsvText, isExcelFile } from "@/lib/csv/excelToCsv";
-import { normalizeDietary } from "@/lib/csv/validation";
+import { normalizeDietary, validateGuests } from "@/lib/csv/validation";
 import {
   defaultFloorplanSettings,
   defaultMenuBookletSettings,
@@ -15,6 +15,7 @@ import {
   defaultThemeSettings
 } from "@/lib/defaults";
 import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { readResponseError } from "@/lib/http/readError";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import type {
@@ -70,6 +71,35 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 
 function exportBaseName(input: string): string {
   return input.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "event-docs";
+}
+
+function logoAssetUrl(kind: "client" | "venue", key: string): string {
+  return `/api/logos/${kind}/asset?key=${encodeURIComponent(key)}`;
+}
+
+/** Reads per-document layout notices sent by /api/generate. */
+function readGenerationWarnings(response: Response): string[] {
+  const raw = response.headers.get("X-Generation-Warnings");
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Library logos are sent by key and loaded server-side, keeping request bodies small. */
+function themeForRequest(
+  theme: typeof defaultThemeSettings,
+  clientLogoKey: string | null,
+  venueLogoKey: string | null
+): typeof defaultThemeSettings {
+  return {
+    ...theme,
+    clientLogoDataUrl: clientLogoKey ? undefined : theme.clientLogoDataUrl,
+    venueLogoDataUrl: venueLogoKey ? undefined : theme.venueLogoDataUrl
+  };
 }
 
 function hexToRgb01(hex: string): { r: number; g: number; b: number } {
@@ -137,6 +167,7 @@ export default function HomePage() {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingExport, setLoadingExport] = useState(false);
   const [exportProgressPct, setExportProgressPct] = useState(0);
+  const [exportWarnings, setExportWarnings] = useState<string[]>([]);
 
   const [theme, setTheme] = useState({ ...defaultThemeSettings });
   const [tablePlan, setTablePlan] = useState({ ...defaultTablePlanSettings });
@@ -274,13 +305,28 @@ export default function HomePage() {
     setProjectLibraryName(file.name);
     setProjectLoadSelection("");
     setError("");
-    setHasAttemptedPreviewValidate(false);
-    setExportUnlocked(false);
-    if (file.theme.clientLogoDataUrl) {
+    setExportWarnings([]);
+    // The saved guest list already includes last-minute edits, so export straight away —
+    // re-running Preview would rebuild guests from the raw CSV and discard those edits.
+    const hasGuests = file.guests.length > 0;
+    setHasAttemptedPreviewValidate(hasGuests);
+    setExportUnlocked(hasGuests);
+    setClientLogoLuminance(null);
+    // Projects saved with a library key store only the key; fetch the image for preview/legibility checks.
+    if (file.selectedClientLogoKey && !file.theme.clientLogoDataUrl) {
+      void applyLogoFromLibrary(
+        { key: file.selectedClientLogoKey, assetUrl: logoAssetUrl("client", file.selectedClientLogoKey) },
+        "clientLogoDataUrl"
+      );
+    } else if (file.theme.clientLogoDataUrl) {
       const luma = await estimateLogoLuminance(file.theme.clientLogoDataUrl);
       setClientLogoLuminance(luma);
-    } else {
-      setClientLogoLuminance(null);
+    }
+    if (file.selectedVenueLogoKey && !file.theme.venueLogoDataUrl) {
+      void applyLogoFromLibrary(
+        { key: file.selectedVenueLogoKey, assetUrl: logoAssetUrl("venue", file.selectedVenueLogoKey) },
+        "venueLogoDataUrl"
+      );
     }
     void refreshVenueLogoLibrary();
   }
@@ -299,7 +345,7 @@ export default function HomePage() {
         mapping,
         guests,
         issues,
-        theme,
+        theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
         tablePlan,
         tablePlanByPerson,
         placeCard,
@@ -319,8 +365,8 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+      if (!response.ok) throw new Error(await readResponseError(response, "Save failed."));
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Save failed.");
       setCurrentProjectId(data.id);
       setProjectLibraryName(name);
       await refreshProjectList();
@@ -341,8 +387,8 @@ export default function HomePage() {
     setError("");
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(id)}`);
+      if (!response.ok) throw new Error(await readResponseError(response, "Load failed."));
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Load failed.");
       await applyLoadedProject(data.project as EventProjectFile);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed.");
@@ -359,8 +405,7 @@ export default function HomePage() {
     setError("");
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Delete failed.");
+      if (!response.ok) throw new Error(await readResponseError(response, "Delete failed."));
       if (currentProjectId === id) {
         setCurrentProjectId(null);
       }
@@ -487,9 +532,18 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "preview", csvText, mapping })
       });
+      if (!response.ok) throw new Error(await readResponseError(response, "Failed to preview"));
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Failed to preview");
       const nextGuests: GuestRecord[] = payload.guests ?? [];
+      if (
+        guests.length > 0 &&
+        JSON.stringify(guests) !== JSON.stringify(nextGuests) &&
+        !window.confirm(
+          "Re-validating rebuilds the guest list from the uploaded file. Any last-minute edits below (names, tables, dishes, dietary) will be lost. Continue?"
+        )
+      ) {
+        return;
+      }
       setGuests(nextGuests);
       setIssues(payload.validation?.issues ?? []);
       setExportUnlocked(nextGuests.length > 0);
@@ -518,11 +572,25 @@ export default function HomePage() {
   }
 
   async function saveCurrentProfile() {
-    const id = profileName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const name = profileName.trim();
+    if (!name) {
+      setError("Enter a profile name first.");
+      return;
+    }
+    // Saving under an existing name updates that profile; otherwise mint a fresh id so
+    // names that slug to the same string (e.g. non-Latin names) cannot overwrite each other.
+    const existing = profiles.find((entry) => entry.name.trim().toLowerCase() === name.toLowerCase());
+    const id = existing?.id ?? crypto.randomUUID();
     const profile: ProfileSettings = {
       id,
-      name: profileName,
-      theme,
+      name,
+      // Profiles hold reusable branding + print settings only; event details and logos stay with the event.
+      theme: {
+        ...defaultThemeSettings,
+        primaryColor: theme.primaryColor,
+        accentColor: theme.accentColor,
+        textColor: theme.textColor
+      },
       tablePlan,
       tablePlanByPerson,
       placeCard,
@@ -535,10 +603,10 @@ export default function HomePage() {
       body: JSON.stringify(profile)
     });
     if (!response.ok) {
-      const payload = await response.json();
-      setError(payload.error || "Could not save profile.");
+      setError(await readResponseError(response, "Could not save profile."));
       return;
     }
+    setError("");
     setProfiles((previous) => {
       const withoutExisting = previous.filter((entry) => entry.id !== id);
       return [...withoutExisting, profile].sort((a, b) => a.name.localeCompare(b.name));
@@ -548,7 +616,13 @@ export default function HomePage() {
   function applyProfile(profileId: string) {
     const found = profiles.find((profile) => profile.id === profileId);
     if (!found) return;
-    setTheme(found.theme);
+    // Only branding colours come from the profile — keep this event's name, date and logos.
+    setTheme((previous) => ({
+      ...previous,
+      primaryColor: found.theme.primaryColor,
+      accentColor: found.theme.accentColor,
+      textColor: found.theme.textColor
+    }));
     setTablePlan(found.tablePlan);
     setTablePlanByPerson(found.tablePlanByPerson ?? found.tablePlan);
     setPlaceCard(found.placeCard);
@@ -596,6 +670,22 @@ export default function HomePage() {
       setError("Single-file mode requires exactly one selected document.");
       return;
     }
+    // Last-minute edits bypass the original preview validation, so re-check before printing.
+    const requiredCourses = (["starter", "main", "dessert"] as const).filter((course) => Boolean(mapping[course]));
+    const recheck = validateGuests(
+      guests.map((guest) => ({ ...guest, tableNumber: guest.tableNumber.trim(), name: guest.name.trim() })),
+      { requiredCourses }
+    );
+    setIssues(recheck.issues);
+    setHasAttemptedPreviewValidate(true);
+    const blocking = recheck.issues.filter((issue) => issue.severity === "error");
+    if (blocking.length) {
+      setError(
+        `Fix ${blocking.length} guest list error${blocking.length === 1 ? "" : "s"} before exporting (see Validation report): ${blocking[0].message}`
+      );
+      return;
+    }
+    setExportWarnings([]);
 
     setLoadingExport(true);
     setExportProgressPct(4);
@@ -617,7 +707,9 @@ export default function HomePage() {
       request: {
         documents,
         bundleMode: requestedBundleMode,
-        theme,
+        theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
+        clientLogoKey: selectedClientLogoKey,
+        venueLogoKey: selectedVenueLogoKey,
         tablePlan,
         tablePlanByPerson,
         placeCard,
@@ -637,10 +729,9 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildGenerateBody([documentType], "single"))
       });
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.error || "Export failed.");
-      }
+      if (!response.ok) throw new Error(await readResponseError(response, "Export failed."));
+      const warnings = readGenerationWarnings(response);
+      if (warnings.length) setExportWarnings((previous) => [...previous, ...warnings]);
       return response.blob();
     };
 
@@ -668,10 +759,8 @@ export default function HomePage() {
         body: JSON.stringify(buildGenerateBody(selectedDocuments, bundleMode))
       });
 
-      if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.error || "Export failed.");
-      }
+      if (!response.ok) throw new Error(await readResponseError(response, "Export failed."));
+      setExportWarnings(readGenerationWarnings(response));
 
       const blob = await response.blob();
       window.clearInterval(progressTimer);
@@ -1062,7 +1151,8 @@ export default function HomePage() {
         <div className="grid two">
           <label>
             Load profile
-            <select onChange={(event) => applyProfile(event.target.value)} defaultValue="">
+            {/* Resets after each pick so the same profile can be re-applied to undo tweaks. */}
+            <select value="" onChange={(event) => applyProfile(event.target.value)}>
               <option value="">-- select profile --</option>
               {profiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
@@ -1561,6 +1651,20 @@ export default function HomePage() {
         )}
       </div>
 
+      {exportWarnings.length > 0 && (
+        <div className="panel">
+          <p style={{ marginTop: 0 }}>
+            <strong>Check these before printing:</strong>
+          </p>
+          <ul>
+            {exportWarnings.map((warning, index) => (
+              <li key={`${warning}-${index}`} className="warning">
+                {warning}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {error && (
         <div className="panel">
           <p className="error">{error}</p>

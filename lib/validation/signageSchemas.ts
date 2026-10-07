@@ -84,4 +84,10 @@ export const venueSignageProfileSchema = z.object({
   defaultSecondaryEventDate: optionalSignageEventDateField,
   defaultVenueLogoKey: optionalLogoKeySchema,
   defaultClientLogoKey: optionalLogoKeySchema
-});
+}).refine(
+  (profile) => profile.slots.reduce((sum, slot) => sum + slot.count, 0) <= limits.MAX_SIGNAGE_PAGES_PER_REQUEST,
+  {
+    message: `A venue pack can contain at most ${limits.MAX_SIGNAGE_PAGES_PER_REQUEST} signs in total.`,
+    path: ["slots"]
+  }
+);

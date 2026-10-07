@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 
-export type LogoPickerItem = { key: string; label: string; assetUrl: string };
+export type LogoPickerItem = { key: string; label: string; assetUrl: string; printable?: boolean };
 
 type Props = {
   title?: string;
@@ -78,13 +78,16 @@ export function LogoPicker({
         ) : null}
         {items.map((item) => {
           const selected = value === item.key;
+          // WebP/GIF uploads from before PNG/JPEG-only validation cannot be embedded in PDFs.
+          const unprintable = item.printable === false;
           return (
             <button
               key={item.key}
               type="button"
               className={selected ? "signage-logo-tile signage-logo-tile--selected" : "signage-logo-tile"}
-              disabled={off}
-              onClick={() => !off && onChange(item.key)}
+              disabled={off || unprintable}
+              title={unprintable ? "Not a PNG/JPEG — re-upload in the Logo Library to use it in PDFs" : undefined}
+              onClick={() => !off && !unprintable && onChange(item.key)}
               aria-label={`Select ${item.label}`}
             >
               <span className="signage-logo-tile-hit">

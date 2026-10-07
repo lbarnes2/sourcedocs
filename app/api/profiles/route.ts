@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { z } from "zod";
 import { assertSafeProfileId } from "@/lib/profiles/profileId";
 import { listProfiles, saveProfile, deleteProfile } from "@/lib/profiles/store";
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
     await saveProfile(parsed);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to save profile";
+    const message = errorMessage(error, "Failed to save profile");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -54,7 +55,7 @@ export async function DELETE(request: Request) {
     await deleteProfile(id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to delete profile.";
+    const message = errorMessage(error, "Failed to delete profile.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

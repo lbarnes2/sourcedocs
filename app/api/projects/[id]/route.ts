@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { parseStoredEventProjectFile } from "@/lib/projects/parseProjectPayload";
 import { assertValidProjectId } from "@/lib/projects/projectKeys";
 import { deleteProject, getProject } from "@/lib/projects/store";
@@ -14,7 +15,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const file = parseStoredEventProjectFile(raw);
     return NextResponse.json({ project: file });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load project.";
+    const message = errorMessage(error, "Failed to load project.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
@@ -26,7 +27,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     await deleteProject(id);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to delete project.";
+    const message = errorMessage(error, "Failed to delete project.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

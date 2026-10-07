@@ -13,3 +13,9 @@ export async function replaceClientLogoKeyInAllProjects(oldKey: string, newKey: 
   if (isR2Configured()) return r2Store.replaceClientLogoKeyInAllProjectsR2(oldKey, newKey);
   return fsStore.replaceClientLogoKeyInAllProjectsFs(oldKey, newKey);
 }
+
+/** Logo keys referenced by each stored project. */
+export async function listProjectLogoUsage() {
+  if (isR2Configured()) return r2Store.listProjectLogoUsageR2();
+  return fsStore.listProjectLogoUsageFs();
+}

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { z } from "zod";
 import { floorplanDocumentSchema } from "@/lib/validation/floorplanSchemas";
 import { renderFloorplanDocumentPdf } from "@/lib/pdf/floorplanDocumentRender";
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to generate floorplan PDF.";
+    const message = errorMessage(error, "Failed to generate floorplan PDF.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

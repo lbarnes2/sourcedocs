@@ -148,3 +148,20 @@ export async function replaceClientLogoKeyInAllProjectsR2(oldKey: string, newKey
     }
   }
 }
+
+/** Logo keys referenced by each saved project (used to warn before deleting a library logo). */
+export async function listProjectLogoUsageR2(): Promise<Array<{ name: string; venueKey: string | null; clientKey: string | null }>> {
+  const keys = (await r2ListObjectKeys(PROJECT_PREFIX)).filter(isProjectDataKey);
+  const out: Array<{ name: string; venueKey: string | null; clientKey: string | null }> = [];
+  for (const key of keys) {
+    const raw = await r2GetObjectUtf8(key);
+    if (!raw) continue;
+    try {
+      const data = JSON.parse(raw) as EventProjectFile;
+      out.push({ name: data.name, venueKey: data.selectedVenueLogoKey ?? null, clientKey: data.selectedClientLogoKey ?? null });
+    } catch {
+      // skip corrupt
+    }
+  }
+  return out;
+}

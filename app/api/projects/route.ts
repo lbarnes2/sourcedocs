@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorMessage } from "@/lib/http/errorMessage";
 import { isR2Configured } from "@/lib/storage/r2";
 import { buildEventProjectFileFromSavePayload } from "@/lib/projects/parseProjectPayload";
 import { listProjects, saveProject } from "@/lib/projects/store";
@@ -11,7 +12,7 @@ export async function GET() {
       projects
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to list projects.";
+    const message = errorMessage(error, "Failed to list projects.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
     await saveProject(file);
     return NextResponse.json({ ok: true, id: file.id, savedAt: file.savedAt });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to save project.";
+    const message = errorMessage(error, "Failed to save project.");
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

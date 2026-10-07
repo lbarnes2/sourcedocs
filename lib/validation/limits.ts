@@ -14,6 +14,9 @@ export const MAX_EVENT_NAME_CHARS = 500;
 export const MAX_SIGNAGE_VENUE_LABEL_CHARS = 200;
 export const MAX_SIGNAGE_EVENT_DATE_CHARS = 120;
 
+/** Total signs (PDF pages) a venue pack may produce in one request. */
+export const MAX_SIGNAGE_PAGES_PER_REQUEST = 1000;
+
 export const MAX_STOCK_NAME_CHARS = 2000;
 
 /** Floorplan grid dimensions (rows × columns). */

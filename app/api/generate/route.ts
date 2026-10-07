@@ -6,6 +6,8 @@ import { augmentMenuLongNamesForDuplicateGroups, validateDishMenuDuplicateGroups
 import { applyDishShortOverridesToGuests } from "@/lib/dish/applyOverrides";
 import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConflicts";
 import { buildEventModel } from "@/lib/event/model";
+import { errorMessage } from "@/lib/http/errorMessage";
+import { logoDataUrlFromKey } from "@/lib/logos/logoDataUrl";
 import { renderDocumentPdf } from "@/lib/pdf/render";
 import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
 import {
@@ -62,7 +64,7 @@ const guestPayloadSchema = z.object({
   main: z.string().max(2000),
   dessert: z.string().max(2000),
   dietaryOriginal: z.string().max(4000),
-  dietaryNormalized: z.array(z.string().max(500))
+  dietaryNormalized: z.array(z.string().max(4000))
 });
 
 const generateSchema = z.object({
@@ -105,7 +107,10 @@ const generateSchema = z.object({
         })
       )
       .optional(),
-    normalizeGuestNamesToTitleCase: z.boolean().optional()
+    normalizeGuestNamesToTitleCase: z.boolean().optional(),
+    /** Library logo keys: used server-side when the theme carries no inline data URL (keeps requests small). */
+    clientLogoKey: z.string().max(512).nullable().optional(),
+    venueLogoKey: z.string().max(512).nullable().optional()
   })
 });
 
@@ -119,6 +124,12 @@ function sanitizeFilename(input: string): string {
 
 function contentDisposition(filename: string): string {
   return `attachment; filename="${filename}"`;
+}
+
+/** Layout notices travel in a header so the PDF/ZIP body stays a plain download. */
+function warningHeaders(warnings: string[]): Record<string, string> {
+  if (!warnings.length) return {};
+  return { "X-Generation-Warnings": encodeURIComponent(JSON.stringify(warnings.slice(0, 50))) };
 }
 
 function documentFilename(doc: DocumentType): string {
@@ -159,7 +170,11 @@ export async function POST(request: Request) {
     }
 
     const parsed = generateSchema.parse(payload);
-    const incomingGuests = parsed.guests as GuestRecord[];
+    const incomingGuests = (parsed.guests as GuestRecord[]).map((guest) => ({
+      ...guest,
+      tableNumber: guest.tableNumber.trim(),
+      name: guest.name.trim()
+    }));
     const dishNameOverrides = parsed.request.dishNameOverrides ?? {};
     const dishMenuDuplicateGroups = (parsed.request.dishMenuDuplicateGroups ?? []) as DishMenuDuplicateGroup[];
     const duplicateGroupError = validateDishMenuDuplicateGroups(dishMenuDuplicateGroups);
@@ -184,7 +199,11 @@ export async function POST(request: Request) {
       dishNameOverrides
     );
     const docs = parsed.request.documents;
-    const eventBase = sanitizeFilename(parsed.request.theme.eventName || "event-docs");
+    const theme = { ...parsed.request.theme };
+    if (!theme.clientLogoDataUrl) theme.clientLogoDataUrl = await logoDataUrlFromKey(parsed.request.clientLogoKey);
+    if (!theme.venueLogoDataUrl) theme.venueLogoDataUrl = await logoDataUrlFromKey(parsed.request.venueLogoKey);
+    const warnings: string[] = [];
+    const eventBase = sanitizeFilename(parsed.request.theme.eventName || "") || "event-docs";
 
     const rendered = await Promise.all(
       docs.map(async (docType) => {
@@ -194,9 +213,10 @@ export async function POST(request: Request) {
           placeCard: parsed.request.placeCard,
           menuBooklet: parsed.request.menuBooklet,
           floorplan: parsed.request.floorplan,
-          theme: parsed.request.theme,
+          theme,
           menuLongNames,
-          dishMenuDuplicateGroups
+          dishMenuDuplicateGroups,
+          warnings
         });
         return { docType, pdfBytes };
       })
@@ -209,7 +229,8 @@ export async function POST(request: Request) {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Disposition": contentDisposition(`${eventBase}-${documentFilename(single.docType)}`)
+          "Content-Disposition": contentDisposition(`${eventBase}-${documentFilename(single.docType)}`),
+          ...warningHeaders(warnings)
         }
       });
     }
@@ -224,11 +245,11 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "Content-Type": "application/zip",
-        "Content-Disposition": contentDisposition(`${eventBase}-documents.zip`)
+        "Content-Disposition": contentDisposition(`${eventBase}-documents.zip`),
+        ...warningHeaders(warnings)
       }
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unexpected generation error";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: errorMessage(error, "Unexpected generation error") }, { status: 400 });
   }
 }
