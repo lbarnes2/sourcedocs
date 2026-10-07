@@ -53,6 +53,8 @@ function normalizeSlot(raw: unknown): VenueSignageSlot {
       ? (o.paperSize as VenueSignageSlot["paperSize"])
       : "A4";
   const orientation = o.orientation === "landscape" ? "landscape" : "portrait";
+  const message =
+    typeof o.message === "string" && o.message.trim() ? o.message.trim() : undefined;
   const secName =
     typeof o.secondaryEventName === "string" && o.secondaryEventName.trim()
       ? o.secondaryEventName.trim()
@@ -80,6 +82,7 @@ function normalizeSlot(raw: unknown): VenueSignageSlot {
     paperSize,
     orientation,
     arrow: normalizeArrow(o.arrow),
+    ...(message ? { message } : {}),
     ...(secName ? { secondaryEventName: secName } : {}),
     ...(secondaryArrow ? { secondaryArrow } : {}),
     ...(dualEventArrangement ? { dualEventArrangement } : {}),

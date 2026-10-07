@@ -13,6 +13,8 @@ export const MAX_EVENT_NAME_CHARS = 500;
 /** Venue line + date line on signage PDFs. */
 export const MAX_SIGNAGE_VENUE_LABEL_CHARS = 200;
 export const MAX_SIGNAGE_EVENT_DATE_CHARS = 120;
+/** Free-text message saved on a venue profile sign slot (e.g. "Please use the left hand entrance"). */
+export const MAX_SIGNAGE_MESSAGE_CHARS = 300;
 
 /** Total signs (PDF pages) a venue pack may produce in one request. */
 export const MAX_SIGNAGE_PAGES_PER_REQUEST = 1000;

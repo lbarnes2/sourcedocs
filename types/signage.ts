@@ -32,6 +32,11 @@ export interface VenueSignageSlot {
   orientation: PaperOrientation;
   arrow: SignageArrowDirection;
   /**
+   * Fixed free text printed on every copy of this sign, whatever the event
+   * (e.g. "Please use the left hand entrance"). Shown above the arrow.
+   */
+  message?: string;
+  /**
    * Optional second event on the same physical sign: split titles + split arrows (+ optional separate venue lines below each).
    * When `secondaryArrow` is set and not `"none"`, PDF uses a dual layout (see `dualEventArrangement`).
    */

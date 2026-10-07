@@ -10,6 +10,7 @@ import { profileIdSchema } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
 import {
   optionalSignageEventDateField,
+  optionalSignageMessageField,
   optionalSignageVenueLabelField,
   signageArrowSchema,
   signageDualEventArrangementSchema,
@@ -49,7 +50,9 @@ const adhocSchema = z.object({
   eventDate: optionalSignageEventDateField,
   secondaryVenueLabel: optionalSignageVenueLabelField,
   secondarySubVenueLabel: optionalSignageVenueLabelField,
-  secondaryEventDate: optionalSignageEventDateField
+  secondaryEventDate: optionalSignageEventDateField,
+  /** Free-text message above the arrow; single-event signs only (ignored when `secondaryArrow` is active). */
+  message: optionalSignageMessageField
 });
 
 const packSchema = z.object({
@@ -124,6 +127,7 @@ export async function POST(request: Request) {
           venueLine: body.venueLabel ?? "",
           subVenueLine: body.subVenueLabel ?? "",
           dateLine: body.eventDate ?? "",
+          messageLine: body.message ?? "",
           secondaryVenueLine: body.secondaryVenueLabel?.trim() || body.venueLabel?.trim() || "",
           secondarySubVenueLine: body.secondarySubVenueLabel?.trim() || body.subVenueLabel?.trim() || "",
           secondaryDateLine: body.secondaryEventDate?.trim() || body.eventDate?.trim() || "",
@@ -153,6 +157,7 @@ export async function POST(request: Request) {
             orientation: slot.orientation,
             arrow: slot.arrow,
             eventName: body.eventName,
+            messageLine: slot.message ?? "",
             venueLine,
             subVenueLine,
             dateLine,

@@ -15,6 +15,12 @@ export const optionalSignageEventDateField = z
   .optional()
   .transform((s) => (s && s.trim() ? s.trim() : undefined));
 
+export const optionalSignageMessageField = z
+  .string()
+  .max(limits.MAX_SIGNAGE_MESSAGE_CHARS)
+  .optional()
+  .transform((s) => (s && s.trim() ? s.trim() : undefined));
+
 export const signageArrowSchema = z.enum([
   "none",
   "up",
@@ -50,6 +56,7 @@ export const venueSignageSlotSchema = z.object({
   paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
+  message: optionalSignageMessageField,
   secondaryEventName: optionalSecondaryEventName,
   /** When omitted or `"none"`, sign is single-column (existing behaviour). */
   secondaryArrow: signageArrowSchema.optional(),
