@@ -45,9 +45,22 @@ const LABEL_SHEET_FORMATS: Record<BuffetLabelSize, LabelSheetFormat> = {
   a7: { sheetW: A4_LAND_W, sheetH: A4_LAND_H, cols: 4, rows: 2, allergenCols: 3, logoMaxHRatio: 0.22 }
 };
 
-/** Spacing after each food item (not after category title lines, except small gap). */
-const DISPLAY_ITEM_GAP_RATIO = 0.38; /* of item line height (extra between consecutive items) */
-const DISPLAY_AFTER_CATEGORY_PT = 3;
+/** Clear space kept at the foot of each label so a sign holder's lip doesn't cover the allergens. */
+const LABEL_HOLDER_CLEARANCE_MM = 10;
+
+/* Display menu spacing, all as fractions of the item font size so it scales with the menu. */
+const DISPLAY_ITEM_GAP_RATIO = 0.38; /* extra between consecutive items */
+const DISPLAY_AFTER_CATEGORY_RATIO = 0.55; /* between a category heading and its first item */
+const DISPLAY_BEFORE_CATEGORY_RATIO = 0.9; /* between the previous group and the next heading */
+const DISPLAY_LINE_HEIGHT = 1.25;
+/** Baseline offset from the top of a line box, so ascenders stay inside the content band. */
+const DISPLAY_BASELINE_FROM_TOP = 0.98;
+const DISPLAY_MAX_ITEM_PT = 28;
+const DISPLAY_MIN_ITEM_PT = 1;
+/** Very long menus flow into extra columns rather than shrink items below this size. */
+const DISPLAY_MIN_READABLE_PT = 10;
+const DISPLAY_MAX_COLUMNS = 4;
+const DISPLAY_COLUMN_GAP_MM = 8;
 
 type EmbeddedFonts = { body: PDFFont; bodyBold: PDFFont; bodyItalic: PDFFont };
 
@@ -98,34 +111,72 @@ async function embedImageFromBytes(doc: PDFDocument, bytes: Uint8Array): Promise
   return image;
 }
 
-function totalDisplayHeight(
+type DisplayFonts = { item: PDFFont; category: PDFFont };
+
+type DisplayBlock = {
+  isCategory: boolean;
+  font: PDFFont;
+  size: number;
+  lines: string[];
+  /** Vertical space before this block's first line box (dropped at the top of a column). */
+  gapBefore: number;
+  /** Height of the line boxes, excluding `gapBefore`. */
+  height: number;
+};
+
+/** Lays out the display menu at a given item size; every block's gap and line height derive from it. */
+function layoutDisplayBlocks(
   displayLines: DisplayLine[],
   itemSize: number,
   categoryRatio: number,
-  contentWidth: number,
-  displayFont: PDFFont
-): number {
+  columnWidth: number,
+  fonts: DisplayFonts
+): DisplayBlock[] {
   const catSize = itemSize * categoryRatio;
-  const itemLH = itemSize * 1.25;
-  const catLH = catSize * 1.25;
-  const itemGap = itemSize * DISPLAY_ITEM_GAP_RATIO;
-  let h = 0;
+  const blocks: DisplayBlock[] = [];
   for (let i = 0; i < displayLines.length; i++) {
     const line = displayLines[i]!;
-    if (line.kind === "category") {
-      const wrapped = wrapWords(line.title, displayFont, catSize, contentWidth);
-      h += wrapped.length * catLH;
-      h += DISPLAY_AFTER_CATEGORY_PT;
-    } else {
-      const wrapped = wrapWords(line.title, displayFont, itemSize, contentWidth);
-      h += wrapped.length * itemLH;
-      h += itemGap;
+    const prev = i > 0 ? displayLines[i - 1]! : null;
+    const isCat = line.kind === "category";
+    const font = isCat ? fonts.category : fonts.item;
+    const size = isCat ? catSize : itemSize;
+    const gapBefore = !prev
+      ? 0
+      : isCat
+        ? itemSize * DISPLAY_BEFORE_CATEGORY_RATIO
+        : prev.kind === "category"
+          ? itemSize * DISPLAY_AFTER_CATEGORY_RATIO
+          : itemSize * DISPLAY_ITEM_GAP_RATIO;
+    const lines = wrapWords(line.title, font, size, columnWidth);
+    blocks.push({ isCategory: isCat, font, size, lines, gapBefore, height: lines.length * size * DISPLAY_LINE_HEIGHT });
+  }
+  return blocks;
+}
+
+type DisplayColumn = { blocks: DisplayBlock[]; height: number };
+
+/**
+ * Greedily flows blocks into at most `maxColumns` columns of height `columnH`, never leaving a category
+ * heading at the foot of a column without its first item. Returns null if the menu does not fit.
+ */
+function packDisplayColumns(blocks: DisplayBlock[], maxColumns: number, columnH: number): DisplayColumn[] | null {
+  const columns: DisplayColumn[] = [{ blocks: [], height: 0 }];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!;
+    const next = block.isCategory ? blocks[i + 1] : undefined;
+    let col = columns[columns.length - 1]!;
+    const needed = (c: DisplayColumn) =>
+      (c.blocks.length ? block.gapBefore : 0) + block.height + (next ? next.gapBefore + next.height : 0);
+    if (col.blocks.length && col.height + needed(col) > columnH) {
+      if (columns.length >= maxColumns) return null;
+      col = { blocks: [], height: 0 };
+      columns.push(col);
     }
+    if (col.height + needed(col) > columnH) return null;
+    col.height += (col.blocks.length ? block.gapBefore : 0) + block.height;
+    col.blocks.push(block);
   }
-  if (displayLines.length && displayLines[displayLines.length - 1]!.kind === "item") {
-    h -= itemGap;
-  }
-  return h;
+  return columns;
 }
 
 /**
@@ -134,8 +185,9 @@ function totalDisplayHeight(
 export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
-  const { body } = await loadEmbeddedFonts(doc);
+  const { body, bodyBold } = await loadEmbeddedFonts(doc);
   const displayFont = await loadNotoForDisplayMenu(doc, body);
+  const fonts: DisplayFonts = { item: displayFont, category: bodyBold };
   const bgBytes = new Uint8Array(await readFile(WATER_BG_PATH));
   const bgImage = await embedImageFromBytes(doc, bgBytes);
 
@@ -144,14 +196,15 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise
   const pw = A4_PORTRAIT_W;
   page.drawImage(bgImage, { x: 0, y: 0, width: pw, height: ph });
 
-  const contentBottom = 0.18 * ph;
-  const contentTop = 0.82 * ph;
+  /* White band of the water background runs ~18%–82%; keep text clear of its edges. */
+  const bandInset = mmToPt(6);
+  const contentBottom = 0.18 * ph + bandInset;
+  const contentTop = 0.82 * ph - bandInset;
   const contentH = contentTop - contentBottom;
   const yVC = (contentTop + contentBottom) / 2;
   const marginX = mmToPt(12);
   const contentWidth = pw - marginX * 2;
   const categoryRatio = 0.72;
-  const itemGap = (size: number) => size * DISPLAY_ITEM_GAP_RATIO;
 
   const displayLines = flattenForDisplayMenu(menu);
   if (displayLines.length === 0) {
@@ -167,46 +220,58 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise
     return doc.save();
   }
 
-  let lo = 5;
-  let hi = 28;
-  while (lo < hi) {
-    const mid = Math.floor((lo + hi + 1) / 2);
-    const t = totalDisplayHeight(displayLines, mid, categoryRatio, contentWidth, displayFont);
-    if (t <= contentH) lo = mid;
-    else hi = mid - 1;
-  }
-  const itemSize = lo;
-  const catSize = itemSize * categoryRatio;
-  const itemLH = itemSize * 1.25;
-  const catLH = catSize * 1.25;
-  const gap = itemGap(itemSize);
+  const columnGap = mmToPt(DISPLAY_COLUMN_GAP_MM);
+  const columnWidthFor = (n: number) => (contentWidth - (n - 1) * columnGap) / n;
+  const packAt = (size: number, n: number) =>
+    packDisplayColumns(layoutDisplayBlocks(displayLines, size, categoryRatio, columnWidthFor(n), fonts), n, contentH);
 
-  const totalH = totalDisplayHeight(displayLines, itemSize, categoryRatio, contentWidth, displayFont);
-  /* Vertically centre the full block; first baseline = band centre + half block height. */
-  let cursorY = yVC + totalH / 2;
-  for (let idx = 0; idx < displayLines.length; idx++) {
-    const line = displayLines[idx]!;
-    if (line.kind === "category") {
-      const wrapped = wrapWords(line.title, displayFont, catSize, contentWidth);
-      for (const w of wrapped) {
-        const tw = displayFont.widthOfTextAtSize(w, catSize);
-        const x = marginX + (contentWidth - tw) / 2;
-        page.drawText(w, { x, y: cursorY, size: catSize, font: displayFont, color: rgb(0, 0, 0) });
-        cursorY -= catLH;
-      }
-      cursorY -= DISPLAY_AFTER_CATEGORY_PT;
-    } else {
-      const wrapped = wrapWords(line.title, displayFont, itemSize, contentWidth);
-      for (const w of wrapped) {
-        const tw = displayFont.widthOfTextAtSize(w, itemSize);
-        const x = marginX + (contentWidth - tw) / 2;
-        page.drawText(w, { x, y: cursorY, size: itemSize, font: displayFont, color: rgb(0, 0, 0) });
-        cursorY -= itemLH;
-      }
-      if (idx < displayLines.length - 1) cursorY -= gap;
+  /* Largest item size (to 0.1pt) at which the whole menu fits the band in `n` columns. */
+  const bestSizeFor = (n: number) => {
+    let lo = DISPLAY_MIN_ITEM_PT;
+    let hi = DISPLAY_MAX_ITEM_PT;
+    if (packAt(hi, n)) return hi;
+    while (hi - lo > 0.1) {
+      const mid = (lo + hi) / 2;
+      if (packAt(mid, n)) lo = mid;
+      else hi = mid;
     }
-    if (cursorY < contentBottom) break;
+    return lo;
+  };
+
+  /* Fewest columns that keep text readable; if even the maximum can't, whichever count reads largest. */
+  let columnCount = 1;
+  let itemSize = bestSizeFor(1);
+  for (let n = 2; n <= DISPLAY_MAX_COLUMNS && itemSize < DISPLAY_MIN_READABLE_PT; n++) {
+    const size = bestSizeFor(n);
+    if (size > itemSize) {
+      itemSize = size;
+      columnCount = n;
+    }
   }
+  const columnWidth = columnWidthFor(columnCount);
+  const blocks = layoutDisplayBlocks(displayLines, itemSize, categoryRatio, columnWidth, fonts);
+  const columns = packDisplayColumns(blocks, columnCount, contentH) ?? [
+    { blocks, height: blocks.reduce((h, b, i) => h + (i ? b.gapBefore : 0) + b.height, 0) }
+  ];
+
+  /* Columns share a top edge; the tallest one is vertically centred in the band. */
+  const tallest = Math.min(contentH, Math.max(...columns.map((c) => c.height)));
+  const columnsTop = yVC + tallest / 2;
+  columns.forEach((column, ci) => {
+    const colLeft = marginX + ci * (columnWidth + columnGap);
+    let lineTop = columnsTop;
+    column.blocks.forEach((block, bi) => {
+      if (bi > 0) lineTop -= block.gapBefore;
+      const lineH = block.size * DISPLAY_LINE_HEIGHT;
+      for (const w of block.lines) {
+        const tw = block.font.widthOfTextAtSize(w, block.size);
+        const x = colLeft + (columnWidth - tw) / 2;
+        const y = lineTop - block.size * DISPLAY_BASELINE_FROM_TOP;
+        page.drawText(w, { x, y, size: block.size, font: block.font, color: rgb(0, 0, 0) });
+        lineTop -= lineH;
+      }
+    });
+  });
 
   return doc.save();
 }
@@ -220,7 +285,8 @@ const lineGray = rgb(0.35, 0.35, 0.35);
  */
 export async function renderBuffetAllergenMatrixPdf(
   menu: BuffetMenuState,
-  logoBytes: Uint8Array | null
+  logoBytes: Uint8Array | null,
+  allergenStatement = ""
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
@@ -230,16 +296,53 @@ export async function renderBuffetAllergenMatrixPdf(
   const H = A4_LAND_H;
   const items = allItemsInOrderForLabels(menu);
 
-  const margin = mmToPt(8);
-  const titleY = H - margin - 16;
-  const tableTop = titleY - 30;
+  const margin = mmToPt(12);
+  const titleSize = 18;
+  const titleY = H - margin - titleSize * 0.75;
   const tableLeft = margin;
   const tableRight = W - margin;
-  const tableBottom = margin + 6;
-  const nameColW = (tableRight - tableLeft) * 0.27;
-  const colW = (tableRight - tableLeft - nameColW) / ALLERGENS.length;
-  const namePadBot = 2.4;
+  const tableW = tableRight - tableLeft;
+  const nameColW = tableW * 0.27;
+  const colW = (tableW - nameColW) / ALLERGENS.length;
+  const namePadX = 4;
+  const namePadBot = 4;
   const maxNameLines = 4;
+
+  let logoImg: PDFImage | null = null;
+  if (logoBytes && logoBytes.length > 0) {
+    try {
+      logoImg = await embedImageFromBytes(doc, logoBytes);
+    } catch {
+      /* skip */
+    }
+  }
+  let logoW = 0;
+  let logoH = 0;
+  if (logoImg) {
+    const r = Math.min(mmToPt(42) / logoImg.width, mmToPt(16) / logoImg.height);
+    logoW = logoImg.width * r;
+    logoH = logoImg.height * r;
+  }
+  /* Table starts a clear gap below whichever is taller: the title or the logo. */
+  const tableTop = H - margin - Math.max(titleSize * 0.75, logoH) - mmToPt(8);
+
+  /* Optional small-print statement at the foot of every page; long statements drop from 9pt to 8pt. */
+  const statementParas = allergenStatement
+    .split(/\r?\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  let statementSize = 9;
+  let statementLines: string[] = [];
+  if (statementParas.length) {
+    for (const size of [9, 8]) {
+      statementSize = size;
+      statementLines = statementParas.flatMap((p) => wrapWords(p, body, size, tableW));
+      if (statementLines.length <= 4) break;
+    }
+  }
+  const statementLH = statementSize * 1.3;
+  const statementH = statementLines.length * statementLH;
+  const tableBottom = margin + (statementH ? statementH + mmToPt(6) : 0);
 
   let fontSize = 10.5;
   let headerSize = 8.5;
@@ -253,11 +356,11 @@ export async function renderBuffetAllergenMatrixPdf(
   /** Vertical room for one-line labels tilted 45° (span along y ≈ w·sin(45) plus padding). */
   const headerHForTilted = (hs: number) => {
     const w = maxAllergyLabelWidth(hs);
-    return Math.min(80, Math.max(34, w * headerSin + hs * 0.85 + 10));
+    return Math.min(90, Math.max(40, w * headerSin + hs * 0.85 + 18));
   };
 
   /** Distance from top grid line to first text baseline: cap height + small gap (keeps glyphs below the line). */
-  const nameTopToFirstBaseline = (s: number) => s * 0.72 + 1.2;
+  const nameTopToFirstBaseline = (s: number) => s * 0.72 + 4;
   const rowHFor = (s: number, maxLines: number) => {
     const ls = s * 1.12;
     return nameTopToFirstBaseline(s) + (maxLines - 1) * ls + s * 0.22 + namePadBot;
@@ -267,7 +370,7 @@ export async function renderBuffetAllergenMatrixPdf(
     let maxLines = 1;
     for (const it of slice) {
       const raw = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
-      const lines = wrapWords(raw, body, size, nameColW - 3);
+      const lines = wrapWords(raw, body, size, nameColW - namePadX * 2);
       maxLines = Math.max(maxLines, Math.min(maxNameLines, lines.length));
     }
     return maxLines;
@@ -299,15 +402,6 @@ export async function renderBuffetAllergenMatrixPdf(
     pageChunks.push(items.slice(i, i + rowsPerPage));
   }
 
-  let logoImg: PDFImage | null = null;
-  if (logoBytes && logoBytes.length > 0) {
-    try {
-      logoImg = await embedImageFromBytes(doc, logoBytes);
-    } catch {
-      /* skip */
-    }
-  }
-
   for (let pageIndex = 0; pageIndex < pageChunks.length; pageIndex++) {
     const pageItems = pageChunks[pageIndex]!;
     const n = pageItems.length;
@@ -315,15 +409,16 @@ export async function renderBuffetAllergenMatrixPdf(
 
     const title =
       pageChunks.length > 1 ? `Allergen Matrix (${pageIndex + 1}/${pageChunks.length})` : "Allergen Matrix";
-    const titleW = bodyBold.widthOfTextAtSize(title, 16);
-    page.drawText(title, { x: (W - titleW) / 2, y: titleY, size: 16, font: bodyBold, color: ink });
+    const titleW = bodyBold.widthOfTextAtSize(title, titleSize);
+    page.drawText(title, { x: (W - titleW) / 2, y: titleY, size: titleSize, font: bodyBold, color: ink });
+
+    let sy = margin + statementH - statementSize;
+    for (const ln of statementLines) {
+      page.drawText(ln, { x: tableLeft, y: sy, size: statementSize, font: body, color: ink });
+      sy -= statementLH;
+    }
 
     if (logoImg) {
-      const maxLogoW = mmToPt(42);
-      const maxLogoH = mmToPt(16);
-      const r = Math.min(maxLogoW / logoImg.width, maxLogoH / logoImg.height);
-      const logoW = logoImg.width * r;
-      const logoH = logoImg.height * r;
       page.drawImage(logoImg, { x: W - margin - logoW, y: H - margin - logoH, width: logoW, height: logoH });
     }
 
@@ -386,19 +481,19 @@ export async function renderBuffetAllergenMatrixPdf(
       const name = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
       const rowTopY = dataTop - r * rowH;
       const rowBotY = rowTopY - rowH;
-      const nameLines = wrapWords(name, body, fontSize, nameColW - 3);
+      const nameLines = wrapWords(name, body, fontSize, nameColW - namePadX * 2);
       const showLines = nameLines.slice(0, maxNameLines);
       if (nameLines.length > maxNameLines) {
         // Make it obvious the item name continues rather than silently cutting it off.
         let last = `${showLines[maxNameLines - 1]}…`;
-        while (last.length > 1 && body.widthOfTextAtSize(last, fontSize) > nameColW - 3) {
+        while (last.length > 1 && body.widthOfTextAtSize(last, fontSize) > nameColW - namePadX * 2) {
           last = `${last.slice(0, -2)}…`;
         }
         showLines[maxNameLines - 1] = last;
       }
       let ny = rowTopY - nameTopToFirstBaseline(fontSize);
       for (const nl of showLines) {
-        page.drawText(nl, { x: tableLeft + 2, y: ny, size: fontSize, font: body, color: ink });
+        page.drawText(nl, { x: tableLeft + namePadX, y: ny, size: fontSize, font: body, color: ink });
         ny -= lineStep;
       }
       const rowMidY = (rowTopY + rowBotY) / 2;
@@ -419,7 +514,8 @@ export async function renderBuffetAllergenMatrixPdf(
 
 /**
  * Buffet labels tiled on A4 (A6: 2×2 portrait sheet, A7: 4×2 landscape sheet);
- * top 75% logo, title, diet; bottom 25% allergen grid (Lucide Square / SquareCheck).
+ * top 75% logo, title, diet; bottom 25% allergen grid (Lucide Square / SquareCheck),
+ * all raised above a blank strip at the foot of the label for the sign holder.
  */
 export async function renderBuffetLabelSheetsPdf(
   menu: BuffetMenuState,
@@ -466,7 +562,7 @@ export async function renderBuffetLabelSheetsPdf(
       const borderInset = mmToPt(1.5);
       const innerW = labelW - pad * 2;
       const innerTop = y0 + labelH - pad;
-      const innerBot = y0 + pad;
+      const innerBot = y0 + pad + mmToPt(LABEL_HOLDER_CLEARANCE_MM);
       const innerH = innerTop - innerBot;
       const allergenH = innerH * 0.25;
       const mainBandBottom = innerBot + allergenH;
@@ -563,11 +659,12 @@ export async function renderBuffetLabelSheetsPdf(
 
 export async function renderAllBuffetPdfs(
   menu: BuffetMenuState,
-  logo: { bytes: Uint8Array; contentType?: string } | null
+  logo: { bytes: Uint8Array; contentType?: string } | null,
+  options: { allergenStatement?: string } = {}
 ): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
   const [display, matrix, labelsA6, labelsA7] = await Promise.all([
     renderBuffetDisplayMenuPdf(menu),
-    renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null),
+    renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, options.allergenStatement ?? ""),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")
   ]);

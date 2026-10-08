@@ -57,6 +57,8 @@ export const buffetMenuGenerateBodySchema = z.object({
   menu: buffetMenuStateSchema,
   venueLogoKey: optionalKey,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
+  /** Small print for the foot of the allergen matrix; omitted or blank = none. */
+  allergenStatement: z.string().max(limits.MAX_BUFFET_ALLERGEN_STATEMENT_CHARS).optional(),
   /** Omitted or `"zip"`: return a ZIP of all PDFs; otherwise a single PDF (`"labels"` = A6, `"labelsA7"` = A7). */
   export: buffetExportModeSchema.optional().default("zip")
 });
@@ -74,4 +76,9 @@ export const buffetMenuSavePutBodySchema = z.object({
   name: z.string().min(1).max(limits.MAX_BUFFET_SAVED_NAME_CHARS),
   venueLogoKey: z.union([z.string().min(1).max(512), z.null()]).optional(),
   menu: buffetMenuStateSchema
+});
+
+export const buffetMenuSettingsSchema = z.object({
+  allergenStatement: z.string().max(limits.MAX_BUFFET_ALLERGEN_STATEMENT_CHARS),
+  showAllergenStatement: z.boolean()
 });

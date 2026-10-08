@@ -35,11 +35,11 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const { menu, venueLogoKey, venueLogoDataUrl, export: exportMode } = parsed.data;
+  const { menu, venueLogoKey, venueLogoDataUrl, allergenStatement, export: exportMode } = parsed.data;
   let rendered: Awaited<ReturnType<typeof renderAllBuffetPdfs>>;
   try {
     const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
-    rendered = await renderAllBuffetPdfs(menu, logo);
+    rendered = await renderAllBuffetPdfs(menu, logo, { allergenStatement });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error, "Generation failed.") }, { status: 500 });
   }

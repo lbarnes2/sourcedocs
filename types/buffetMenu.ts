@@ -31,3 +31,10 @@ export type BuffetMenuSavedFile = {
   venueLogoKey: string | null;
   menu: BuffetMenuState;
 };
+
+/** Persistent, menu-independent buffet document settings. */
+export type BuffetMenuSettings = {
+  /** Small print shown at the foot of the allergen matrix. */
+  allergenStatement: string;
+  showAllergenStatement: boolean;
+};
