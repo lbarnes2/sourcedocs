@@ -29,7 +29,8 @@ import {
   newItem,
   toMenuState
 } from "@/lib/buffetMenu/menuStore";
-import type { BuffetMenuItem } from "@/types/buffetMenu";
+import { MAX_BUFFET_ALLERGEN_STATEMENT_CHARS } from "@/lib/validation/limits";
+import type { BuffetMenuItem, BuffetMenuSettings } from "@/types/buffetMenu";
 
 type Store = BuffetMenuStore;
 
@@ -238,6 +239,14 @@ export default function BuffetMenuPage() {
   const [error, setError] = useState("");
   const [savedList, setSavedList] = useState<{ id: string; name: string; savedAt: string }[]>([]);
   const [r2SaveEnabled, setR2SaveEnabled] = useState(false);
+  const [settings, setSettings] = useState<BuffetMenuSettings>({ allergenStatement: "", showAllergenStatement: false });
+  const [savedSettings, setSavedSettings] = useState<BuffetMenuSettings | null>(null);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [statementOpen, setStatementOpen] = useState(false);
+  const settingsDirty =
+    savedSettings !== null &&
+    (settings.allergenStatement !== savedSettings.allergenStatement ||
+      settings.showAllergenStatement !== savedSettings.showAllergenStatement);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -269,7 +278,38 @@ export default function BuffetMenuPage() {
       }
       await refreshSaved();
     })();
+    void (async () => {
+      try {
+        const res = await fetch("/api/buffet-menu/settings");
+        if (!res.ok) throw new Error(await readResponseError(res, "Could not load the allergen statement."));
+        const data = (await res.json()) as BuffetMenuSettings;
+        setSettings(data);
+        setSavedSettings(data);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not load the allergen statement.");
+      }
+    })();
   }, [refreshSaved]);
+
+  const saveSettings = async () => {
+    setError("");
+    setSettingsBusy(true);
+    try {
+      const res = await fetch("/api/buffet-menu/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings)
+      });
+      if (!res.ok) throw new Error(await readResponseError(res, "Could not save the allergen statement."));
+      const data = (await res.json()) as BuffetMenuSettings;
+      setSettings(data);
+      setSavedSettings(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save the allergen statement.");
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
 
   const categoryIds = useMemo(() => store.categories.map((c) => catSortableId(c.id)), [store.categories]);
 
@@ -352,6 +392,7 @@ export default function BuffetMenuPage() {
         body: JSON.stringify({
           menu,
           venueLogoKey: venueLogoKey || null,
+          allergenStatement: settings.showAllergenStatement ? settings.allergenStatement : "",
           export: exportMode
         })
       });
@@ -583,6 +624,59 @@ export default function BuffetMenuPage() {
           <button type="button" onClick={() => void downloadExport("zip")} disabled={busy}>
             {busy ? "Working…" : "All documents (ZIP)"}
           </button>
+        </div>
+      </div>
+      <div className="panel panel--collapsible">
+        <div className={statementOpen ? "panel-collapsible-head panel-collapsible-head--open" : "panel-collapsible-head"}>
+          <h2 className="step-heading--collapsible">
+            <button
+              type="button"
+              className="panel-collapsible-trigger"
+              aria-expanded={statementOpen}
+              aria-controls="buffet-statement-settings"
+              onClick={() => setStatementOpen((o) => !o)}
+            >
+              <span className="panel-collapsible-title">Settings: allergen statement</span>
+              <span className="panel-collapsible-chevron" aria-hidden>
+                {statementOpen ? "▼" : "▶"}
+              </span>
+            </button>
+          </h2>
+          {!statementOpen ? (
+            <p className="text-muted panel-collapsible-summary">
+              {settings.showAllergenStatement && settings.allergenStatement.trim()
+                ? "Shown at the foot of the allergen matrix"
+                : "Not shown on the allergen matrix"}
+              {settingsDirty ? " · unsaved changes" : null}
+            </p>
+          ) : null}
+        </div>
+        <div id="buffet-statement-settings" hidden={!statementOpen}>
+          <p className="text-muted">
+            Small print at the foot of every allergen matrix page. Saved for future menus — it isn’t part of an individual menu.
+          </p>
+          <label className="buffet-statement-toggle">
+            <input
+              type="checkbox"
+              checked={settings.showAllergenStatement}
+              onChange={(e) => setSettings((s) => ({ ...s, showAllergenStatement: e.target.checked }))}
+            />
+            Show on allergen matrix
+          </label>
+          <textarea
+            className="buffet-statement-text"
+            value={settings.allergenStatement}
+            onChange={(e) => setSettings((s) => ({ ...s, allergenStatement: e.target.value }))}
+            maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
+            rows={4}
+            placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
+          />
+          <div className="buffet-saved-actions">
+            <button type="button" onClick={() => void saveSettings()} disabled={settingsBusy || savedSettings === null || !settingsDirty}>
+              {settingsBusy ? "Saving…" : "Save statement"}
+            </button>
+            <span className="text-muted">{settingsDirty ? "Unsaved changes — downloads still use what’s shown here." : savedSettings ? "Saved" : ""}</span>
+          </div>
         </div>
       </div>
     </main>

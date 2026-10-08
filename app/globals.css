@@ -649,21 +649,21 @@ tbody tr:nth-child(even) {
   text-decoration: underline;
 }
 
-.app-signage .step-heading--collapsible {
+:is(.app-signage, .app-buffet) .step-heading--collapsible {
   display: block;
   width: 100%;
   margin: 0;
 }
 
-.app-signage .panel-collapsible-head {
+:is(.app-signage, .app-buffet) .panel-collapsible-head {
   margin-bottom: 0;
 }
 
-.app-signage .panel-collapsible-head--open {
+:is(.app-signage, .app-buffet) .panel-collapsible-head--open {
   margin-bottom: 14px;
 }
 
-.app-signage .panel-collapsible-trigger {
+:is(.app-signage, .app-buffet) .panel-collapsible-trigger {
   box-sizing: border-box;
   width: 100%;
   display: flex;
@@ -685,35 +685,35 @@ tbody tr:nth-child(even) {
   transition: color 0.15s ease;
 }
 
-.app-signage .panel-collapsible-title {
+:is(.app-signage, .app-buffet) .panel-collapsible-title {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.app-signage .panel-collapsible-trigger:hover {
+:is(.app-signage, .app-buffet) .panel-collapsible-trigger:hover {
   color: var(--brand);
   transform: none;
   box-shadow: none;
 }
 
-.app-signage .panel-collapsible-trigger:focus-visible {
+:is(.app-signage, .app-buffet) .panel-collapsible-trigger:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
 
-.app-signage .panel-collapsible-trigger:active {
+:is(.app-signage, .app-buffet) .panel-collapsible-trigger:active {
   transform: none;
   box-shadow: none;
 }
 
-.app-signage .panel-collapsible-chevron {
+:is(.app-signage, .app-buffet) .panel-collapsible-chevron {
   flex-shrink: 0;
   font-size: 0.65em;
   opacity: 0.65;
   line-height: 1;
 }
 
-.app-signage .panel-collapsible-summary {
+:is(.app-signage, .app-buffet) .panel-collapsible-summary {
   margin: 6px 0 0;
 }
 
@@ -1033,6 +1033,22 @@ button.signage-logo-tile:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.buffet-statement-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.buffet-statement-text {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.buffet-saved-actions .text-muted {
+  align-self: center;
 }
 
 .buffet-saved-list {
