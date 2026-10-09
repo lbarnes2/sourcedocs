@@ -223,5 +223,10 @@ export async function POST(request: Request) {
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 80) || "event";
+  const slug = name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+  if (slug.length <= 80) return slug || "event";
+  // Cut at the last word break so long names don't end mid-word.
+  const cut = slug.slice(0, 80);
+  const lastBreak = cut.lastIndexOf("-");
+  return (lastBreak > 40 ? cut.slice(0, lastBreak) : cut) || "event";
 }

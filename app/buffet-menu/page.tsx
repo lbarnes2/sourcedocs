@@ -494,6 +494,7 @@ export default function BuffetMenuPage() {
       if (savedId === id) {
         setSavedId(null);
         setStore(createEmptyMenuStore());
+        setSavedName("Untitled menu");
       }
       await refreshSaved();
     } catch (e) {
@@ -682,16 +683,16 @@ export default function BuffetMenuPage() {
         </div>
         <div className="card-foot card-foot--inset card-foot--between">
           <div className="row">
-            <button type="button" className="btn-sm" onClick={() => void downloadExport("display")} disabled={busy}>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("display")} disabled={busy || itemTotal === 0}>
               Display menu
             </button>
-            <button type="button" className="btn-sm" onClick={() => void downloadExport("matrix")} disabled={busy}>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("matrix")} disabled={busy || itemTotal === 0}>
               Allergen matrix
             </button>
-            <button type="button" className="btn-sm" onClick={() => void downloadExport("labels")} disabled={busy}>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("labels")} disabled={busy || itemTotal === 0}>
               A6 labels
             </button>
-            <button type="button" className="btn-sm" onClick={() => void downloadExport("labelsA7")} disabled={busy}>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("labelsA7")} disabled={busy || itemTotal === 0}>
               A7 labels
             </button>
           </div>

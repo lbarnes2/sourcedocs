@@ -298,7 +298,7 @@ function SlotEditor({
           {slot.message ? <span className="badge">Message</span> : null}
           {dual ? <span className="badge badge--accent">2 events</span> : null}
         </span>
-        <span className="spacer" />
+        <span className="slot-actions">
         <button
           type="button"
           className="icon-btn icon-btn--sm"
@@ -319,6 +319,7 @@ function SlotEditor({
         >
           <Trash2 size={15} />
         </button>
+        </span>
       </div>
       {open ? (
         <div className="slot-body stack">
@@ -413,6 +414,8 @@ export default function SignagePage() {
   const [busy, setBusy] = useState(false);
 
   const [draft, setDraft] = useState<VenueSignageProfile>(() => defaultProfile());
+  /** Snapshot of the draft as last opened/saved, for unsaved-changes checks. */
+  const [baseline, setBaseline] = useState(() => stableStringify(draft));
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const [venueLogos, setVenueLogos] = useState<LogoItem[]>([]);
@@ -453,7 +456,7 @@ export default function SignagePage() {
   const adhocDual = adhocSecondaryArrow !== "none";
 
   const savedProfile = useMemo(() => profiles.find((p) => p.id === selectedId) ?? null, [profiles, selectedId]);
-  const draftDirty = !savedProfile || stableStringify(savedProfile) !== stableStringify(draft);
+  const draftDirty = stableStringify(draft) !== baseline;
 
   const loadProfiles = useCallback(async () => {
     setError("");
@@ -464,6 +467,7 @@ export default function SignagePage() {
     }
     const data = (await r.json()) as { profiles: VenueSignageProfile[] };
     setProfiles(data.profiles);
+    return data.profiles;
   }, []);
 
   const loadLogos = useCallback(async () => {
@@ -488,18 +492,28 @@ export default function SignagePage() {
     if (loading || didInitialPick || !profiles.length) return;
     setDidInitialPick(true);
     setSelectedId(profiles[0].id);
-    setDraft({ ...profiles[0], slots: profiles[0].slots.map((s) => ({ ...s })) });
+    openDraft(profiles[0]);
   }, [loading, didInitialPick, profiles]);
+
+  /** Loads a profile into the editor and records it as the unchanged baseline. */
+  function openDraft(p: VenueSignageProfile) {
+    const copy = { ...p, slots: p.slots.map((s) => ({ ...s })), theme: { ...p.theme } };
+    setDraft(copy);
+    setBaseline(stableStringify(copy));
+  }
+
+  /** Asks before discarding unsaved profile edits. */
+  function confirmDiscardDraft(): boolean {
+    if (!draftDirty) return true;
+    return window.confirm(`Discard unsaved changes to “${draft.name || "this profile"}”?`);
+  }
 
   function selectProfile(id: string) {
     const p = profiles.find((x) => x.id === id);
     if (!p) return;
+    if (id !== selectedId && !confirmDiscardDraft()) return;
     setSelectedId(id);
-    setDraft({
-      ...p,
-      slots: p.slots.length ? p.slots.map((s) => ({ ...s })) : [emptySlot()],
-      theme: { ...p.theme }
-    });
+    openDraft({ ...p, slots: p.slots.length ? p.slots : [emptySlot()] });
     setPackOverrideTheme(false);
     setPackPrimary(p.theme.primaryColor);
     setPackAccent(p.theme.accentColor);
@@ -507,6 +521,11 @@ export default function SignagePage() {
   }
 
   async function saveDraft() {
+    // A new profile whose ID matches a saved one would silently overwrite it.
+    if (!selectedId && profiles.some((p) => p.id === draft.id.trim())) {
+      setError("That profile ID is already used by another venue. Change it under Advanced before saving.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -518,8 +537,11 @@ export default function SignagePage() {
       if (!r.ok) {
         throw new Error(await readResponseError(r, "Save failed."));
       }
-      await loadProfiles();
+      const fresh = await loadProfiles();
       setSelectedId(draft.id);
+      // The server trims and normalises fields; adopt its copy so the editor doesn't stay "unsaved".
+      const saved = fresh?.find((p) => p.id === draft.id);
+      openDraft(saved ?? draft);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed.");
     } finally {
@@ -538,7 +560,7 @@ export default function SignagePage() {
       });
       if (!r.ok) throw new Error(await readResponseError(r, "Delete failed."));
       setSelectedId(null);
-      setDraft(defaultProfile());
+      openDraft(defaultProfile());
       await loadProfiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed.");
@@ -548,9 +570,10 @@ export default function SignagePage() {
   }
 
   function newProfile() {
+    if (!confirmDiscardDraft()) return;
     const p = defaultProfile();
     setSelectedId(null);
-    setDraft(p);
+    openDraft(p);
     setPackPrimary(p.theme.primaryColor);
     setPackAccent(p.theme.accentColor);
     setPackText(p.theme.textColor);
@@ -767,7 +790,7 @@ export default function SignagePage() {
     >
       <div className="stack">
         <div className="form-grid">
-          <Field label="Venue profile" as="div">
+          <Field label="Venue profile" as="div" className="span-all field--half">
             <div className="row" style={{ flexWrap: "nowrap" }}>
               {profileSelect}
               <button type="button" className="btn-ghost" onClick={() => setTab("profiles")} disabled={!selectedId}>
@@ -775,7 +798,6 @@ export default function SignagePage() {
               </button>
             </div>
           </Field>
-          <div />
           <Field label="Event name">
             <input value={packEventName} onChange={(e) => setPackEventName(e.target.value)} placeholder="e.g. Smith Wedding" />
           </Field>
@@ -1061,13 +1083,32 @@ export default function SignagePage() {
                 <Trash2 size={14} aria-hidden /> Delete
               </button>
             ) : null}
-            <button type="button" className="btn-primary btn-sm" disabled={busy || !draftDirty} onClick={() => void saveDraft()}>
-              {busy ? "Saving…" : draftDirty ? "Save profile" : "Saved"}
+            <button type="button" className="btn-primary btn-sm" disabled={busy || (Boolean(selectedId) && !draftDirty)} onClick={() => void saveDraft()}>
+              {busy ? "Saving…" : !selectedId || draftDirty ? "Save profile" : "Saved"}
             </button>
           </>
         }
       >
         <div className="stack">
+          <div className="split-switcher row" style={{ flexWrap: "nowrap" }}>
+            <select
+              value={selectedId ?? ""}
+              aria-label="Venue profile"
+              onChange={(e) => {
+                if (e.target.value) selectProfile(e.target.value);
+              }}
+            >
+              {!selectedId ? <option value="">{draft.name || "Untitled"} (unsaved)</option> : null}
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={newProfile}>
+              <Plus size={14} aria-hidden /> New
+            </button>
+          </div>
           <div className="form-grid">
             <Field label="Profile name" className="span-all">
               <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
@@ -1098,7 +1139,7 @@ export default function SignagePage() {
             <div className="stack stack--sm">
               {draft.slots.map((slot, index) => (
                 <SlotEditor
-                  key={`${draft.id}-${index}`}
+                  key={`${selectedId ?? "new"}-${index}`}
                   slot={slot}
                   index={index}
                   canRemove={draft.slots.length > 1}
@@ -1194,7 +1235,7 @@ export default function SignagePage() {
                 className="mono"
                 value={draft.id}
                 onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
-                disabled={profiles.some((p) => p.id === draft.id)}
+                disabled={Boolean(selectedId)}
               />
             </Field>
           </Disclosure>

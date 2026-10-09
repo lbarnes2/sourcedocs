@@ -111,8 +111,22 @@ export default function FloorplansPage() {
     setSelectedIds([]);
   }
 
+  // React registers wheel handlers as passive, so preventDefault() there can't stop the page
+  // scrolling while zooming. Attach a non-passive native listener instead.
   useEffect(() => {
-    void refreshList();
+    const viewport = canvasViewportRef.current;
+    if (!viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const direction = event.deltaY < 0 ? 1 : -1;
+      setZoom((previous) => Math.max(0.3, Math.min(3, previous + direction * 0.08)));
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => {
+    void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
     void Promise.all([refreshVenueLogoLibrary(), refreshClientLogoLibrary()]);
   }, []);
 
@@ -544,7 +558,7 @@ export default function FloorplansPage() {
             <button
               type="button"
               onClick={() => {
-                void refreshList();
+                void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
                 setListOpen(true);
               }}
             >
@@ -732,11 +746,6 @@ export default function FloorplansPage() {
               backgroundSize: `${draft.canvas.gridSize * zoom}px ${draft.canvas.gridSize * zoom}px`,
               backgroundPosition: `${pan.x}px ${pan.y}px`
             }}
-            onWheel={(event) => {
-              event.preventDefault();
-              const direction = event.deltaY < 0 ? 1 : -1;
-              setZoom((previous) => Math.max(0.3, Math.min(3, previous + direction * 0.08)));
-            }}
             onPointerDown={(event) => {
               const target = event.target as HTMLElement | null;
               const hitObjectButton = Boolean(target?.closest("button"));
@@ -870,7 +879,9 @@ export default function FloorplansPage() {
             </div>
             {draft.objects.length === 0 ? (
               <div className="editor-canvas-empty">
-                Add tables from the toolbar, or generate a grid with <strong>Auto layout</strong>.
+                <span>
+                  Add tables from the toolbar, or generate a grid with <strong>Auto layout</strong>.
+                </span>
               </div>
             ) : null}
           </div>

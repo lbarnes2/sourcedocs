@@ -93,7 +93,12 @@ function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[]
     transformHeader: (header) => header.trim()
   });
   if (parsed.errors.length) {
-    throw new Error(parsed.errors.map((error) => error.message).join("; "));
+    // Papa's row index excludes the header line; +2 gives the spreadsheet row number.
+    const details = parsed.errors
+      .slice(0, 3)
+      .map((error) => (typeof error.row === "number" ? `row ${error.row + 2}: ${error.message}` : error.message));
+    const more = parsed.errors.length > 3 ? ` (and ${parsed.errors.length - 3} more)` : "";
+    throw new Error(`Couldn't read that file — ${details.join("; ")}${more}.`);
   }
   return { headers: parsed.meta.fields ?? [], rows: parsed.data };
 }
@@ -534,13 +539,14 @@ export default function HomePage() {
 
   async function handleGuestDataFile(file: File) {
     setError("");
-    setHasAttemptedPreviewValidate(false);
-    setExportUnlocked(false);
     try {
       const text = isExcelFile(file) ? await excelFileToCsvText(file) : await file.text();
+      // Parse before touching state so a broken file doesn't half-replace the current one.
+      const parsed = parseCsvClient(text);
+      setHasAttemptedPreviewValidate(false);
+      setExportUnlocked(false);
       setCsvText(text);
       setGuestFileName(file.name);
-      const parsed = parseCsvClient(text);
       setHeaders(parsed.headers);
       setMapping(autoDetectMapping(parsed.headers));
     } catch (readError) {
@@ -832,6 +838,7 @@ export default function HomePage() {
   const logoLibraryMissing =
     (venueLogoLibrary.loaded && !venueLogoLibrary.configured) || (clientLogoLibrary.loaded && !clientLogoLibrary.configured);
   const dishCount = Object.keys(dishNameOverrides).length;
+  const mergedDishes = new Set(dishMenuDuplicateGroups.flatMap((group) => group.match.map((member) => member.trim())));
   const singleFileBlocked = outputFormat === "pdf" && bundleMode === "single" && selectedDocuments.length !== 1;
 
   const guestColumns: Array<{ key: "name" | "tableNumber" | "starter" | "main" | "dessert"; label: string }> = [
@@ -1400,6 +1407,8 @@ export default function HomePage() {
                 {Object.entries(dishNameOverrides).map(([originalName, override]) => (
                   <div key={originalName} className="dish-table-row">
                     <span className="dish-table-source">{originalName}</span>
+                    <label className="dish-table-cell">
+                    <span className="dish-table-mobile-label">Short name</span>
                     <textarea
                       rows={1}
                       autoComplete="off"
@@ -1412,6 +1421,9 @@ export default function HomePage() {
                         }))
                       }
                     />
+                    </label>
+                    <label className="dish-table-cell">
+                    <span className="dish-table-mobile-label">Long name</span>
                     <textarea
                       rows={1}
                       autoComplete="off"
@@ -1424,6 +1436,7 @@ export default function HomePage() {
                         }))
                       }
                     />
+                    </label>
                   </div>
                 ))}
               </div>
@@ -1438,9 +1451,14 @@ export default function HomePage() {
                     <>
                       <div className="chip-group">
                         {uniqueEffectiveDishes.map((dish) => (
-                          <label key={dish} className="chip">
+                          <label
+                            key={dish}
+                            className={mergedDishes.has(dish) ? "chip chip--disabled" : "chip"}
+                            title={mergedDishes.has(dish) ? "Already in a merge group below" : undefined}
+                          >
                             <input
                               type="checkbox"
+                              disabled={mergedDishes.has(dish)}
                               checked={menuMergePick.includes(dish)}
                               onChange={(event) =>
                                 setMenuMergePick((previous) =>
