@@ -1,16 +1,34 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { ArrowSymbolPicker } from "./ArrowSymbolPicker";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown, Download, Plus, Signpost, Trash2, X } from "lucide-react";
+import { ArrowGlyph, ArrowSymbolPicker } from "./ArrowSymbolPicker";
 import { LogoPicker } from "@/app/components/LogoPicker";
+import {
+  Callout,
+  ColorField,
+  Disclosure,
+  Field,
+  PageHeader,
+  Section,
+  Segmented,
+  Switch,
+  Tabs
+} from "@/app/components/ui";
 import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
 import * as limits from "@/lib/validation/limits";
 import { SIGNAGE_LOGO_NONE_SENTINEL } from "@/lib/signage/logoSelection";
-import type { PaperSize, SignageArrowDirection, SignageDualEventArrangement, VenueSignageProfile, VenueSignageSlot } from "@/types";
+import type {
+  PaperSize,
+  SignageArrowDirection,
+  SignageDualEventArrangement,
+  SignageThemeColors,
+  VenueSignageProfile,
+  VenueSignageSlot
+} from "@/types";
 
 function signageLogoKeyForApi(key: string): string | null | undefined {
   if (key === SIGNAGE_LOGO_NONE_SENTINEL) return null;
@@ -40,7 +58,33 @@ function defaultProfile(): VenueSignageProfile {
   };
 }
 
+/** Key-order-insensitive JSON for dirty checks (undefined fields are dropped, as on save). */
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      : v
+  );
+}
+
 type LogoItem = { key: string; label: string; assetUrl: string };
+type Orientation = "portrait" | "landscape";
+type OutputFormat = "pdf" | "png";
+type SignageTab = "pack" | "single" | "profiles";
+
+const PAPER_OPTIONS = PAPER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.value }));
+const ORIENTATION_OPTIONS = [
+  { value: "portrait" as const, label: "Portrait" },
+  { value: "landscape" as const, label: "Landscape" }
+];
+const FORMAT_OPTIONS = [
+  { value: "pdf" as const, label: "PDF" },
+  { value: "png" as const, label: "PNG" }
+];
+const ARRANGEMENT_OPTIONS = [
+  { value: "sideBySide" as const, label: "Side by side", title: "Two columns, arrows under each title" },
+  { value: "stacked" as const, label: "Stacked", title: "Portrait: one above the other with a divider. Landscape: arrow beside each block." }
+];
 
 async function downloadPdf(response: Response, fallbackName: string) {
   const blob = await response.blob();
@@ -61,7 +105,307 @@ function pdfBase64ToBlob(base64: string): Blob {
   return new Blob([bytes], { type: "application/pdf" });
 }
 
+/** Optional text input that stores `undefined` when cleared. */
+function optional(value: string): string | undefined {
+  return value ? value : undefined;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Second event block (shared by single signs and profile sign slots)          */
+/* -------------------------------------------------------------------------- */
+
+type SecondEventValue = {
+  eventName: string;
+  arrow: SignageArrowDirection;
+  arrangement: SignageDualEventArrangement;
+  venue: string;
+  subVenue: string;
+  date: string;
+};
+
+function SecondEventBlock({
+  value,
+  onChange,
+  onRemove,
+  disabled,
+  namePlaceholder,
+  fallbackHint
+}: {
+  value: SecondEventValue;
+  onChange: (patch: Partial<SecondEventValue>) => void;
+  onRemove: () => void;
+  disabled?: boolean;
+  namePlaceholder?: string;
+  fallbackHint: string;
+}) {
+  const hasOwnDetails = Boolean(value.venue || value.subVenue || value.date);
+  return (
+    <div className="second-event">
+      <div className="second-event-head">
+        <div>
+          <div className="second-event-title">Second event</div>
+          <div className="field-hint">Shares this sign with the first event, with its own arrow.</div>
+        </div>
+        <button type="button" className="btn-ghost btn-sm" onClick={onRemove} disabled={disabled}>
+          <X size={14} aria-hidden /> Remove
+        </button>
+      </div>
+      <div className="form-grid form-grid--3">
+        <Field label="Event name" className="span-2">
+          <input
+            value={value.eventName}
+            maxLength={limits.MAX_EVENT_NAME_CHARS}
+            placeholder={namePlaceholder}
+            onChange={(e) => onChange({ eventName: e.target.value })}
+          />
+        </Field>
+        <Field label="Arrow" as="div">
+          <ArrowSymbolPicker
+            value={value.arrow}
+            onChange={(arrow) => onChange({ arrow })}
+            disabled={disabled}
+            aria-label="Second event arrow"
+          />
+        </Field>
+        <Field label="Layout" as="div" className="span-all">
+          <Segmented
+            value={value.arrangement}
+            options={ARRANGEMENT_OPTIONS}
+            onChange={(arrangement) => onChange({ arrangement })}
+            aria-label="Two-event layout"
+          />
+        </Field>
+      </div>
+      <Disclosure label="Different venue or date for this event" defaultOpen={hasOwnDetails} className="second-event-more">
+        <div className="form-grid form-grid--3">
+          <Field label="Venue line">
+            <input
+              value={value.venue}
+              maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+              placeholder="Same as first event"
+              onChange={(e) => onChange({ venue: e.target.value })}
+            />
+          </Field>
+          <Field label="Sub-venue line">
+            <input
+              value={value.subVenue}
+              maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+              placeholder="Same as first event"
+              onChange={(e) => onChange({ subVenue: e.target.value })}
+            />
+          </Field>
+          <Field label="Date line">
+            <input
+              value={value.date}
+              maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+              placeholder="Same as first event"
+              onChange={(e) => onChange({ date: e.target.value })}
+            />
+          </Field>
+        </div>
+        <p className="field-hint" style={{ margin: "8px 0 0" }}>
+          {fallbackHint}
+        </p>
+      </Disclosure>
+    </div>
+  );
+}
+
+function AddSecondEventButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" className="btn-dashed" onClick={onClick} disabled={disabled}>
+      <Plus size={15} aria-hidden /> Add a second event to this sign
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Profile sign slot row                                                       */
+/* -------------------------------------------------------------------------- */
+
+function slotHasSecondEvent(slot: VenueSignageSlot): boolean {
+  return slot.secondaryArrow != null && slot.secondaryArrow !== "none";
+}
+
+function SlotEditor({
+  slot,
+  index,
+  canRemove,
+  busy,
+  onChange,
+  onRemove
+}: {
+  slot: VenueSignageSlot;
+  index: number;
+  canRemove: boolean;
+  busy: boolean;
+  onChange: (patch: Partial<VenueSignageSlot>) => void;
+  onRemove: () => void;
+}) {
+  const dual = slotHasSecondEvent(slot);
+  const [open, setOpen] = useState(() => Boolean(slot.message) || dual);
+  const clearSecondEvent = () =>
+    onChange({
+      secondaryArrow: undefined,
+      secondaryEventName: undefined,
+      dualEventArrangement: undefined,
+      secondaryVenueLabel: undefined,
+      secondarySubVenueLabel: undefined,
+      secondaryEventDate: undefined
+    });
+  return (
+    <div className={`slot${open ? " slot--open" : ""}`}>
+      <div className="slot-row">
+        <span className="slot-index">{index + 1}</span>
+        <label className="slot-count" title="Number of copies">
+          <input
+            type="number"
+            min={1}
+            max={500}
+            value={slot.count}
+            aria-label={`Copies of sign ${index + 1}`}
+            onChange={(e) => onChange({ count: Math.max(1, Number(e.target.value) || 1) })}
+          />
+          <span aria-hidden>×</span>
+        </label>
+        <select
+          className="slot-paper"
+          value={slot.paperSize}
+          aria-label={`Paper size for sign ${index + 1}`}
+          onChange={(e) => onChange({ paperSize: e.target.value as PaperSize })}
+        >
+          {PAPER_SIZE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <Segmented
+          size="sm"
+          value={slot.orientation}
+          options={ORIENTATION_OPTIONS}
+          onChange={(orientation) => onChange({ orientation })}
+          aria-label={`Orientation for sign ${index + 1}`}
+        />
+        <ArrowSymbolPicker
+          compact
+          value={slot.arrow}
+          onChange={(arrow) => onChange({ arrow })}
+          disabled={busy}
+          aria-label={`Arrow for sign ${index + 1}`}
+        />
+        <span className="slot-tags">
+          {slot.message ? <span className="badge">Message</span> : null}
+          {dual ? <span className="badge badge--accent">2 events</span> : null}
+        </span>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="icon-btn icon-btn--sm"
+          aria-expanded={open}
+          aria-label={open ? "Hide sign options" : "More sign options"}
+          title={open ? "Hide options" : "Message & second event"}
+          onClick={() => setOpen((o) => !o)}
+        >
+          <ChevronDown size={16} className={`card-chevron${open ? " card-chevron--open" : ""}`} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn icon-btn--sm btn-danger"
+          aria-label={`Remove sign ${index + 1}`}
+          title="Remove sign"
+          disabled={!canRemove}
+          onClick={onRemove}
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+      {open ? (
+        <div className="slot-body stack">
+          <Field label={<>Sign message <span className="optional">(optional)</span></>} hint="Printed above the arrow on this sign for every event.">
+            <textarea
+              rows={2}
+              value={slot.message ?? ""}
+              maxLength={limits.MAX_SIGNAGE_MESSAGE_CHARS}
+              placeholder="e.g. Please use the left hand entrance"
+              onChange={(e) => onChange({ message: optional(e.target.value) })}
+            />
+          </Field>
+          {dual ? (
+            <SecondEventBlock
+              value={{
+                eventName: slot.secondaryEventName ?? "",
+                arrow: slot.secondaryArrow ?? "right",
+                arrangement: slot.dualEventArrangement ?? "sideBySide",
+                venue: slot.secondaryVenueLabel ?? "",
+                subVenue: slot.secondarySubVenueLabel ?? "",
+                date: slot.secondaryEventDate ?? ""
+              }}
+              onChange={(patch) =>
+                patch.arrow === "none"
+                  ? clearSecondEvent()
+                  : onChange({
+                  ...("eventName" in patch ? { secondaryEventName: optional(patch.eventName ?? "") } : {}),
+                  ...("arrow" in patch ? { secondaryArrow: patch.arrow } : {}),
+                  ...("arrangement" in patch ? { dualEventArrangement: patch.arrangement } : {}),
+                  ...("venue" in patch ? { secondaryVenueLabel: optional(patch.venue ?? "") } : {}),
+                  ...("subVenue" in patch ? { secondarySubVenueLabel: optional(patch.subVenue ?? "") } : {}),
+                  ...("date" in patch ? { secondaryEventDate: optional(patch.date ?? "") } : {})
+                })
+              }
+              onRemove={clearSecondEvent}
+              disabled={busy}
+              namePlaceholder="e.g. Evening reception"
+              fallbackHint="Blank lines use this profile's second-event defaults, then the first event's lines."
+            />
+          ) : (
+            <AddSecondEventButton onClick={() => onChange({ secondaryArrow: "right" })} disabled={busy} />
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One-line summary of what a profile prints, e.g. "3 × A4 portrait ↑". */
+function PackSummary({ profile }: { profile: VenueSignageProfile }) {
+  const total = profile.slots.reduce((sum, slot) => sum + slot.count, 0);
+  const paperSizes = Array.from(new Set(profile.slots.map((slot) => slot.paperSize)));
+  return (
+    <div className="pack-summary">
+      <div className="pack-summary-head">
+        <span>
+          <strong>{total}</strong> sign{total === 1 ? "" : "s"} · {paperSizes.length} PDF{paperSizes.length === 1 ? "" : "s"} (
+          {paperSizes.join(", ")})
+        </span>
+      </div>
+      <ul className="pack-summary-list">
+        {profile.slots.map((slot, index) => (
+          <li key={index}>
+            <span className="pack-summary-glyph" aria-hidden>
+              <ArrowGlyph value={slot.arrow} size={16} />
+              {slotHasSecondEvent(slot) ? <ArrowGlyph value={slot.secondaryArrow ?? "none"} size={16} /> : null}
+            </span>
+            <span>
+              {slot.count} × {slot.paperSize} {slot.orientation}
+            </span>
+            {slotHasSecondEvent(slot) ? (
+              <span className="text-muted">+ {slot.secondaryEventName?.trim() || "second event"}</span>
+            ) : null}
+            {slot.message ? <span className="text-muted pack-summary-msg">“{slot.message}”</span> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Page                                                                       */
+/* -------------------------------------------------------------------------- */
+
 export default function SignagePage() {
+  const [tab, setTab] = useState<SignageTab>("pack");
   const [profiles, setProfiles] = useState<VenueSignageProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -85,17 +429,17 @@ export default function SignagePage() {
   const [packVenueOverride, setPackVenueOverride] = useState("");
   const [packSubVenueOverride, setPackSubVenueOverride] = useState("");
   const [packEventDate, setPackEventDate] = useState("");
-  const [packOutputFormat, setPackOutputFormat] = useState<"pdf" | "png">("pdf");
+  const [packOutputFormat, setPackOutputFormat] = useState<OutputFormat>("pdf");
 
   const [adhocEventName, setAdhocEventName] = useState("");
   const [adhocEventName2, setAdhocEventName2] = useState("");
   const [adhocPaper, setAdhocPaper] = useState<PaperSize>("A4");
-  const [adhocOrientation, setAdhocOrientation] = useState<"portrait" | "landscape">("portrait");
+  const [adhocOrientation, setAdhocOrientation] = useState<Orientation>("portrait");
   const [adhocArrow, setAdhocArrow] = useState<SignageArrowDirection>("left");
   const [adhocSecondaryArrow, setAdhocSecondaryArrow] = useState<SignageArrowDirection>("none");
   const [adhocVenueKey, setAdhocVenueKey] = useState("");
   const [adhocClientKey, setAdhocClientKey] = useState("");
-  const [adhocTheme, setAdhocTheme] = useState({ ...defaultSignageTheme });
+  const [adhocTheme, setAdhocTheme] = useState<SignageThemeColors>({ ...defaultSignageTheme });
   const [adhocVenueLine, setAdhocVenueLine] = useState("");
   const [adhocSubVenueLine, setAdhocSubVenueLine] = useState("");
   const [adhocEventDate, setAdhocEventDate] = useState("");
@@ -104,9 +448,12 @@ export default function SignagePage() {
   const [adhocSecondaryVenueLine, setAdhocSecondaryVenueLine] = useState("");
   const [adhocSecondarySubVenueLine, setAdhocSecondarySubVenueLine] = useState("");
   const [adhocSecondaryEventDate, setAdhocSecondaryEventDate] = useState("");
-  const [adhocOutputFormat, setAdhocOutputFormat] = useState<"pdf" | "png">("pdf");
+  const [adhocOutputFormat, setAdhocOutputFormat] = useState<OutputFormat>("pdf");
 
-  const [venueProfileEditorOpen, setVenueProfileEditorOpen] = useState(false);
+  const adhocDual = adhocSecondaryArrow !== "none";
+
+  const savedProfile = useMemo(() => profiles.find((p) => p.id === selectedId) ?? null, [profiles, selectedId]);
+  const draftDirty = !savedProfile || stableStringify(savedProfile) !== stableStringify(draft);
 
   const loadProfiles = useCallback(async () => {
     setError("");
@@ -208,6 +555,7 @@ export default function SignagePage() {
     setPackAccent(p.theme.accentColor);
     setPackText(p.theme.textColor);
     setPackOverrideTheme(false);
+    setTab("profiles");
   }
 
   function updateSlot(index: number, patch: Partial<VenueSignageSlot>) {
@@ -226,6 +574,15 @@ export default function SignagePage() {
       ...d,
       slots: d.slots.length > 1 ? d.slots.filter((_, i) => i !== index) : d.slots
     }));
+  }
+
+  function removeAdhocSecondEvent() {
+    setAdhocSecondaryArrow("none");
+    setAdhocEventName2("");
+    setAdhocDualArrangement("sideBySide");
+    setAdhocSecondaryVenueLine("");
+    setAdhocSecondarySubVenueLine("");
+    setAdhocSecondaryEventDate("");
   }
 
   async function generatePack() {
@@ -337,8 +694,8 @@ export default function SignagePage() {
         ...(adhocVenueLine.trim() ? { venueLabel: adhocVenueLine.trim() } : {}),
         ...(adhocSubVenueLine.trim() ? { subVenueLabel: adhocSubVenueLine.trim() } : {}),
         ...(adhocEventDate.trim() ? { eventDate: adhocEventDate.trim() } : {}),
-        ...(adhocSecondaryArrow === "none" && adhocMessage.trim() ? { message: adhocMessage.trim() } : {}),
-        ...(adhocSecondaryArrow !== "none"
+        ...(!adhocDual && adhocMessage.trim() ? { message: adhocMessage.trim() } : {}),
+        ...(adhocDual
           ? {
               secondaryArrow: adhocSecondaryArrow,
               dualEventArrangement: adhocDualArrangement,
@@ -370,779 +727,523 @@ export default function SignagePage() {
     }
   }
 
-  return (
-    <main className="app-signage">
-      <header className="app-header">
-        <Link href="/" className="app-backlink">
-          ← Home
-        </Link>
-        <h1>Event Signage</h1>
-        <p className="app-tagline">
-          Configure venue sign packs (counts, sizes, arrows), then download separate PDFs for each paper size
-          with event branding and optional venue and client logos—ready for tray selection on multifunction printers.
-        </p>
-      </header>
+  const profileSelect = (
+    <select
+      value={selectedId ?? ""}
+      onChange={(e) => {
+        const id = e.target.value;
+        if (id) selectProfile(id);
+      }}
+    >
+      <option value="">— Select a venue —</option>
+      {profiles.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+    </select>
+  );
 
-      {error ? (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {notice ? (
-        <p className="pill" role="status">
-          {notice}
-        </p>
-      ) : null}
-
-      {loading ? (
-        <p className="text-muted">Loading…</p>
-      ) : (
-        <>
-          <div className="panel panel--collapsible">
-            <div
-              className={
-                venueProfileEditorOpen ? "panel-collapsible-head panel-collapsible-head--open" : "panel-collapsible-head"
-              }
-            >
-              <h2 className="step-heading step-heading--collapsible">
-                <button
-                  type="button"
-                  className="panel-collapsible-trigger"
-                  aria-expanded={venueProfileEditorOpen}
-                  aria-controls="venue-profile-editor"
-                  id="venue-profile-editor-toggle"
-                  onClick={() => setVenueProfileEditorOpen((o) => !o)}
-                >
-                  <span className="step-heading-badge">1</span>
-                  <span className="panel-collapsible-title">Venue profiles</span>
-                  <span className="panel-collapsible-chevron" aria-hidden>
-                    {venueProfileEditorOpen ? "▼" : "▶"}
-                  </span>
-                </button>
-              </h2>
-              {!venueProfileEditorOpen ? (
-                <p className="text-muted panel-collapsible-summary" id="venue-profile-editor-summary">
-                  {draft.name} · {draft.slots.length} slot{draft.slots.length === 1 ? "" : "s"}
-                  {!selectedId ? " · unsaved draft" : null}
-                </p>
-              ) : null}
+  /* ------------------------------ Sign pack tab ----------------------------- */
+  const packTab = !profiles.length ? (
+    <Section>
+      <div className="empty-state">
+        <span className="empty-state-icon">
+          <Signpost size={20} aria-hidden />
+        </span>
+        <div>
+          <strong>No venue profiles yet</strong>
+          <div>A venue profile lists the signs a venue needs. Set one up once, then print a pack for any event.</div>
+        </div>
+        <button type="button" className="btn-primary" onClick={newProfile}>
+          <Plus size={16} aria-hidden /> Create a venue profile
+        </button>
+      </div>
+    </Section>
+  ) : (
+    <Section
+      title="Print a sign pack"
+      description="Every sign in the venue profile, branded for this event. You get one PDF per paper size, ready for tray selection."
+    >
+      <div className="stack">
+        <div className="form-grid">
+          <Field label="Venue profile" as="div">
+            <div className="row" style={{ flexWrap: "nowrap" }}>
+              {profileSelect}
+              <button type="button" className="btn-ghost" onClick={() => setTab("profiles")} disabled={!selectedId}>
+                Edit
+              </button>
             </div>
+          </Field>
+          <div />
+          <Field label="Event name">
+            <input value={packEventName} onChange={(e) => setPackEventName(e.target.value)} placeholder="e.g. Smith Wedding" />
+          </Field>
+          <Field label={<>Event date <span className="optional">(optional)</span></>}>
+            <input
+              value={packEventDate}
+              maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+              onChange={(e) => setPackEventDate(e.target.value)}
+              placeholder="e.g. Saturday 20 June 2026"
+            />
+          </Field>
+        </div>
 
-            <div id="venue-profile-editor" hidden={!venueProfileEditorOpen}>
-            <p className="text-muted" style={{ marginTop: 0 }}>
-              Each profile lists the signs you need for that venue (e.g. 3× A4 portrait up, 1× A3 welcome with no arrow).
-              Give a slot a sign message (e.g. “Please use the left hand entrance”) to print the same directions on it for
-              every event. Save defaults for venue and client logos to speed up one-click generation.
-            </p>
-            <p className="text-muted" style={{ marginTop: -4 }}>
-              Need to add, rename, or delete a logo? Use the <Link href="/logo-library">Logo Library</Link>.
-            </p>
-            {!logosConfigured && (
-              <p className="pill" style={{ marginBottom: 12 }}>
-                R2 is not configured — logo keys on generated PDFs require R2 (see{" "}
-                <code>.env.example</code>). You can still generate signs with colours and arrows.
-              </p>
-            )}
-            <div className="grid two" style={{ marginBottom: 14 }}>
-              <label>
-                Saved profiles
-                <select
-                  value={selectedId ?? ""}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    if (id) selectProfile(id);
-                  }}
-                >
-                  <option value="">— New unsaved —</option>
-                  {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
-                <button type="button" className="secondary" onClick={newProfile}>
-                  New profile
-                </button>
-                <button type="button" disabled={busy || !selectedId} onClick={() => void deleteSelected()}>
-                  Delete selected
-                </button>
-              </div>
-            </div>
+        {savedProfile ? <PackSummary profile={savedProfile} /> : null}
+        {savedProfile && draftDirty ? (
+          <Callout tone="warning">
+            This profile has unsaved edits. The pack prints the saved version —{" "}
+            <button type="button" className="text-button" onClick={() => setTab("profiles")}>
+              review and save
+            </button>{" "}
+            to include them.
+          </Callout>
+        ) : null}
 
-            <div className="grid two">
-              <label>
-                Profile id (filename-safe)
-                <input
-                  value={draft.id}
-                  onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
-                  disabled={profiles.some((p) => p.id === draft.id)}
-                  title="Cannot change id after save; create a new profile to pick a new id."
-                />
-              </label>
-              <label>
-                Display name
-                <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
-              </label>
-            </div>
-
-            <label style={{ display: "block", marginTop: 12 }}>
-              Venue line on signs (default for packs)
-              <input
-                value={draft.defaultVenueLabel ?? ""}
-                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    defaultVenueLabel: e.target.value ? e.target.value : undefined
-                  }))
-                }
-                placeholder="e.g. The Grand Hotel — shown in bold below the event name"
-              />
-            </label>
-
-            <label style={{ display: "block", marginTop: 12 }}>
-              Sub-venue line (optional, default for packs)
-              <input
-                value={draft.defaultSubVenueLabel ?? ""}
-                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    defaultSubVenueLabel: e.target.value ? e.target.value : undefined
-                  }))
-                }
-                placeholder="e.g. Oak Room — regular weight, under the venue line"
-              />
-            </label>
-
-            <label style={{ display: "block", marginTop: 12 }}>
-              Default event 2 venue line (optional — dual-arrow slots)
-              <input
-                value={draft.defaultSecondaryVenueLabel ?? ""}
-                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    defaultSecondaryVenueLabel: e.target.value ? e.target.value : undefined
-                  }))
-                }
-                placeholder="Per-slot or pack override; falls back to first-event venue when blank"
-              />
-            </label>
-            <label style={{ display: "block", marginTop: 12 }}>
-              Default event 2 sub-venue (optional)
-              <input
-                value={draft.defaultSecondarySubVenueLabel ?? ""}
-                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    defaultSecondarySubVenueLabel: e.target.value ? e.target.value : undefined
-                  }))
-                }
-              />
-            </label>
-            <label style={{ display: "block", marginTop: 12 }}>
-              Default event 2 date line (optional)
-              <input
-                value={draft.defaultSecondaryEventDate ?? ""}
-                maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    defaultSecondaryEventDate: e.target.value ? e.target.value : undefined
-                  }))
-                }
-              />
-            </label>
-
-            <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Sign slots (order = PDF page order)</h3>
-            {draft.slots.map((slot, index) => (
-              <div key={index} className="subpanel" style={{ marginBottom: 10 }}>
-                <div className="grid two">
-                  <label>
-                    Count
-                    <input
-                      type="number"
-                      min={1}
-                      max={500}
-                      value={slot.count}
-                      onChange={(e) => updateSlot(index, { count: Math.max(1, Number(e.target.value) || 1) })}
-                    />
-                  </label>
-                  <label>
-                    Arrow
-                    <ArrowSymbolPicker
-                      value={slot.arrow}
-                      onChange={(v) => updateSlot(index, { arrow: v })}
-                      disabled={busy}
-                      aria-label={`Arrow symbol for slot ${index + 1}`}
-                    />
-                  </label>
-                </div>
-                <label style={{ display: "block", marginTop: 10 }}>
-                  Sign message (optional, saved with the profile)
-                  <textarea
-                    rows={2}
-                    value={slot.message ?? ""}
-                    maxLength={limits.MAX_SIGNAGE_MESSAGE_CHARS}
-                    placeholder="e.g. Please use the left hand entrance — printed on this sign for every event, above the arrow"
-                    onChange={(e) => updateSlot(index, { message: e.target.value ? e.target.value : undefined })}
-                  />
-                </label>
-                <div className="grid two" style={{ marginTop: 10 }}>
-                  <label>
-                    Paper
-                    <select
-                      value={slot.paperSize}
-                      onChange={(e) => updateSlot(index, { paperSize: e.target.value as PaperSize })}
-                    >
-                      {PAPER_SIZE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Orientation
-                    <select
-                      value={slot.orientation}
-                      onChange={(e) =>
-                        updateSlot(index, { orientation: e.target.value as "portrait" | "landscape" })
-                      }
-                    >
-                      <option value="portrait">Portrait</option>
-                      <option value="landscape">Landscape</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="grid two" style={{ marginTop: 10 }}>
-                  <label>
-                    Second event (optional, same sign)
-                    <input
-                      value={slot.secondaryEventName ?? ""}
-                      maxLength={limits.MAX_EVENT_NAME_CHARS}
-                      placeholder="e.g. Evening reception (used when second arrow is set)"
-                      onChange={(e) =>
-                        updateSlot(index, {
-                          secondaryEventName: e.target.value ? e.target.value : undefined
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Second arrow
-                    <ArrowSymbolPicker
-                      value={slot.secondaryArrow ?? "none"}
-                      onChange={(v) =>
-                        updateSlot(index, {
-                          secondaryArrow: v === "none" ? undefined : v,
-                          ...(v === "none"
-                            ? {
-                                secondaryEventName: undefined,
-                                dualEventArrangement: undefined,
-                                secondaryVenueLabel: undefined,
-                                secondarySubVenueLabel: undefined,
-                                secondaryEventDate: undefined
-                              }
-                            : {})
-                        })
-                      }
-                      disabled={busy}
-                      aria-label={`Second arrow for slot ${index + 1}`}
-                    />
-                  </label>
-                </div>
-                {slot.secondaryArrow != null && slot.secondaryArrow !== "none" ? (
-                  <>
-                    <label style={{ display: "block", marginTop: 10 }}>
-                      Two-event layout
-                      <select
-                        value={slot.dualEventArrangement ?? "sideBySide"}
-                        onChange={(e) =>
-                          updateSlot(index, {
-                            dualEventArrangement: e.target.value as SignageDualEventArrangement
-                          })
-                        }
-                      >
-                        <option value="sideBySide">Side by side (columns, arrows under titles)</option>
-                        <option value="stacked">Stacked (portrait: divider + arrows below each block; landscape: arrow beside text)</option>
-                      </select>
-                    </label>
-                    <div className="grid two" style={{ marginTop: 10 }}>
-                      <label>
-                        Event 2 venue line (optional)
-                        <input
-                          value={slot.secondaryVenueLabel ?? ""}
-                          maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                          placeholder="Falls back to event 1 venue if blank"
-                          onChange={(e) =>
-                            updateSlot(index, {
-                              secondaryVenueLabel: e.target.value ? e.target.value : undefined
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Event 2 sub-venue (optional)
-                        <input
-                          value={slot.secondarySubVenueLabel ?? ""}
-                          maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                          placeholder="Falls back to event 1 sub-venue if blank"
-                          onChange={(e) =>
-                            updateSlot(index, {
-                              secondarySubVenueLabel: e.target.value ? e.target.value : undefined
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                    <label style={{ display: "block", marginTop: 10 }}>
-                      Event 2 date line (optional)
-                      <input
-                        value={slot.secondaryEventDate ?? ""}
-                        maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                        placeholder="Falls back to event 1 date if blank"
-                        onChange={(e) =>
-                          updateSlot(index, {
-                            secondaryEventDate: e.target.value ? e.target.value : undefined
-                          })
-                        }
-                      />
-                    </label>
-                  </>
-                ) : null}
-                <button type="button" className="secondary" style={{ marginTop: 10 }} onClick={() => removeSlot(index)}>
-                  Remove slot
-                </button>
-              </div>
-            ))}
-            <button type="button" className="secondary" onClick={addSlot}>
-              + Add slot
-            </button>
-
-            <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>PDF colours</h3>
-            <div className="grid two">
-              <label>
-                Primary
-                <input
-                  type="color"
-                  value={draft.theme.primaryColor}
-                  onChange={(e) => setDraft((d) => ({ ...d, theme: { ...d.theme, primaryColor: e.target.value } }))}
-                />
-              </label>
-              <label>
-                Accent
-                <input
-                  type="color"
-                  value={draft.theme.accentColor}
-                  onChange={(e) => setDraft((d) => ({ ...d, theme: { ...d.theme, accentColor: e.target.value } }))}
-                />
-              </label>
-              <label>
-                Text
-                <input
-                  type="color"
-                  value={draft.theme.textColor}
-                  onChange={(e) => setDraft((d) => ({ ...d, theme: { ...d.theme, textColor: e.target.value } }))}
-                />
-              </label>
-            </div>
-
-            <h3 style={{ fontSize: "0.95rem", marginTop: 18 }}>Default logos (optional)</h3>
-            <div className="grid two">
-              <div>
-                <LogoPicker
-                  title="Default venue logo"
-                  items={venueLogos}
-                  value={draft.defaultVenueLogoKey ?? ""}
-                  onChange={(key) =>
-                    setDraft((d) => ({
-                      ...d,
-                      defaultVenueLogoKey: key || undefined
-                    }))
-                  }
-                  emptyOption={{ label: "None", value: "" }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-              <div>
-                <LogoPicker
-                  title="Default client logo"
-                  items={clientLogos}
-                  value={draft.defaultClientLogoKey ?? ""}
-                  onChange={(key) =>
-                    setDraft((d) => ({
-                      ...d,
-                      defaultClientLogoKey: key || undefined
-                    }))
-                  }
-                  emptyOption={{ label: "None", value: "" }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-            </div>
-
-            <button type="button" style={{ marginTop: 16 }} disabled={busy} onClick={() => void saveDraft()}>
-              {busy ? "Saving…" : "Save venue profile"}
-            </button>
-            </div>
-          </div>
-
-          <div className="panel">
-            <h2 className="step-heading">
-              <span className="step-heading-badge">2</span>
-              <span>Generate pack from profile</span>
-            </h2>
-            <div className="grid two">
-              <label>
-                Event name (on every sign)
-                <input value={packEventName} onChange={(e) => setPackEventName(e.target.value)} placeholder="e.g. Smith Wedding" />
-              </label>
-              <label>
-                Profile
-                <select
-                  value={selectedId ?? ""}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    if (id) selectProfile(id);
-                  }}
-                >
-                  <option value="">— Select —</option>
-                  {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="grid two" style={{ marginTop: 10 }}>
-              <label>
-                Event date (on signs)
-                <input
-                  value={packEventDate}
-                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                  onChange={(e) => setPackEventDate(e.target.value)}
-                  placeholder="e.g. Saturday 20 June 2026"
-                />
-              </label>
-              <label>
-                Venue line (override)
+        <Disclosure label="Customise venue lines, colours and logos for this event">
+          <div className="stack">
+            <div className="form-grid">
+              <Field label="Venue line">
                 <input
                   value={packVenueOverride}
                   maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
                   onChange={(e) => setPackVenueOverride(e.target.value)}
-                  placeholder="Leave blank to use profile default"
+                  placeholder={savedProfile?.defaultVenueLabel ? `Profile: ${savedProfile.defaultVenueLabel}` : "Profile default (none)"}
                 />
-              </label>
+              </Field>
+              <Field label="Sub-venue line">
+                <input
+                  value={packSubVenueOverride}
+                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                  onChange={(e) => setPackSubVenueOverride(e.target.value)}
+                  placeholder={
+                    savedProfile?.defaultSubVenueLabel ? `Profile: ${savedProfile.defaultSubVenueLabel}` : "Profile default (none)"
+                  }
+                />
+              </Field>
             </div>
-            <label style={{ display: "block", marginTop: 10 }}>
-              Sub-venue line (override)
-              <input
-                value={packSubVenueOverride}
-                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                onChange={(e) => setPackSubVenueOverride(e.target.value)}
-                placeholder="Leave blank to use profile default"
-              />
-            </label>
-            <p className="text-muted" style={{ marginBottom: 8 }}>
-              Pack download gives one PDF for each paper size present in the profile. Each page is a single sign using the
-              event name you enter here (one event per sign). Logos: use profile defaults, pick a library asset, or choose{" "}
-              <strong>No logo</strong> to omit one or both even when the profile has defaults. Enable the checkbox to
-              override colours for this run.
-            </p>
-            <label className="checkbox-row" style={{ marginBottom: 12 }}>
-              <input
-                type="checkbox"
+            <div className="stack stack--sm">
+              <Switch
                 checked={packOverrideTheme}
-                onChange={(e) => {
-                  setPackOverrideTheme(e.target.checked);
-                  if (e.target.checked && selectedId) {
-                    const p = profiles.find((x) => x.id === selectedId);
-                    if (p) {
-                      setPackPrimary(p.theme.primaryColor);
-                      setPackAccent(p.theme.accentColor);
-                      setPackText(p.theme.textColor);
-                    }
+                onChange={(checked) => {
+                  setPackOverrideTheme(checked);
+                  if (checked && savedProfile) {
+                    setPackPrimary(savedProfile.theme.primaryColor);
+                    setPackAccent(savedProfile.theme.accentColor);
+                    setPackText(savedProfile.theme.textColor);
                   }
                 }}
+                label="Use different colours for this event"
               />
-              <span>Override profile colours for this download</span>
-            </label>
-            {packOverrideTheme ? (
-              <div className="grid two">
-                <label>
-                  Primary
-                  <input type="color" value={packPrimary} onChange={(e) => setPackPrimary(e.target.value)} />
-                </label>
-                <label>
-                  Accent
-                  <input type="color" value={packAccent} onChange={(e) => setPackAccent(e.target.value)} />
-                </label>
-                <label>
-                  Text
-                  <input type="color" value={packText} onChange={(e) => setPackText(e.target.value)} />
-                </label>
-              </div>
-            ) : null}
-            <div className="grid two">
-              <div>
-                <LogoPicker
-                  title="Venue logo (this run)"
-                  items={venueLogos}
-                  value={packVenueKey}
-                  onChange={setPackVenueKey}
-                  emptyOption={{ label: "Use profile default", value: "" }}
-                  secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-              <div>
-                <LogoPicker
-                  title="Client logo (this run)"
-                  items={clientLogos}
-                  value={packClientKey}
-                  onChange={setPackClientKey}
-                  emptyOption={{ label: "Use profile default", value: "" }}
-                  secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-            </div>
-            <div className="grid two" style={{ marginTop: 12 }}>
-              <label>
-                Format
-                <select value={packOutputFormat} onChange={(e) => setPackOutputFormat(e.target.value as "pdf" | "png")}>
-                  <option value="pdf">PDF</option>
-                  <option value="png">PNG image</option>
-                </select>
-              </label>
-            </div>
-            <button type="button" style={{ marginTop: 16 }} disabled={busy} onClick={() => void generatePack()}>
-              {busy ? "Working…" : `Download sign pack ${packOutputFormat === "png" ? "PNGs" : "PDFs"}`}
-            </button>
-          </div>
-
-          <div className="panel">
-            <h2 className="step-heading">
-              <span className="step-heading-badge">3</span>
-              <span>Ad-hoc single sign</span>
-            </h2>
-            <div className="grid two">
-              <label>
-                Event name
-                <input value={adhocEventName} onChange={(e) => setAdhocEventName(e.target.value)} />
-              </label>
-              <label>
-                Arrow
-                <ArrowSymbolPicker
-                  value={adhocArrow}
-                  onChange={setAdhocArrow}
-                  disabled={busy}
-                  aria-label="Arrow symbol for ad-hoc sign"
-                />
-              </label>
-              <label>
-                Paper
-                <select value={adhocPaper} onChange={(e) => setAdhocPaper(e.target.value as PaperSize)}>
-                  {PAPER_SIZE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Orientation
-                <select
-                  value={adhocOrientation}
-                  onChange={(e) => setAdhocOrientation(e.target.value as "portrait" | "landscape")}
-                >
-                  <option value="portrait">Portrait</option>
-                  <option value="landscape">Landscape</option>
-                </select>
-              </label>
-              <label>
-                Format
-                <select
-                  value={adhocOutputFormat}
-                  onChange={(e) => setAdhocOutputFormat(e.target.value as "pdf" | "png")}
-                >
-                  <option value="pdf">PDF</option>
-                  <option value="png">PNG image</option>
-                </select>
-              </label>
-            </div>
-            <div className="grid two" style={{ marginTop: 10 }}>
-              <label>
-                Second event (same sign)
-                <input
-                  value={adhocEventName2}
-                  onChange={(e) => setAdhocEventName2(e.target.value)}
-                  maxLength={limits.MAX_EVENT_NAME_CHARS}
-                  placeholder="Optional — right column when second arrow is set"
-                />
-              </label>
-              <label>
-                Second arrow
-                <ArrowSymbolPicker
-                  value={adhocSecondaryArrow}
-                  onChange={(v) => {
-                    setAdhocSecondaryArrow(v);
-                    if (v === "none") {
-                      setAdhocEventName2("");
-                      setAdhocDualArrangement("sideBySide");
-                      setAdhocSecondaryVenueLine("");
-                      setAdhocSecondarySubVenueLine("");
-                      setAdhocSecondaryEventDate("");
-                    }
-                  }}
-                  disabled={busy}
-                  aria-label="Second arrow for ad-hoc sign"
-                />
-              </label>
-            </div>
-            {adhocSecondaryArrow !== "none" ? (
-              <>
-                <label style={{ display: "block", marginTop: 10 }}>
-                  Two-event layout
-                  <select
-                    value={adhocDualArrangement}
-                    onChange={(e) => setAdhocDualArrangement(e.target.value as SignageDualEventArrangement)}
-                  >
-                    <option value="sideBySide">Side by side (columns, arrows under titles)</option>
-                    <option value="stacked">Stacked (portrait: divider + arrows below; landscape: arrow beside text)</option>
-                  </select>
-                </label>
-                <div className="grid two" style={{ marginTop: 10 }}>
-                  <label>
-                    Event 2 venue line
-                    <input
-                      value={adhocSecondaryVenueLine}
-                      maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                      onChange={(e) => setAdhocSecondaryVenueLine(e.target.value)}
-                      placeholder="Blank uses event 1 venue line"
-                    />
-                  </label>
-                  <label>
-                    Event 2 sub-venue
-                    <input
-                      value={adhocSecondarySubVenueLine}
-                      maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                      onChange={(e) => setAdhocSecondarySubVenueLine(e.target.value)}
-                      placeholder="Blank uses event 1 sub-venue"
-                    />
-                  </label>
+              {packOverrideTheme ? (
+                <div className="color-row">
+                  <ColorField label="Primary" value={packPrimary} onChange={setPackPrimary} />
+                  <ColorField label="Accent" value={packAccent} onChange={setPackAccent} />
+                  <ColorField label="Text" value={packText} onChange={setPackText} />
                 </div>
-                <label style={{ display: "block", marginTop: 10 }}>
-                  Event 2 date line
-                  <input
-                    value={adhocSecondaryEventDate}
-                    maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                    onChange={(e) => setAdhocSecondaryEventDate(e.target.value)}
-                    placeholder="Blank uses event 1 date line"
-                  />
-                </label>
-              </>
-            ) : null}
-            <div className="grid two">
-              <label>
-                Venue line
-                <input
-                  value={adhocVenueLine}
-                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                  onChange={(e) => setAdhocVenueLine(e.target.value)}
-                  placeholder="Optional — bold, below event name"
-                />
-              </label>
-              <label>
-                Event date
-                <input
-                  value={adhocEventDate}
-                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                  onChange={(e) => setAdhocEventDate(e.target.value)}
-                  placeholder="Optional — regular weight"
-                />
-              </label>
+              ) : null}
             </div>
-            <label style={{ display: "block", marginTop: 10 }}>
-              Sub-venue line
+            <div className="form-grid">
+              <LogoPicker
+                title="Venue logo"
+                items={venueLogos}
+                value={packVenueKey}
+                onChange={setPackVenueKey}
+                emptyOption={{ label: "Profile default", value: "" }}
+                secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
+                disabled={!logosConfigured || busy}
+              />
+              <LogoPicker
+                title="Client logo"
+                items={clientLogos}
+                value={packClientKey}
+                onChange={setPackClientKey}
+                emptyOption={{ label: "Profile default", value: "" }}
+                secondaryEmptyOption={{ label: "No logo", value: SIGNAGE_LOGO_NONE_SENTINEL }}
+                disabled={!logosConfigured || busy}
+              />
+            </div>
+          </div>
+        </Disclosure>
+      </div>
+      <div className="card-foot card-foot--inset">
+        <Segmented value={packOutputFormat} options={FORMAT_OPTIONS} onChange={setPackOutputFormat} aria-label="Output format" />
+        <button type="button" className="btn-primary" disabled={busy || !selectedId} onClick={() => void generatePack()}>
+          <Download size={16} aria-hidden />
+          {busy ? "Working…" : "Download sign pack"}
+        </button>
+      </div>
+    </Section>
+  );
+
+  /* ----------------------------- Single sign tab ---------------------------- */
+  const singleTab = (
+    <>
+      <Section title="What the sign says">
+        <div className="stack">
+          <div className="form-grid form-grid--3">
+            <Field label="Event name" className="span-2">
+              <input value={adhocEventName} onChange={(e) => setAdhocEventName(e.target.value)} placeholder="e.g. Smith Wedding" />
+            </Field>
+            <Field label="Arrow" as="div">
+              <ArrowSymbolPicker value={adhocArrow} onChange={setAdhocArrow} disabled={busy} aria-label="Arrow" />
+            </Field>
+            <Field label={<>Venue line <span className="optional">(optional)</span></>}>
+              <input
+                value={adhocVenueLine}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) => setAdhocVenueLine(e.target.value)}
+                placeholder="e.g. The Grand Hotel"
+              />
+            </Field>
+            <Field label={<>Sub-venue line <span className="optional">(optional)</span></>}>
               <input
                 value={adhocSubVenueLine}
                 maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
                 onChange={(e) => setAdhocSubVenueLine(e.target.value)}
-                placeholder="Optional — same size as venue, regular weight, under venue"
+                placeholder="e.g. Oak Room"
               />
-            </label>
-            {adhocSecondaryArrow === "none" ? (
-              <label style={{ display: "block", marginTop: 10 }}>
-                Sign message
+            </Field>
+            <Field label={<>Date line <span className="optional">(optional)</span></>}>
+              <input
+                value={adhocEventDate}
+                maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                onChange={(e) => setAdhocEventDate(e.target.value)}
+                placeholder="e.g. Saturday 20 June"
+              />
+            </Field>
+            {!adhocDual ? (
+              <Field
+                label={<>Sign message <span className="optional">(optional)</span></>}
+                hint="Printed in bold above the arrow."
+                className="span-all"
+              >
                 <textarea
                   rows={2}
                   value={adhocMessage}
                   maxLength={limits.MAX_SIGNAGE_MESSAGE_CHARS}
                   onChange={(e) => setAdhocMessage(e.target.value)}
-                  placeholder="Optional — e.g. Please use the left hand entrance (bold, above the arrow)"
+                  placeholder="e.g. Please use the left hand entrance"
                 />
-              </label>
+              </Field>
             ) : null}
-            <div className="grid two">
-              <label>
-                Primary
-                <input
-                  type="color"
-                  value={adhocTheme.primaryColor}
-                  onChange={(e) => setAdhocTheme((t) => ({ ...t, primaryColor: e.target.value }))}
-                />
-              </label>
-              <label>
-                Accent
-                <input
-                  type="color"
-                  value={adhocTheme.accentColor}
-                  onChange={(e) => setAdhocTheme((t) => ({ ...t, accentColor: e.target.value }))}
-                />
-              </label>
-              <label>
-                Text
-                <input
-                  type="color"
-                  value={adhocTheme.textColor}
-                  onChange={(e) => setAdhocTheme((t) => ({ ...t, textColor: e.target.value }))}
-                />
-              </label>
-            </div>
-            <div className="grid two">
-              <div>
-                <LogoPicker
-                  title="Venue logo"
-                  items={venueLogos}
-                  value={adhocVenueKey}
-                  onChange={setAdhocVenueKey}
-                  emptyOption={{ label: "None", value: "" }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-              <div>
-                <LogoPicker
-                  title="Client logo"
-                  items={clientLogos}
-                  value={adhocClientKey}
-                  onChange={setAdhocClientKey}
-                  emptyOption={{ label: "None", value: "" }}
-                  disabled={!logosConfigured || busy}
-                />
-              </div>
-            </div>
-            <button type="button" className="secondary" style={{ marginTop: 16 }} disabled={busy} onClick={() => void generateAdhoc()}>
-              {busy ? "Working…" : "Download single sign PDF"}
-            </button>
           </div>
-        </>
+          {adhocDual ? (
+            <SecondEventBlock
+              value={{
+                eventName: adhocEventName2,
+                arrow: adhocSecondaryArrow,
+                arrangement: adhocDualArrangement,
+                venue: adhocSecondaryVenueLine,
+                subVenue: adhocSecondarySubVenueLine,
+                date: adhocSecondaryEventDate
+              }}
+              onChange={(patch) => {
+                if (patch.eventName !== undefined) setAdhocEventName2(patch.eventName);
+                if (patch.arrow !== undefined) {
+                  // Picking "No arrow" for the second event turns the two-event layout off.
+                  if (patch.arrow === "none") removeAdhocSecondEvent();
+                  else setAdhocSecondaryArrow(patch.arrow);
+                }
+                if (patch.arrangement !== undefined) setAdhocDualArrangement(patch.arrangement);
+                if (patch.venue !== undefined) setAdhocSecondaryVenueLine(patch.venue);
+                if (patch.subVenue !== undefined) setAdhocSecondarySubVenueLine(patch.subVenue);
+                if (patch.date !== undefined) setAdhocSecondaryEventDate(patch.date);
+              }}
+              onRemove={removeAdhocSecondEvent}
+              disabled={busy}
+              namePlaceholder="e.g. Evening reception"
+              fallbackHint="Blank lines repeat the first event's venue, sub-venue and date. Sign messages aren't printed on two-event signs."
+            />
+          ) : (
+            <AddSecondEventButton onClick={() => setAdhocSecondaryArrow("right")} disabled={busy} />
+          )}
+        </div>
+      </Section>
+
+      <Section title="Page and branding">
+        <div className="stack">
+          <div className="row" style={{ gap: 24 }}>
+            <Field label="Paper" as="div">
+              <Segmented value={adhocPaper} options={PAPER_OPTIONS} onChange={setAdhocPaper} aria-label="Paper size" />
+            </Field>
+            <Field label="Orientation" as="div">
+              <Segmented value={adhocOrientation} options={ORIENTATION_OPTIONS} onChange={setAdhocOrientation} aria-label="Orientation" />
+            </Field>
+          </div>
+          <Field label="Colours" as="div">
+            <div className="color-row">
+              <ColorField label="Primary" value={adhocTheme.primaryColor} onChange={(v) => setAdhocTheme((t) => ({ ...t, primaryColor: v }))} />
+              <ColorField label="Accent" value={adhocTheme.accentColor} onChange={(v) => setAdhocTheme((t) => ({ ...t, accentColor: v }))} />
+              <ColorField label="Text" value={adhocTheme.textColor} onChange={(v) => setAdhocTheme((t) => ({ ...t, textColor: v }))} />
+            </div>
+          </Field>
+          <div className="form-grid">
+            <LogoPicker
+              title="Venue logo"
+              items={venueLogos}
+              value={adhocVenueKey}
+              onChange={setAdhocVenueKey}
+              emptyOption={{ label: "None", value: "" }}
+              disabled={!logosConfigured || busy}
+            />
+            <LogoPicker
+              title="Client logo"
+              items={clientLogos}
+              value={adhocClientKey}
+              onChange={setAdhocClientKey}
+              emptyOption={{ label: "None", value: "" }}
+              disabled={!logosConfigured || busy}
+            />
+          </div>
+        </div>
+        <div className="card-foot card-foot--inset">
+          <Segmented value={adhocOutputFormat} options={FORMAT_OPTIONS} onChange={setAdhocOutputFormat} aria-label="Output format" />
+          <button type="button" className="btn-primary" disabled={busy} onClick={() => void generateAdhoc()}>
+            <Download size={16} aria-hidden />
+            {busy ? "Working…" : "Download sign"}
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+
+  /* --------------------------- Venue profiles tab --------------------------- */
+  const hasSecondaryDefaults = Boolean(
+    draft.defaultSecondaryVenueLabel || draft.defaultSecondarySubVenueLabel || draft.defaultSecondaryEventDate
+  );
+  const profilesTab = (
+    <div className="split">
+      <aside className="split-aside">
+        <div className="row row--between" style={{ marginBottom: 8 }}>
+          <span className="subhead" style={{ margin: 0 }}>
+            Venues
+          </span>
+          <button type="button" className="btn-sm" onClick={newProfile}>
+            <Plus size={14} aria-hidden /> New
+          </button>
+        </div>
+        {profiles.length || !selectedId ? (
+          <ul className="nav-list">
+            {!selectedId ? (
+              <li>
+                <button type="button" className="nav-list-item nav-list-item--active">
+                  {draft.name || "Untitled"} <span className="badge badge--warning">Unsaved</span>
+                </button>
+              </li>
+            ) : null}
+            {profiles.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className={p.id === selectedId ? "nav-list-item nav-list-item--active" : "nav-list-item"}
+                  onClick={() => selectProfile(p.id)}
+                >
+                  <span className="nav-list-item-text">{p.name}</span>
+                  <span className="nav-list-item-meta">
+                    {p.slots.reduce((sum, s) => sum + s.count, 0)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </aside>
+
+      <Section
+        className="split-main"
+        title={draft.name || "Untitled profile"}
+        description={selectedId ? undefined : "New profile — not saved yet."}
+        actions={
+          <>
+            {selectedId ? (
+              <button type="button" className="btn-ghost btn-danger btn-sm" disabled={busy} onClick={() => void deleteSelected()}>
+                <Trash2 size={14} aria-hidden /> Delete
+              </button>
+            ) : null}
+            <button type="button" className="btn-primary btn-sm" disabled={busy || !draftDirty} onClick={() => void saveDraft()}>
+              {busy ? "Saving…" : draftDirty ? "Save profile" : "Saved"}
+            </button>
+          </>
+        }
+      >
+        <div className="stack">
+          <div className="form-grid">
+            <Field label="Profile name" className="span-all">
+              <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+            </Field>
+            <Field label="Venue line" hint="Bold, below the event name. Can be changed per event.">
+              <input
+                value={draft.defaultVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) => setDraft((d) => ({ ...d, defaultVenueLabel: optional(e.target.value) }))}
+                placeholder="e.g. The Grand Hotel"
+              />
+            </Field>
+            <Field label={<>Sub-venue line <span className="optional">(optional)</span></>} hint="Regular weight, under the venue line.">
+              <input
+                value={draft.defaultSubVenueLabel ?? ""}
+                maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                onChange={(e) => setDraft((d) => ({ ...d, defaultSubVenueLabel: optional(e.target.value) }))}
+                placeholder="e.g. Oak Room"
+              />
+            </Field>
+          </div>
+
+          <div>
+            <h3 className="subhead">Signs in this pack</h3>
+            <p className="field-hint" style={{ margin: "-4px 0 10px" }}>
+              Printed in this order. Open a sign&apos;s options to add a fixed message or a second event.
+            </p>
+            <div className="stack stack--sm">
+              {draft.slots.map((slot, index) => (
+                <SlotEditor
+                  key={`${draft.id}-${index}`}
+                  slot={slot}
+                  index={index}
+                  canRemove={draft.slots.length > 1}
+                  busy={busy}
+                  onChange={(patch) => updateSlot(index, patch)}
+                  onRemove={() => removeSlot(index)}
+                />
+              ))}
+              <button type="button" className="btn-dashed" onClick={addSlot}>
+                <Plus size={15} aria-hidden /> Add sign
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="subhead">Branding</h3>
+            <div className="stack">
+              <div className="color-row">
+                <ColorField
+                  label="Primary"
+                  value={draft.theme.primaryColor}
+                  onChange={(v) => setDraft((d) => ({ ...d, theme: { ...d.theme, primaryColor: v } }))}
+                />
+                <ColorField
+                  label="Accent"
+                  value={draft.theme.accentColor}
+                  onChange={(v) => setDraft((d) => ({ ...d, theme: { ...d.theme, accentColor: v } }))}
+                />
+                <ColorField
+                  label="Text"
+                  value={draft.theme.textColor}
+                  onChange={(v) => setDraft((d) => ({ ...d, theme: { ...d.theme, textColor: v } }))}
+                />
+              </div>
+              <div className="form-grid">
+                <LogoPicker
+                  title="Default venue logo"
+                  items={venueLogos}
+                  value={draft.defaultVenueLogoKey ?? ""}
+                  onChange={(key) => setDraft((d) => ({ ...d, defaultVenueLogoKey: key || undefined }))}
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                />
+                <LogoPicker
+                  title="Default client logo"
+                  items={clientLogos}
+                  value={draft.defaultClientLogoKey ?? ""}
+                  onChange={(key) => setDraft((d) => ({ ...d, defaultClientLogoKey: key || undefined }))}
+                  emptyOption={{ label: "None", value: "" }}
+                  disabled={!logosConfigured || busy}
+                />
+              </div>
+            </div>
+          </div>
+
+          <hr className="divider" style={{ margin: "4px 0" }} />
+
+          <Disclosure label="Second-event defaults" defaultOpen={hasSecondaryDefaults}>
+            <p className="field-hint" style={{ margin: "0 0 10px" }}>
+              Used on two-event signs when the sign doesn&apos;t set its own lines. Blank falls back to the first event.
+            </p>
+            <div className="form-grid form-grid--3">
+              <Field label="Venue line">
+                <input
+                  value={draft.defaultSecondaryVenueLabel ?? ""}
+                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondaryVenueLabel: optional(e.target.value) }))}
+                />
+              </Field>
+              <Field label="Sub-venue line">
+                <input
+                  value={draft.defaultSecondarySubVenueLabel ?? ""}
+                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
+                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondarySubVenueLabel: optional(e.target.value) }))}
+                />
+              </Field>
+              <Field label="Date line">
+                <input
+                  value={draft.defaultSecondaryEventDate ?? ""}
+                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
+                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondaryEventDate: optional(e.target.value) }))}
+                />
+              </Field>
+            </div>
+          </Disclosure>
+
+          <Disclosure label="Advanced">
+            <Field
+              label="Profile ID"
+              hint={selectedId ? "Fixed once saved. Create a new profile to use a different ID." : "Filename-safe. Can't be changed after saving."}
+            >
+              <input
+                className="mono"
+                value={draft.id}
+                onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
+                disabled={profiles.some((p) => p.id === draft.id)}
+              />
+            </Field>
+          </Disclosure>
+        </div>
+      </Section>
+    </div>
+  );
+
+  return (
+    <main className="page">
+      <PageHeader
+        title="Event signage"
+        description="Print a venue's full sign pack in one go, or make a one-off sign."
+      />
+
+      {error ? (
+        <Callout tone="error" onDismiss={() => setError("")}>
+          {error}
+        </Callout>
+      ) : null}
+      {notice ? (
+        <Callout onDismiss={() => setNotice("")}>{notice}</Callout>
+      ) : null}
+      {!loading && !logosConfigured ? (
+        <Callout tone="warning">
+          Logo storage (R2) isn&apos;t configured, so logos are unavailable. You can still print signs with colours and
+          arrows. See <code>.env.example</code>.
+        </Callout>
+      ) : null}
+
+      <Tabs<SignageTab>
+        value={tab}
+        onChange={setTab}
+        aria-label="Signage mode"
+        tabs={[
+          { value: "pack", label: "Sign pack" },
+          { value: "single", label: "Single sign" },
+          { value: "profiles", label: "Venue profiles", badge: loading ? undefined : profiles.length }
+        ]}
+      />
+
+      {loading ? (
+        <p className="text-muted">Loading…</p>
+      ) : tab === "pack" ? (
+        packTab
+      ) : tab === "single" ? (
+        singleTab
+      ) : (
+        profilesTab
       )}
     </main>
   );
