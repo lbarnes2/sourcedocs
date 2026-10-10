@@ -223,10 +223,6 @@ function AddSecondEventButton({ onClick, disabled }: { onClick: () => void; disa
 /* Profile sign slot row                                                       */
 /* -------------------------------------------------------------------------- */
 
-function slotHasSecondEvent(slot: VenueSignageSlot): boolean {
-  return slot.secondaryArrow != null && slot.secondaryArrow !== "none";
-}
-
 function SlotEditor({
   slot,
   index,
@@ -242,17 +238,7 @@ function SlotEditor({
   onChange: (patch: Partial<VenueSignageSlot>) => void;
   onRemove: () => void;
 }) {
-  const dual = slotHasSecondEvent(slot);
-  const [open, setOpen] = useState(() => Boolean(slot.message) || dual);
-  const clearSecondEvent = () =>
-    onChange({
-      secondaryArrow: undefined,
-      secondaryEventName: undefined,
-      dualEventArrangement: undefined,
-      secondaryVenueLabel: undefined,
-      secondarySubVenueLabel: undefined,
-      secondaryEventDate: undefined
-    });
+  const [open, setOpen] = useState(() => Boolean(slot.message));
   return (
     <div className={`slot${open ? " slot--open" : ""}`}>
       <div className="slot-row">
@@ -296,15 +282,14 @@ function SlotEditor({
         />
         <span className="slot-tags">
           {slot.message ? <span className="badge">Message</span> : null}
-          {dual ? <span className="badge badge--accent">2 events</span> : null}
         </span>
         <span className="slot-actions">
         <button
           type="button"
           className="icon-btn icon-btn--sm"
           aria-expanded={open}
-          aria-label={open ? "Hide sign options" : "More sign options"}
-          title={open ? "Hide options" : "Message & second event"}
+          aria-label={open ? "Hide sign message" : "Add or edit sign message"}
+          title={open ? "Hide message" : "Sign message"}
           onClick={() => setOpen((o) => !o)}
         >
           <ChevronDown size={16} className={`card-chevron${open ? " card-chevron--open" : ""}`} />
@@ -322,7 +307,7 @@ function SlotEditor({
         </span>
       </div>
       {open ? (
-        <div className="slot-body stack">
+        <div className="slot-body">
           <Field label={<>Sign message <span className="optional">(optional)</span></>} hint="Printed above the arrow on this sign for every event.">
             <textarea
               rows={2}
@@ -332,36 +317,6 @@ function SlotEditor({
               onChange={(e) => onChange({ message: optional(e.target.value) })}
             />
           </Field>
-          {dual ? (
-            <SecondEventBlock
-              value={{
-                eventName: slot.secondaryEventName ?? "",
-                arrow: slot.secondaryArrow ?? "right",
-                arrangement: slot.dualEventArrangement ?? "sideBySide",
-                venue: slot.secondaryVenueLabel ?? "",
-                subVenue: slot.secondarySubVenueLabel ?? "",
-                date: slot.secondaryEventDate ?? ""
-              }}
-              onChange={(patch) =>
-                patch.arrow === "none"
-                  ? clearSecondEvent()
-                  : onChange({
-                  ...("eventName" in patch ? { secondaryEventName: optional(patch.eventName ?? "") } : {}),
-                  ...("arrow" in patch ? { secondaryArrow: patch.arrow } : {}),
-                  ...("arrangement" in patch ? { dualEventArrangement: patch.arrangement } : {}),
-                  ...("venue" in patch ? { secondaryVenueLabel: optional(patch.venue ?? "") } : {}),
-                  ...("subVenue" in patch ? { secondarySubVenueLabel: optional(patch.subVenue ?? "") } : {}),
-                  ...("date" in patch ? { secondaryEventDate: optional(patch.date ?? "") } : {})
-                })
-              }
-              onRemove={clearSecondEvent}
-              disabled={busy}
-              namePlaceholder="e.g. Evening reception"
-              fallbackHint="Blank lines use this profile's second-event defaults, then the first event's lines."
-            />
-          ) : (
-            <AddSecondEventButton onClick={() => onChange({ secondaryArrow: "right" })} disabled={busy} />
-          )}
         </div>
       ) : null}
     </div>
@@ -385,14 +340,10 @@ function PackSummary({ profile }: { profile: VenueSignageProfile }) {
           <li key={index}>
             <span className="pack-summary-glyph" aria-hidden>
               <ArrowGlyph value={slot.arrow} size={16} />
-              {slotHasSecondEvent(slot) ? <ArrowGlyph value={slot.secondaryArrow ?? "none"} size={16} /> : null}
             </span>
             <span>
               {slot.count} × {slot.paperSize} {slot.orientation}
             </span>
-            {slotHasSecondEvent(slot) ? (
-              <span className="text-muted">+ {slot.secondaryEventName?.trim() || "second event"}</span>
-            ) : null}
             {slot.message ? <span className="text-muted pack-summary-msg">“{slot.message}”</span> : null}
           </li>
         ))}
@@ -1031,9 +982,6 @@ export default function SignagePage() {
   );
 
   /* --------------------------- Venue profiles tab --------------------------- */
-  const hasSecondaryDefaults = Boolean(
-    draft.defaultSecondaryVenueLabel || draft.defaultSecondarySubVenueLabel || draft.defaultSecondaryEventDate
-  );
   const profilesTab = (
     <div className="split">
       <aside className="split-aside">
@@ -1134,7 +1082,7 @@ export default function SignagePage() {
           <div>
             <h3 className="subhead">Signs in this pack</h3>
             <p className="field-hint" style={{ margin: "-4px 0 10px" }}>
-              Printed in this order. Open a sign&apos;s options to add a fixed message or a second event.
+              Printed in this order, one event per sign. Expand a sign to add a fixed message.
             </p>
             <div className="stack stack--sm">
               {draft.slots.map((slot, index) => (
@@ -1196,35 +1144,6 @@ export default function SignagePage() {
           </div>
 
           <hr className="divider" style={{ margin: "4px 0" }} />
-
-          <Disclosure label="Second-event defaults" defaultOpen={hasSecondaryDefaults}>
-            <p className="field-hint" style={{ margin: "0 0 10px" }}>
-              Used on two-event signs when the sign doesn&apos;t set its own lines. Blank falls back to the first event.
-            </p>
-            <div className="form-grid form-grid--3">
-              <Field label="Venue line">
-                <input
-                  value={draft.defaultSecondaryVenueLabel ?? ""}
-                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondaryVenueLabel: optional(e.target.value) }))}
-                />
-              </Field>
-              <Field label="Sub-venue line">
-                <input
-                  value={draft.defaultSecondarySubVenueLabel ?? ""}
-                  maxLength={limits.MAX_SIGNAGE_VENUE_LABEL_CHARS}
-                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondarySubVenueLabel: optional(e.target.value) }))}
-                />
-              </Field>
-              <Field label="Date line">
-                <input
-                  value={draft.defaultSecondaryEventDate ?? ""}
-                  maxLength={limits.MAX_SIGNAGE_EVENT_DATE_CHARS}
-                  onChange={(e) => setDraft((d) => ({ ...d, defaultSecondaryEventDate: optional(e.target.value) }))}
-                />
-              </Field>
-            </div>
-          </Disclosure>
 
           <Disclosure label="Advanced">
             <Field

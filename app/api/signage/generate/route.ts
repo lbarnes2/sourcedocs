@@ -36,7 +36,7 @@ const adhocSchema = z.object({
   paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
-  /** When set and not "none", renders a second column (paired with `eventName2` or slot default). */
+  /** When set and not "none", renders a second event (`eventName2`) on the same sign. Ad-hoc signs only. */
   secondaryArrow: signageArrowSchema.optional(),
   /** Two-event layout when `secondaryArrow` is active; defaults to side-by-side in PDF. */
   dualEventArrangement: signageDualEventArrangementSchema.optional(),

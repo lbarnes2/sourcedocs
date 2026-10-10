@@ -36,21 +36,7 @@ export interface VenueSignageSlot {
    * (e.g. "Please use the left hand entrance"). Shown above the arrow.
    */
   message?: string;
-  /**
-   * Optional second event on the same physical sign: split titles + split arrows (+ optional separate venue lines below each).
-   * When `secondaryArrow` is set and not `"none"`, PDF uses a dual layout (see `dualEventArrangement`).
-   */
-  secondaryEventName?: string;
-  secondaryArrow?: SignageArrowDirection;
-  /**
-   * Two-event layout: `sideBySide` (columns, arrows under each title) or `stacked` (portrait: sections + divider +
-   * arrows below each title; landscape: arrows beside each block). Defaults to `sideBySide` when omitted.
-   */
-  dualEventArrangement?: SignageDualEventArrangement;
-  /** Lines for event 2 when dual mode is active; fall back to primary venue lines in the PDF when unset. */
-  secondaryVenueLabel?: string;
-  secondarySubVenueLabel?: string;
-  secondaryEventDate?: string;
+  // Two-event signs are single-sign only (ad-hoc generator); pack slots are always one event.
 }
 
 /** Theme for PDF output (mirrors banqueting ThemeSettings colour fields). */
@@ -69,10 +55,6 @@ export interface VenueSignageProfile {
   defaultVenueLabel?: string;
   /** Optional line under the venue (Noto regular, same size as venue); pack default. */
   defaultSubVenueLabel?: string;
-  /** Pack default lines for the second event on dual signs (when the slot does not set its own). */
-  defaultSecondaryVenueLabel?: string;
-  defaultSecondarySubVenueLabel?: string;
-  defaultSecondaryEventDate?: string;
   /** R2 object key under logos/venue/ — optional default for pack generation. */
   defaultVenueLogoKey?: string;
   /** R2 key if you store client logos; optional. */

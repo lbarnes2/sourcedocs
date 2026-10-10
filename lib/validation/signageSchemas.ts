@@ -45,25 +45,12 @@ export const signageArrowSchema = z.enum([
 /** Two-event layout when `secondaryArrow` is set; defaults to side-by-side in PDF when omitted. */
 export const signageDualEventArrangementSchema = z.enum(["sideBySide", "stacked"]);
 
-const optionalSecondaryEventName = z
-  .string()
-  .max(limits.MAX_EVENT_NAME_CHARS)
-  .optional()
-  .transform((s) => (s && s.trim() ? s.trim() : undefined));
-
 export const venueSignageSlotSchema = z.object({
   count: z.number().int().min(1).max(500),
   paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
-  message: optionalSignageMessageField,
-  secondaryEventName: optionalSecondaryEventName,
-  /** When omitted or `"none"`, sign is single-column (existing behaviour). */
-  secondaryArrow: signageArrowSchema.optional(),
-  dualEventArrangement: signageDualEventArrangementSchema.optional(),
-  secondaryVenueLabel: optionalSignageVenueLabelField,
-  secondarySubVenueLabel: optionalSignageVenueLabelField,
-  secondaryEventDate: optionalSignageEventDateField
+  message: optionalSignageMessageField
 });
 
 export const signageThemeSchema = z.object({
@@ -86,9 +73,6 @@ export const venueSignageProfileSchema = z.object({
   theme: signageThemeSchema,
   defaultVenueLabel: optionalSignageVenueLabelField,
   defaultSubVenueLabel: optionalSignageVenueLabelField,
-  defaultSecondaryVenueLabel: optionalSignageVenueLabelField,
-  defaultSecondarySubVenueLabel: optionalSignageVenueLabelField,
-  defaultSecondaryEventDate: optionalSignageEventDateField,
   defaultVenueLogoKey: optionalLogoKeySchema,
   defaultClientLogoKey: optionalLogoKeySchema
 }).refine(
