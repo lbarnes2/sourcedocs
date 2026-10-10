@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import { ImagePlus, Pencil, Trash2, TriangleAlert } from "lucide-react";
+import { Callout, Field, Modal, PageHeader, Section, Toasts } from "@/app/components/ui";
 import { LOGO_UPLOAD_ACCEPT } from "@/lib/logos/logoUpload";
 
 type LogoKind = "venue" | "client";
@@ -20,6 +21,7 @@ export default function LogoLibraryPage() {
   const [busy, setBusy] = useState(false);
   const [workingKey, setWorkingKey] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [renaming, setRenaming] = useState<{ kind: LogoKind; item: LogoItem; name: string } | null>(null);
 
   const loadLogos = useCallback(async () => {
     setError("");
@@ -52,12 +54,14 @@ export default function LogoLibraryPage() {
     }
   }
 
-  async function renameLogo(kind: LogoKind, item: LogoItem) {
-    const suggested = item.label.replace(/\.[^.]+$/u, "");
-    const nextName = window.prompt("Rename logo", suggested);
-    if (nextName === null) return;
+  function startRename(kind: LogoKind, item: LogoItem) {
+    setRenaming({ kind, item, name: item.label.replace(/\.[^.]+$/u, "") });
+  }
+
+  async function renameLogo(kind: LogoKind, item: LogoItem, nextName: string) {
     const trimmed = nextName.trim();
     if (!trimmed) return;
+    setRenaming(null);
     setWorkingKey(item.key);
     setError("");
     try {
@@ -103,77 +107,136 @@ export default function LogoLibraryPage() {
     }
   }
 
-  function renderSection(kind: LogoKind, title: string, items: LogoItem[]) {
+  function renderSection(kind: LogoKind, title: string, description: string, items: LogoItem[]) {
     return (
-      <section className="panel logo-library-section">
-        <h2>{title}</h2>
-        <label>
-          Upload logo
-          <input
-            type="file"
-            accept={LOGO_UPLOAD_ACCEPT}
-            disabled={busy || !configured}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = "";
-              if (file) void uploadLogo(kind, file);
-            }}
-          />
-        </label>
+      <Section
+        title={
+          <>
+            {title} <span className="badge">{items.length}</span>
+          </>
+        }
+        description={description}
+        actions={
+          <label className={`upload-button${busy || !configured ? " upload-button--disabled" : ""}`}>
+            <input
+              type="file"
+              accept={LOGO_UPLOAD_ACCEPT}
+              disabled={busy || !configured}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void uploadLogo(kind, file);
+              }}
+            />
+            <ImagePlus size={15} aria-hidden />
+            {busy ? "Uploading…" : "Upload"}
+          </label>
+        }
+      >
         {items.length === 0 ? (
-          <p className="pill" style={{ marginTop: 12 }}>
-            No logos uploaded yet.
+          <p className="text-muted" style={{ margin: 0 }}>
+            No logos uploaded yet. PNG or JPEG work best.
           </p>
         ) : (
-          <div className="signage-logo-grid" style={{ marginTop: 12 }}>
+          <div className="logo-grid">
             {items.map((item) => (
-              <div key={item.key} className="signage-logo-tile logo-library-tile">
-                <span className="signage-logo-tile-hit">
-                  <img src={item.assetUrl} alt="" className="signage-logo-tile-img" />
+              <div key={item.key} className="library-tile">
+                <span className="logo-tile-img">
+                  <img src={item.assetUrl} alt="" />
                 </span>
-                <span className="signage-logo-tile-label" title={item.label}>
+                <span className="logo-tile-label" title={item.label}>
                   {item.label}
                 </span>
                 {item.printable === false ? (
-                  <span className="warning" style={{ fontSize: 12 }}>
-                    Can’t be printed (not PNG/JPEG) — re-upload as PNG or JPEG.
+                  <span className="library-tile-warn" title="Not PNG/JPEG — re-upload as PNG or JPEG to use it in PDFs">
+                    <TriangleAlert size={12} aria-hidden /> Can&apos;t print
                   </span>
                 ) : null}
-                <div className="logo-library-actions">
-                  <button type="button" className="secondary" disabled={workingKey === item.key} onClick={() => void renameLogo(kind, item)}>
-                    {workingKey === item.key ? "Working…" : "Rename"}
+                <div className="library-tile-actions">
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    disabled={workingKey === item.key}
+                    onClick={() => startRename(kind, item)}
+                    aria-label={`Rename ${item.label}`}
+                    title="Rename"
+                  >
+                    <Pencil size={14} />
                   </button>
-                  <button type="button" disabled={workingKey === item.key} onClick={() => void deleteLogo(kind, item.key)}>
-                    Delete
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm btn-danger"
+                    disabled={workingKey === item.key}
+                    onClick={() => void deleteLogo(kind, item.key)}
+                    aria-label={`Delete ${item.label}`}
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
                   </button>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </Section>
     );
   }
 
   return (
-    <main className="app-logo-library">
-      <header className="app-header">
-        <Link href="/" className="app-backlink">
-          ← Home
-        </Link>
-        <h1>Logo Library</h1>
-        <p className="app-tagline">
-          Upload, rename, and remove shared venue and client logos. Other tools can select logos from this library.
-        </p>
-      </header>
+    <main className="page">
+      <PageHeader
+        title="Logo library"
+        description="Venue and client logos shared by every tool."
+      />
       {!configured ? (
-        <p className="pill" style={{ marginBottom: 14 }}>
-          R2 is not configured. Configure environment variables in <code>.env.example</code> to enable logo storage.
-        </p>
+        <Callout tone="warning">
+          R2 isn&apos;t configured, so logo storage is unavailable. See <code>.env.example</code>.
+        </Callout>
       ) : null}
-      {error ? <p className="error panel">{error}</p> : null}
-      {renderSection("venue", "Venue logos", venueItems)}
-      {renderSection("client", "Client logos", clientItems)}
+      {renderSection("venue", "Venue logos", "Used on signage, buffet menus, floorplans and banqueting documents.", venueItems)}
+      {renderSection("client", "Client logos", "Used on place cards, menus, signage and floorplans.", clientItems)}
+
+      {renaming ? (
+        <Modal
+          title="Rename logo"
+          size="sm"
+          onClose={() => setRenaming(null)}
+          footer={
+            <>
+              <button type="button" onClick={() => setRenaming(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={!renaming.name.trim()}
+                onClick={() => void renameLogo(renaming.kind, renaming.item, renaming.name)}
+              >
+                Rename
+              </button>
+            </>
+          }
+        >
+          <Field label="Name">
+            <input
+              autoFocus
+              value={renaming.name}
+              onChange={(event) => setRenaming({ ...renaming, name: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void renameLogo(renaming.kind, renaming.item, renaming.name);
+              }}
+            />
+          </Field>
+        </Modal>
+      ) : null}
+
+      <Toasts>
+        {error ? (
+          <Callout tone="error" onDismiss={() => setError("")}>
+            {error}
+          </Callout>
+        ) : null}
+      </Toasts>
     </main>
   );
 }

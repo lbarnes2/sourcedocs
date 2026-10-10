@@ -1,8 +1,35 @@
 "use client";
 
-import Link from "next/link";
 import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalDistributeCenter,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalDistributeCenter,
+  Circle,
+  CircleDot,
+  Copy,
+  Download,
+  Eraser,
+  FolderOpen,
+  Maximize,
+  RotateCcw,
+  Save,
+  Square,
+  SquareDashed,
+  SquareDashedMousePointer,
+  Trash2,
+  Type,
+  Undo2,
+  ZoomIn,
+  ZoomOut
+} from "lucide-react";
 import { LogoPicker } from "@/app/components/LogoPicker";
+import { Callout, Field, Modal, PageHeader, Section, Segmented, Toasts } from "@/app/components/ui";
 import { buildEmptyFloorplanDraft, buildTablesFromAutoLayout, copyForDuplicate } from "@/lib/floorplans/model";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { readResponseError } from "@/lib/http/readError";
@@ -19,6 +46,12 @@ function nextTableNumber(objects: FloorplanCanvasObject[]): string {
   }
   return String(highest + 1);
 }
+
+const PAPER_OPTIONS = PAPER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.value }));
+const ORIENTATION_OPTIONS = [
+  { value: "portrait" as const, label: "Portrait" },
+  { value: "landscape" as const, label: "Landscape" }
+];
 
 function snap(value: number, grid: number, free: boolean): number {
   if (free) return value;
@@ -46,6 +79,7 @@ export default function FloorplansPage() {
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const [outputFormat, setOutputFormat] = useState<"pdf" | "png">("pdf");
+  const [listOpen, setListOpen] = useState(false);
   const [venueLogoLibrary, setVenueLogoLibrary] = useState<{
     loaded: boolean;
     configured: boolean;
@@ -77,8 +111,22 @@ export default function FloorplansPage() {
     setSelectedIds([]);
   }
 
+  // React registers wheel handlers as passive, so preventDefault() there can't stop the page
+  // scrolling while zooming. Attach a non-passive native listener instead.
   useEffect(() => {
-    void refreshList();
+    const viewport = canvasViewportRef.current;
+    if (!viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const direction = event.deltaY < 0 ? 1 : -1;
+      setZoom((previous) => Math.max(0.3, Math.min(3, previous + direction * 0.08)));
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => {
+    void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
     void Promise.all([refreshVenueLogoLibrary(), refreshClientLogoLibrary()]);
   }, []);
 
@@ -465,362 +513,724 @@ export default function FloorplansPage() {
     };
   }
 
+  const isSaved = items.some((item) => item.id === draft.id);
+  const canAlign = selectedIds.length >= 2;
+  const canDistribute = selectedIds.length >= 3;
+
+  function selectObject(id: string, shiftKey: boolean) {
+    setActiveId(id);
+    setSelectedIds((prev) => {
+      if (shiftKey) {
+        return prev.includes(id) ? prev.filter((existing) => existing !== id) : [...prev, id];
+      }
+      return [id];
+    });
+  }
+
+  function updateSelected(patch: Record<string, unknown>, withUndo = true) {
+    if (!selected) return;
+    if (withUndo) pushUndoSnapshot();
+    setDraft((p) => ({
+      ...p,
+      objects: p.objects.map((o) => (o.id === selected.id ? ({ ...o, ...patch } as FloorplanCanvasObject) : o))
+    }));
+  }
+
+  const objectBorder = (id: string, fallback: string) => (selectedSet.has(id) ? "2px solid #0b5068" : fallback);
+
   return (
-    <main>
-      <header className="app-header">
-        <Link href="/" className="app-backlink">← Home</Link>
-        <h1>Floorplans</h1>
-        <p className="app-tagline">Standalone floorplan tool with custom table editing, shapes, labels, saved plans, and printable output.</p>
-      </header>
-
-      <div className="panel">
-        <h2>Saved floorplans</h2>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-          <button type="button" className="secondary" onClick={() => void refreshList()} disabled={busy}>Refresh list</button>
-          <button type="button" onClick={() => void saveCurrent()} disabled={busy}>Save</button>
-          <button type="button" className="secondary" onClick={() => setDraft(copyForDuplicate(draft))} disabled={busy}>Duplicate</button>
-          <button type="button" className="secondary" onClick={() => void deleteCurrent()} disabled={busy}>Delete</button>
-          <button type="button" onClick={() => void printFloorplan()} disabled={busy}>
-            {outputFormat === "png" ? "Export PNG" : "Print PDF"}
-          </button>
-        </div>
-        <div className="grid two">
-          <label>
-            Floorplan name
-            <input value={draft.name} onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))} />
-          </label>
-          <label>
-            Load floorplan
-            {/* Resets after each pick so the same plan can be re-loaded to discard unsaved changes. */}
-            <select value="" onChange={(e) => { if (e.target.value) void loadItem(e.target.value); }}>
-              <option value="">-- choose --</option>
-              {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label>
-            Print title
-            <input value={draft.metadata.title} onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, title: e.target.value } }))} />
-          </label>
-          <label>
-            Print subtitle
-            <input value={draft.metadata.subtitle} onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, subtitle: e.target.value } }))} />
-          </label>
-          <label>
-            Output format
-            <select value={outputFormat} onChange={(e) => setOutputFormat(e.target.value as "pdf" | "png")}>
-              <option value="pdf">PDF</option>
-              <option value="png">PNG</option>
-            </select>
-          </label>
-          <label>
-            Paper size
-            <select
-              value={draft.canvas.paperSize}
-              onChange={(e) =>
-                setDraft((p) => ({
-                  ...p,
-                  canvas: { ...p.canvas, paperSize: e.target.value as FloorplanDocument["canvas"]["paperSize"] },
-                  autoLayout: { ...p.autoLayout, paperSize: e.target.value as FloorplanDocument["autoLayout"]["paperSize"] }
-                }))
-              }
+    <main className="page page--wide">
+      <PageHeader
+        title="Floorplans"
+        description="Lay out tables, shapes and labels, then print."
+        actions={
+          <>
+            <input
+              className="header-input"
+              value={draft.name}
+              onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
+              aria-label="Floorplan name"
+              placeholder="Floorplan name"
+            />
+            <button type="button" onClick={() => void saveCurrent()} disabled={busy}>
+              <Save size={15} aria-hidden /> Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
+                setListOpen(true);
+              }}
             >
-              {PAPER_SIZE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
+              <FolderOpen size={15} aria-hidden /> Open
+            </button>
+            <button
+              type="button"
+              className="icon-btn icon-btn--bordered"
+              onClick={() => setDraft(copyForDuplicate(draft))}
+              disabled={busy}
+              aria-label="Duplicate floorplan"
+              title="Duplicate"
+            >
+              <Copy size={16} />
+            </button>
+            <button
+              type="button"
+              className="icon-btn icon-btn--bordered btn-danger"
+              onClick={() => void deleteCurrent()}
+              disabled={busy}
+              aria-label={isSaved ? "Delete floorplan" : "Discard floorplan"}
+              title={isSaved ? "Delete" : "Discard"}
+            >
+              <Trash2 size={16} />
+            </button>
+          </>
+        }
+      />
+
+      {listOpen ? (
+        <Modal title="Saved floorplans" onClose={() => setListOpen(false)}>
+          {items.length === 0 ? (
+            <p className="text-muted" style={{ margin: 0 }}>
+              No saved floorplans yet.
+            </p>
+          ) : (
+            <ul className="list">
+              {items.map((item) => (
+                <li key={item.id} className={item.id === draft.id ? "list-item list-item--active" : "list-item"}>
+                  <div className="list-item-main">
+                    <button
+                      type="button"
+                      className="list-item-title"
+                      disabled={busy}
+                      onClick={() => {
+                        void loadItem(item.id);
+                        setListOpen(false);
+                      }}
+                    >
+                      {item.name}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-sm"
+                    disabled={busy}
+                    onClick={() => {
+                      void loadItem(item.id);
+                      setListOpen(false);
+                    }}
+                  >
+                    Open
+                  </button>
+                </li>
               ))}
-            </select>
-          </label>
-          <label>
-            Orientation
-            <select
-              value={draft.canvas.orientation}
-              onChange={(e) =>
-                setDraft((p) => ({
-                  ...p,
-                  canvas: { ...p.canvas, orientation: e.target.value as "portrait" | "landscape" },
-                  autoLayout: { ...p.autoLayout, orientation: e.target.value as "portrait" | "landscape" }
-                }))
-              }
-            >
-              <option value="portrait">Portrait</option>
-              <option value="landscape">Landscape</option>
-            </select>
-          </label>
-        </div>
-        {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured && (
-          <div className="grid two" style={{ marginTop: 12 }}>
-            <LogoPicker
-              title="Client logo"
-              items={clientLogoLibrary.items}
-              value={draft.selectedClientLogoKey ?? ""}
-              onChange={(key) => {
-                if (!key) {
-                  setDraft((prev) => ({
-                    ...prev,
-                    selectedClientLogoKey: null,
-                    themeSnapshot: { ...prev.themeSnapshot, clientLogoDataUrl: undefined }
-                  }));
-                  return;
-                }
-                const item = clientLogoLibrary.items.find((entry) => entry.key === key);
-                if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
-              }}
-              emptyOption={{ label: "No client logo", value: "" }}
-              manageHref="/logo-library"
-            />
-            <LogoPicker
-              title="Venue logo"
-              items={venueLogoLibrary.items}
-              value={draft.selectedVenueLogoKey ?? ""}
-              onChange={(key) => {
-                if (!key) {
-                  setDraft((prev) => ({
-                    ...prev,
-                    selectedVenueLogoKey: null,
-                    themeSnapshot: { ...prev.themeSnapshot, venueLogoDataUrl: undefined }
-                  }));
-                  return;
-                }
-                const item = venueLogoLibrary.items.find((entry) => entry.key === key);
-                if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
-              }}
-              emptyOption={{ label: "No venue logo", value: "" }}
-              manageHref="/logo-library"
-            />
+            </ul>
+          )}
+        </Modal>
+      ) : null}
+
+      <div className="editor">
+        <section className="card editor-canvas-card">
+          <div className="toolbar" role="toolbar" aria-label="Canvas tools">
+            <div className="btn-group">
+              <button type="button" onClick={() => addObject("table")} title="Add table">
+                <CircleDot size={16} aria-hidden /> Table
+              </button>
+              <button type="button" className="icon-btn" onClick={() => addObject("rect")} title="Add rectangle" aria-label="Add rectangle">
+                <Square size={16} />
+              </button>
+              <button type="button" className="icon-btn" onClick={() => addObject("circle")} title="Add circle" aria-label="Add circle">
+                <Circle size={16} />
+              </button>
+              <button type="button" className="icon-btn" onClick={() => addObject("text")} title="Add text" aria-label="Add text">
+                <Type size={16} />
+              </button>
+            </div>
+            <div className="btn-group">
+              <button type="button" className="icon-btn" disabled={!undoStack.length} onClick={undo} title="Undo" aria-label="Undo">
+                <Undo2 size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setSelectedIds(draft.objects.map((o) => o.id))}
+                title="Select all"
+                aria-label="Select all"
+              >
+                <SquareDashedMousePointer size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                disabled={!selectedIds.length}
+                onClick={() => setSelectedIds([])}
+                title="Clear selection"
+                aria-label="Clear selection"
+              >
+                <SquareDashed size={16} />
+              </button>
+            </div>
+            <div className="btn-group">
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("left")} title="Align left" aria-label="Align left">
+                <AlignStartVertical size={16} />
+              </button>
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("hcenter")} title="Align centre" aria-label="Align centre">
+                <AlignCenterVertical size={16} />
+              </button>
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("right")} title="Align right" aria-label="Align right">
+                <AlignEndVertical size={16} />
+              </button>
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("top")} title="Align top" aria-label="Align top">
+                <AlignStartHorizontal size={16} />
+              </button>
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("vcenter")} title="Align middle" aria-label="Align middle">
+                <AlignCenterHorizontal size={16} />
+              </button>
+              <button type="button" className="icon-btn" disabled={!canAlign} onClick={() => alignSelected("bottom")} title="Align bottom" aria-label="Align bottom">
+                <AlignEndHorizontal size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                disabled={!canDistribute}
+                onClick={() => distributeSelected("horizontal")}
+                title="Distribute horizontally"
+                aria-label="Distribute horizontally"
+              >
+                <AlignHorizontalDistributeCenter size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                disabled={!canDistribute}
+                onClick={() => distributeSelected("vertical")}
+                title="Distribute vertically"
+                aria-label="Distribute vertically"
+              >
+                <AlignVerticalDistributeCenter size={16} />
+              </button>
+            </div>
+            <span className="spacer" />
+            <div className="btn-group">
+              <button type="button" className="icon-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.1))} title="Zoom out" aria-label="Zoom out">
+                <ZoomOut size={16} />
+              </button>
+              <span className="toolbar-zoom">{(zoom * 100).toFixed(0)}%</span>
+              <button type="button" className="icon-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.1))} title="Zoom in" aria-label="Zoom in">
+                <ZoomIn size={16} />
+              </button>
+              <button type="button" className="icon-btn" onClick={zoomToFit} title="Zoom to fit" aria-label="Zoom to fit">
+                <Maximize size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => {
+                  setZoom(1);
+                  setPan({ x: 0, y: 0 });
+                }}
+                title="Reset view"
+                aria-label="Reset view"
+              >
+                <RotateCcw size={16} />
+              </button>
+            </div>
+            <button type="button" className="icon-btn btn-danger" onClick={clearCanvas} title="Clear canvas" aria-label="Clear canvas">
+              <Eraser size={16} />
+            </button>
           </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <h2>Auto-generate tables</h2>
-        <div className="grid two">
-          <label>
-            Table count
-            <input type="number" min={1} max={400} value={tableCount} onChange={(e) => setTableCount(Math.max(1, Number(e.target.value) || 1))} />
-          </label>
-          <label>
-            Grid snap size
-            <input type="number" min={4} max={200} value={draft.canvas.gridSize} onChange={(e) => setDraft((p) => ({ ...p, canvas: { ...p.canvas, gridSize: Math.max(4, Number(e.target.value) || 24) } }))} />
-          </label>
-        </div>
-        <div className="grid two">
-          <label>
-            Rows
-            <input type="number" min={1} max={24} value={draft.autoLayout.rows} onChange={(e) => setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, rows: Math.max(1, Math.min(24, Number(e.target.value) || 1)) } }))} />
-          </label>
-          <label>
-            Columns
-            <input type="number" min={1} max={24} value={draft.autoLayout.columns} onChange={(e) => setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, columns: Math.max(1, Math.min(24, Number(e.target.value) || 1)) } }))} />
-          </label>
-          <label>
-            Numbering
-            <select value={draft.autoLayout.numbering} onChange={(e) => setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, numbering: e.target.value as "straight" | "snaked" } }))}>
-              <option value="straight">Straight</option>
-              <option value="snaked">Snaked</option>
-            </select>
-          </label>
-          <label>
-            Start corner
-            <select value={draft.autoLayout.startCorner} onChange={(e) => setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, startCorner: e.target.value as FloorplanDocument["autoLayout"]["startCorner"] } }))}>
-              <option value="topLeft">Top left</option>
-              <option value="topRight">Top right</option>
-              <option value="bottomLeft">Bottom left</option>
-              <option value="bottomRight">Bottom right</option>
-            </select>
-          </label>
-          <label>
-            Table layout
-            <select
-              value={draft.autoLayout.tableLayout}
-              onChange={(e) =>
-                setDraft((p) => ({
-                  ...p,
-                  autoLayout: {
-                    ...p.autoLayout,
-                    tableLayout: e.target.value as "aligned" | "staggered",
-                    staggerAxis:
-                      e.target.value === "staggered" ? (p.autoLayout.staggerAxis ?? "horizontal") : undefined
-                  }
-                }))
-              }
-            >
-              <option value="aligned">Aligned grid</option>
-              <option value="staggered">Staggered (brick)</option>
-            </select>
-          </label>
-          <label>
-            Brick stagger direction
-            <select
-              value={draft.autoLayout.staggerAxis ?? "horizontal"}
-              disabled={draft.autoLayout.tableLayout !== "staggered"}
-              onChange={(e) =>
-                setDraft((p) => ({
-                  ...p,
-                  autoLayout: {
-                    ...p.autoLayout,
-                    staggerAxis: e.target.value as "horizontal" | "vertical"
-                  }
-                }))
-              }
-            >
-              <option value="horizontal">Horizontal (odd rows offset)</option>
-              <option value="vertical">Vertical (odd columns offset)</option>
-            </select>
-          </label>
-        </div>
-        <p className="text-muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 13 }}>
-          Staggered layout offsets every other row or column by half a cell so tables nest like bricks. Horizontal
-          matches the classic banqueting floorplan stagger; vertical offsets alternate columns downward.
-        </p>
-        <button type="button" onClick={seedFromAutoLayout}>Generate tables from settings</button>
-      </div>
-
-      <div className="panel">
-        <h2>Canvas editor</h2>
-        <p className="text-muted">Drag objects to move. Hold Shift while dragging for fine movement (no snap). Click objects to edit or delete.</p>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <button type="button" onClick={() => addObject("table")}>Add table</button>
-          <button type="button" onClick={() => addObject("rect")} className="secondary">Add rectangle</button>
-          <button type="button" onClick={() => addObject("circle")} className="secondary">Add circle</button>
-          <button type="button" onClick={() => addObject("text")} className="secondary">Add text</button>
-          <button type="button" className="secondary" onClick={clearCanvas}>Clear canvas</button>
-          <button type="button" className="secondary" onClick={() => setZoom((z) => Math.max(0.3, z - 0.1))}>Zoom -</button>
-          <button type="button" className="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.1))}>Zoom +</button>
-          <button type="button" className="secondary" onClick={zoomToFit}>Zoom to fit</button>
-          <button type="button" className="secondary" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Reset view</button>
-          <button type="button" className="secondary" disabled={!undoStack.length} onClick={undo}>Undo</button>
-          <button type="button" className="secondary" onClick={() => setSelectedIds(draft.objects.map((o) => o.id))}>Select all</button>
-          <button type="button" className="secondary" onClick={() => setSelectedIds([])}>Clear selection</button>
-        </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("left")}>Align left</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("hcenter")}>Align center</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("right")}>Align right</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("top")}>Align top</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("vcenter")}>Align middle</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 2} onClick={() => alignSelected("bottom")}>Align bottom</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 3} onClick={() => distributeSelected("horizontal")}>Distribute horizontal</button>
-          <button type="button" className="secondary" disabled={selectedIds.length < 3} onClick={() => distributeSelected("vertical")}>Distribute vertical</button>
-        </div>
-        <p className="text-muted" style={{ marginTop: 0, marginBottom: 8 }}>
-          Zoom: {(zoom * 100).toFixed(0)}% · Drag empty canvas background to pan · Shift-click objects to multi-select.
-        </p>
-        <div
-          ref={canvasViewportRef}
-          style={{ border: "1px solid #b7c2cf", borderRadius: 10, width: 920, maxWidth: "100%", height: 620, position: "relative", overflow: "hidden", backgroundSize: `${draft.canvas.gridSize}px ${draft.canvas.gridSize}px`, backgroundImage: "linear-gradient(to right, rgba(130,145,165,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(130,145,165,0.15) 1px, transparent 1px)" }}
-          onWheel={(event) => {
-            event.preventDefault();
-            const direction = event.deltaY < 0 ? 1 : -1;
-            setZoom((previous) => Math.max(0.3, Math.min(3, previous + direction * 0.08)));
-          }}
-          onPointerDown={(event) => {
-            const target = event.target as HTMLElement | null;
-            const hitObjectButton = Boolean(target?.closest("button"));
-            if (hitObjectButton) return;
-            setIsPanning(true);
-            setPanStart({ x: event.clientX - pan.x, y: event.clientY - pan.y });
-          }}
-          onPointerMove={(event) => {
-            if (isPanning && panStart) {
-              setPan({ x: event.clientX - panStart.x, y: event.clientY - panStart.y });
-              return;
-            }
-            if (!draggingId || !dragState) return;
-            const free = event.shiftKey;
-            const point = screenToCanvas(event, event.currentTarget as HTMLDivElement, zoom, pan);
-            const dx = point.x - dragState.startPoint.x;
-            const dy = point.y - dragState.startPoint.y;
-            setDraft((prev) => ({
-              ...prev,
-              objects: prev.objects.map((obj) =>
-                dragState.ids.includes(obj.id)
-                  ? {
-                      ...obj,
-                      x: snap((dragState.startPositions[obj.id]?.x ?? obj.x) + dx, prev.canvas.gridSize, free),
-                      y: snap((dragState.startPositions[obj.id]?.y ?? obj.y) + dy, prev.canvas.gridSize, free)
-                    }
-                  : obj
-              )
-            }));
-          }}
-          onPointerUp={() => { setDraggingId(null); setDragState(null); setIsPanning(false); setPanStart(null); }}
-          onPointerLeave={() => { setDraggingId(null); setDragState(null); setIsPanning(false); setPanStart(null); }}
-        >
           <div
+            ref={canvasViewportRef}
+            className="editor-canvas"
             style={{
-              position: "absolute",
-              inset: 0,
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-              transformOrigin: "top left"
+              backgroundSize: `${draft.canvas.gridSize * zoom}px ${draft.canvas.gridSize * zoom}px`,
+              backgroundPosition: `${pan.x}px ${pan.y}px`
+            }}
+            onPointerDown={(event) => {
+              const target = event.target as HTMLElement | null;
+              const hitObjectButton = Boolean(target?.closest("button"));
+              if (hitObjectButton) return;
+              setIsPanning(true);
+              setPanStart({ x: event.clientX - pan.x, y: event.clientY - pan.y });
+            }}
+            onPointerMove={(event) => {
+              if (isPanning && panStart) {
+                setPan({ x: event.clientX - panStart.x, y: event.clientY - panStart.y });
+                return;
+              }
+              if (!draggingId || !dragState) return;
+              const free = event.shiftKey;
+              const point = screenToCanvas(event, event.currentTarget as HTMLDivElement, zoom, pan);
+              const dx = point.x - dragState.startPoint.x;
+              const dy = point.y - dragState.startPoint.y;
+              setDraft((prev) => ({
+                ...prev,
+                objects: prev.objects.map((obj) =>
+                  dragState.ids.includes(obj.id)
+                    ? {
+                        ...obj,
+                        x: snap((dragState.startPositions[obj.id]?.x ?? obj.x) + dx, prev.canvas.gridSize, free),
+                        y: snap((dragState.startPositions[obj.id]?.y ?? obj.y) + dy, prev.canvas.gridSize, free)
+                      }
+                    : obj
+                )
+              }));
+            }}
+            onPointerUp={() => {
+              setDraggingId(null);
+              setDragState(null);
+              setIsPanning(false);
+              setPanStart(null);
+            }}
+            onPointerLeave={() => {
+              setDraggingId(null);
+              setDragState(null);
+              setIsPanning(false);
+              setPanStart(null);
             }}
           >
-            {draft.objects.map((obj) => {
-            if (obj.type === "table") {
-              return (
-                <button
-                  key={obj.id}
-                  type="button"
-                  onPointerDown={(event) => startObjectDrag(obj.id, event)}
-                  onClick={(event) => {
-                    setActiveId(obj.id);
-                    setSelectedIds((prev) => {
-                      if (event.shiftKey) {
-                        return prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id];
-                      }
-                      return [obj.id];
-                    });
-                  }}
-                  style={{ position: "absolute", left: obj.x - obj.radius, top: obj.y - obj.radius, width: obj.radius * 2, height: obj.radius * 2, borderRadius: "999px", border: selectedSet.has(obj.id) ? "2px solid #265a96" : "1px solid #6e7f93", background: activeId === obj.id ? "#d5e8ff" : "#ecf4ff", cursor: "grab", fontSize: 11 }}
-                >
-                  {obj.tableNumber}
-                </button>
-              );
-            }
-            if (obj.type === "rect") {
-              return <button key={obj.id} type="button" onPointerDown={(event) => startObjectDrag(obj.id, event)} onClick={(event) => { setActiveId(obj.id); setSelectedIds((prev) => event.shiftKey ? (prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]) : [obj.id]); }} style={{ position: "absolute", left: obj.x, top: obj.y, width: obj.width, height: obj.height, border: selectedSet.has(obj.id) ? "2px solid #265a96" : "1px solid #64758a", background: activeId === obj.id ? "#d9f0ff" : "#edf5fa", cursor: "grab" }} />;
-            }
-            if (obj.type === "circle") {
-              return <button key={obj.id} type="button" onPointerDown={(event) => startObjectDrag(obj.id, event)} onClick={(event) => { setActiveId(obj.id); setSelectedIds((prev) => event.shiftKey ? (prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]) : [obj.id]); }} style={{ position: "absolute", left: obj.x - obj.radius, top: obj.y - obj.radius, width: obj.radius * 2, height: obj.radius * 2, borderRadius: "999px", border: selectedSet.has(obj.id) ? "2px solid #265a96" : "1px solid #6e7f93", background: activeId === obj.id ? "#def8ea" : "#edf9f2", cursor: "grab" }} />;
-            }
-            return <button key={obj.id} type="button" onPointerDown={(event) => startObjectDrag(obj.id, event)} onClick={(event) => { setActiveId(obj.id); setSelectedIds((prev) => event.shiftKey ? (prev.includes(obj.id) ? prev.filter((id) => id !== obj.id) : [...prev, obj.id]) : [obj.id]); }} style={{ position: "absolute", left: obj.x, top: obj.y, border: selectedSet.has(obj.id) ? "1px dashed #265a96" : "none", background: "transparent", color: "#0f2438", fontSize: obj.fontSize, cursor: "grab" }}>{obj.text}</button>;
-            })}
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: "top left"
+              }}
+            >
+              {draft.objects.map((obj) => {
+                const common = {
+                  type: "button" as const,
+                  className: "fp-obj",
+                  onPointerDown: (event: PointerEvent<HTMLButtonElement>) => startObjectDrag(obj.id, event),
+                  onClick: (event: React.MouseEvent<HTMLButtonElement>) => selectObject(obj.id, event.shiftKey)
+                };
+                if (obj.type === "table") {
+                  return (
+                    <button
+                      key={obj.id}
+                      {...common}
+                      style={{
+                        left: obj.x - obj.radius,
+                        top: obj.y - obj.radius,
+                        width: obj.radius * 2,
+                        height: obj.radius * 2,
+                        borderRadius: "999px",
+                        border: objectBorder(obj.id, "1px solid #667085"),
+                        background: activeId === obj.id ? "#d4e7ee" : "#eef5f8",
+                        fontSize: 11
+                      }}
+                    >
+                      {obj.tableNumber}
+                    </button>
+                  );
+                }
+                if (obj.type === "rect") {
+                  return (
+                    <button
+                      key={obj.id}
+                      {...common}
+                      aria-label="Rectangle"
+                      style={{
+                        left: obj.x,
+                        top: obj.y,
+                        width: obj.width,
+                        height: obj.height,
+                        border: objectBorder(obj.id, "1px solid #667085"),
+                        background: activeId === obj.id ? "#e4e7ec" : "#f2f4f7"
+                      }}
+                    />
+                  );
+                }
+                if (obj.type === "circle") {
+                  return (
+                    <button
+                      key={obj.id}
+                      {...common}
+                      aria-label="Circle"
+                      style={{
+                        left: obj.x - obj.radius,
+                        top: obj.y - obj.radius,
+                        width: obj.radius * 2,
+                        height: obj.radius * 2,
+                        borderRadius: "999px",
+                        border: objectBorder(obj.id, "1px solid #667085"),
+                        background: activeId === obj.id ? "#e4e7ec" : "#f2f4f7"
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <button
+                    key={obj.id}
+                    {...common}
+                    style={{
+                      left: obj.x,
+                      top: obj.y,
+                      border: selectedSet.has(obj.id) ? "1px dashed #0b5068" : "1px solid transparent",
+                      background: "transparent",
+                      color: "#101828",
+                      fontSize: obj.fontSize
+                    }}
+                  >
+                    {obj.text}
+                  </button>
+                );
+              })}
+            </div>
+            {draft.objects.length === 0 ? (
+              <div className="editor-canvas-empty">
+                <span>
+                  Add tables from the toolbar, or generate a grid with <strong>Auto layout</strong>.
+                </span>
+              </div>
+            ) : null}
           </div>
-        </div>
+          <div className="editor-hint">
+            Drag to move · Shift-drag for fine movement · Shift-click to multi-select · Drag the background to pan · Scroll to
+            zoom
+          </div>
+        </section>
+
+        <aside className="editor-side">
+          {selected ? (
+            <Section
+              title={
+                selectedIds.length > 1
+                  ? `${selectedIds.length} selected`
+                  : selected.type === "table"
+                    ? `Table ${selected.tableNumber}`
+                    : selected.type === "rect"
+                      ? "Rectangle"
+                      : selected.type === "circle"
+                        ? "Circle"
+                        : "Text"
+              }
+              actions={
+                <button
+                  type="button"
+                  className="icon-btn icon-btn--sm btn-danger"
+                  aria-label="Delete object"
+                  title="Delete"
+                  onClick={() => {
+                    pushUndoSnapshot();
+                    setDraft((p) => ({ ...p, objects: p.objects.filter((o) => o.id !== selected.id) }));
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              }
+            >
+              <div className="form-grid">
+                {selected.type === "table" ? (
+                  <>
+                    <Field label="Table number">
+                      <input value={selected.tableNumber} onChange={(e) => updateSelected({ tableNumber: e.target.value }, false)} />
+                    </Field>
+                    <Field label="Radius">
+                      <input
+                        type="number"
+                        min={6}
+                        max={200}
+                        value={selected.radius}
+                        onChange={(e) => updateSelected({ radius: Math.max(6, Number(e.target.value) || 6) })}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+                {selected.type === "rect" ? (
+                  <>
+                    <Field label="Width">
+                      <input
+                        type="number"
+                        min={6}
+                        value={selected.width}
+                        onChange={(e) => updateSelected({ width: Math.max(6, Number(e.target.value) || 6) })}
+                      />
+                    </Field>
+                    <Field label="Height">
+                      <input
+                        type="number"
+                        min={6}
+                        value={selected.height}
+                        onChange={(e) => updateSelected({ height: Math.max(6, Number(e.target.value) || 6) })}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+                {selected.type === "circle" ? (
+                  <Field label="Radius">
+                    <input
+                      type="number"
+                      min={4}
+                      value={selected.radius}
+                      onChange={(e) => updateSelected({ radius: Math.max(4, Number(e.target.value) || 4) })}
+                    />
+                  </Field>
+                ) : null}
+                {selected.type === "text" ? (
+                  <>
+                    <Field label="Text" className="span-all">
+                      <input value={selected.text} onChange={(e) => updateSelected({ text: e.target.value })} />
+                    </Field>
+                    <Field label="Font size">
+                      <input
+                        type="number"
+                        min={6}
+                        max={200}
+                        value={selected.fontSize}
+                        onChange={(e) => updateSelected({ fontSize: Math.max(6, Number(e.target.value) || 6) })}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+              </div>
+              {selectedIds.length > 1 ? (
+                <p className="field-hint" style={{ margin: "10px 0 0" }}>
+                  Editing the last object clicked. Use the toolbar to align or distribute the selection.
+                </p>
+              ) : null}
+            </Section>
+          ) : null}
+
+          <Section title="Print">
+            <div className="stack">
+              <Field label="Title">
+                <input
+                  value={draft.metadata.title}
+                  onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, title: e.target.value } }))}
+                />
+              </Field>
+              <Field label="Subtitle">
+                <input
+                  value={draft.metadata.subtitle}
+                  onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, subtitle: e.target.value } }))}
+                />
+              </Field>
+              <Field label="Paper" as="div">
+                <Segmented
+                  value={draft.canvas.paperSize}
+                  options={PAPER_OPTIONS}
+                  onChange={(value) =>
+                    setDraft((p) => ({
+                      ...p,
+                      canvas: { ...p.canvas, paperSize: value as FloorplanDocument["canvas"]["paperSize"] },
+                      autoLayout: { ...p.autoLayout, paperSize: value as FloorplanDocument["autoLayout"]["paperSize"] }
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="Orientation" as="div">
+                <Segmented
+                  value={draft.canvas.orientation}
+                  options={ORIENTATION_OPTIONS}
+                  onChange={(value) =>
+                    setDraft((p) => ({
+                      ...p,
+                      canvas: { ...p.canvas, orientation: value },
+                      autoLayout: { ...p.autoLayout, orientation: value }
+                    }))
+                  }
+                />
+              </Field>
+              {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured ? (
+                <>
+                  <LogoPicker
+                    title="Client logo"
+                    items={clientLogoLibrary.items}
+                    value={draft.selectedClientLogoKey ?? ""}
+                    onChange={(key) => {
+                      if (!key) {
+                        setDraft((prev) => ({
+                          ...prev,
+                          selectedClientLogoKey: null,
+                          themeSnapshot: { ...prev.themeSnapshot, clientLogoDataUrl: undefined }
+                        }));
+                        return;
+                      }
+                      const item = clientLogoLibrary.items.find((entry) => entry.key === key);
+                      if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
+                    }}
+                    emptyOption={{ label: "No client logo", value: "" }}
+                  />
+                  <LogoPicker
+                    title="Venue logo"
+                    items={venueLogoLibrary.items}
+                    value={draft.selectedVenueLogoKey ?? ""}
+                    onChange={(key) => {
+                      if (!key) {
+                        setDraft((prev) => ({
+                          ...prev,
+                          selectedVenueLogoKey: null,
+                          themeSnapshot: { ...prev.themeSnapshot, venueLogoDataUrl: undefined }
+                        }));
+                        return;
+                      }
+                      const item = venueLogoLibrary.items.find((entry) => entry.key === key);
+                      if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
+                    }}
+                    emptyOption={{ label: "No venue logo", value: "" }}
+                  />
+                </>
+              ) : null}
+            </div>
+            <div className="card-foot card-foot--inset">
+              <Segmented
+                size="sm"
+                value={outputFormat}
+                options={[
+                  { value: "pdf", label: "PDF" },
+                  { value: "png", label: "PNG" }
+                ]}
+                onChange={setOutputFormat}
+                aria-label="Output format"
+              />
+              <button type="button" className="btn-primary" onClick={() => void printFloorplan()} disabled={busy}>
+                <Download size={16} aria-hidden />
+                {outputFormat === "png" ? "Export PNG" : "Print PDF"}
+              </button>
+            </div>
+          </Section>
+
+          <Section title="Auto layout" collapsible defaultOpen={draft.objects.length === 0} summary="Generate a numbered grid of tables">
+            <div className="stack">
+              <div className="form-grid">
+                <Field label="Tables">
+                  <input
+                    type="number"
+                    min={1}
+                    max={400}
+                    value={tableCount}
+                    onChange={(e) => setTableCount(Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </Field>
+                <Field label="Grid snap">
+                  <input
+                    type="number"
+                    min={4}
+                    max={200}
+                    value={draft.canvas.gridSize}
+                    onChange={(e) =>
+                      setDraft((p) => ({ ...p, canvas: { ...p.canvas, gridSize: Math.max(4, Number(e.target.value) || 24) } }))
+                    }
+                  />
+                </Field>
+                <Field label="Rows">
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={draft.autoLayout.rows}
+                    onChange={(e) =>
+                      setDraft((p) => ({
+                        ...p,
+                        autoLayout: { ...p.autoLayout, rows: Math.max(1, Math.min(24, Number(e.target.value) || 1)) }
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="Columns">
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={draft.autoLayout.columns}
+                    onChange={(e) =>
+                      setDraft((p) => ({
+                        ...p,
+                        autoLayout: { ...p.autoLayout, columns: Math.max(1, Math.min(24, Number(e.target.value) || 1)) }
+                      }))
+                    }
+                  />
+                </Field>
+                <Field label="Numbering">
+                  <select
+                    value={draft.autoLayout.numbering}
+                    onChange={(e) =>
+                      setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, numbering: e.target.value as "straight" | "snaked" } }))
+                    }
+                  >
+                    <option value="straight">Straight</option>
+                    <option value="snaked">Snaked</option>
+                  </select>
+                </Field>
+                <Field label="Start corner">
+                  <select
+                    value={draft.autoLayout.startCorner}
+                    onChange={(e) =>
+                      setDraft((p) => ({
+                        ...p,
+                        autoLayout: {
+                          ...p.autoLayout,
+                          startCorner: e.target.value as FloorplanDocument["autoLayout"]["startCorner"]
+                        }
+                      }))
+                    }
+                  >
+                    <option value="topLeft">Top left</option>
+                    <option value="topRight">Top right</option>
+                    <option value="bottomLeft">Bottom left</option>
+                    <option value="bottomRight">Bottom right</option>
+                  </select>
+                </Field>
+                <Field
+                  label="Arrangement"
+                  as="div"
+                  className="span-all"
+                  hint="Staggered offsets every other row or column by half a cell so tables nest like bricks."
+                >
+                  <Segmented
+                    value={draft.autoLayout.tableLayout}
+                    options={[
+                      { value: "aligned", label: "Aligned grid" },
+                      { value: "staggered", label: "Staggered" }
+                    ]}
+                    onChange={(value) =>
+                      setDraft((p) => ({
+                        ...p,
+                        autoLayout: {
+                          ...p.autoLayout,
+                          tableLayout: value,
+                          staggerAxis: value === "staggered" ? (p.autoLayout.staggerAxis ?? "horizontal") : undefined
+                        }
+                      }))
+                    }
+                  />
+                </Field>
+                {draft.autoLayout.tableLayout === "staggered" ? (
+                  <Field label="Offset" as="div" className="span-all">
+                    <Segmented
+                      value={draft.autoLayout.staggerAxis ?? "horizontal"}
+                      options={[
+                        { value: "horizontal", label: "Odd rows", title: "Horizontal: odd rows offset (classic banqueting)" },
+                        { value: "vertical", label: "Odd columns", title: "Vertical: odd columns offset downward" }
+                      ]}
+                      onChange={(value) =>
+                        setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, staggerAxis: value } }))
+                      }
+                    />
+                  </Field>
+                ) : null}
+              </div>
+              <button type="button" onClick={seedFromAutoLayout}>
+                Generate tables
+              </button>
+              {draft.objects.some((obj) => obj.type === "table") ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Replaces the existing tables. Shapes and labels are kept. Undo is available.
+                </p>
+              ) : null}
+            </div>
+          </Section>
+        </aside>
       </div>
 
-      {selected && (
-        <div className="panel">
-          <h2>Selected object</h2>
-          <p className="text-muted">Selected: {selectedIds.length}</p>
-          <p className="text-muted">ID: <code>{selected.id}</code></p>
-          {selected.type === "table" && (
-            <div className="grid two">
-              <label>Table number<input value={selected.tableNumber} onChange={(e) => setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "table" ? { ...o, tableNumber: e.target.value } : o)) }))} /></label>
-              <label>Radius<input type="number" min={6} max={200} value={selected.radius} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "table" ? { ...o, radius: Math.max(6, Number(e.target.value) || 6) } : o)) })); }} /></label>
-            </div>
-          )}
-          {selected.type === "rect" && (
-            <div className="grid two">
-              <label>Width<input type="number" min={6} value={selected.width} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "rect" ? { ...o, width: Math.max(6, Number(e.target.value) || 6) } : o)) })); }} /></label>
-              <label>Height<input type="number" min={6} value={selected.height} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "rect" ? { ...o, height: Math.max(6, Number(e.target.value) || 6) } : o)) })); }} /></label>
-            </div>
-          )}
-          {selected.type === "circle" && (
-            <label>Radius<input type="number" min={4} value={selected.radius} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "circle" ? { ...o, radius: Math.max(4, Number(e.target.value) || 4) } : o)) })); }} /></label>
-          )}
-          {selected.type === "text" && (
-            <div className="grid two">
-              <label>Text<input value={selected.text} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "text" ? { ...o, text: e.target.value } : o)) })); }} /></label>
-              <label>Font size<input type="number" min={6} max={200} value={selected.fontSize} onChange={(e) => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.map((o) => (o.id === selected.id && o.type === "text" ? { ...o, fontSize: Math.max(6, Number(e.target.value) || 6) } : o)) })); }} /></label>
-            </div>
-          )}
-          <button type="button" className="secondary" onClick={() => { pushUndoSnapshot(); setDraft((p) => ({ ...p, objects: p.objects.filter((o) => o.id !== selected.id) })); }}>Delete selected object</button>
-        </div>
-      )}
-
-      {error && <div className="panel"><p className="error">{error}</p></div>}
+      <Toasts>
+        {error ? (
+          <Callout tone="error" onDismiss={() => setError("")}>
+            {error}
+          </Callout>
+        ) : null}
+      </Toasts>
     </main>
   );
 }
-

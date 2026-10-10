@@ -36,7 +36,7 @@ const adhocSchema = z.object({
   paperSize: z.enum(PAPER_SIZE_VALUES),
   orientation: z.enum(["portrait", "landscape"]),
   arrow: signageArrowSchema,
-  /** When set and not "none", renders a second column (paired with `eventName2` or slot default). */
+  /** When set and not "none", renders a second event (`eventName2`) on the same sign. Ad-hoc signs only. */
   secondaryArrow: signageArrowSchema.optional(),
   /** Two-event layout when `secondaryArrow` is active; defaults to side-by-side in PDF. */
   dualEventArrangement: signageDualEventArrangementSchema.optional(),
@@ -223,5 +223,10 @@ export async function POST(request: Request) {
 }
 
 function sanitizeFilename(name: string): string {
-  return name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 80) || "event";
+  const slug = name.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+  if (slug.length <= 80) return slug || "event";
+  // Cut at the last word break so long names don't end mid-word.
+  const cut = slug.slice(0, 80);
+  const lastBreak = cut.lastIndexOf("-");
+  return (lastBreak > 40 ? cut.slice(0, lastBreak) : cut) || "event";
 }

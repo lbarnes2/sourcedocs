@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type CollisionDetection,
   DndContext,
   type DragEndEvent,
   KeyboardSensor,
@@ -12,12 +13,13 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Download, FilePlus, FolderOpen, GripVertical, Plus, Save, Trash2, X } from "lucide-react";
 import { catSortableId, parseSortableId } from "@/app/buffet-menu/dndTypes";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob } from "@/lib/pdf/pdfToPngExport";
 import { LogoPicker } from "@/app/components/LogoPicker";
+import { Callout, Field, Modal, PageHeader, Section, Switch, Toasts } from "@/app/components/ui";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import {
   BUFFET_UNCAT_CONTAINER,
@@ -110,28 +112,59 @@ function applyCategoryDragEnd(store: Store, activeId: string, overId: string | n
 
 type LogoItem = { key: string; label: string; assetUrl: string };
 
-function SortableCategoryRow({
+/** Categories only collide with categories, items only with items/containers, so nested lists don't fight. */
+const collisionDetection: CollisionDetection = (args) => {
+  const activeIsCategory = String(args.active.id).startsWith("cat:");
+  return closestCorners({
+    ...args,
+    droppableContainers: args.droppableContainers.filter(
+      (container) => String(container.id).startsWith("cat:") === activeIsCategory
+    )
+  });
+};
+
+function SortableCategoryBlock({
   id,
   title,
+  itemCount,
   onTitle,
-  onRemove
+  onRemove,
+  children
 }: {
   id: string;
   title: string;
+  itemCount: number;
   onTitle: (v: string) => void;
   onRemove: () => void;
+  children: React.ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: catSortableId(id) });
-  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
+  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
   return (
-    <div ref={setNodeRef} style={style} className="buffet-cat-row">
-      <button type="button" className="buffet-drag-h" aria-label="Drag to reorder category" {...attributes} {...listeners}>
-        ⣿
-      </button>
-      <input className="buffet-cat-input" value={title} onChange={(e) => onTitle(e.target.value)} placeholder="Category name" />
-      <button type="button" className="secondary buffet-cat-remove" onClick={onRemove}>
-        Remove
-      </button>
+    <div ref={setNodeRef} style={style} className="menu-cat">
+      <div className="menu-cat-head">
+        <button type="button" className="drag-handle" aria-label="Drag to reorder category" {...attributes} {...listeners}>
+          <GripVertical size={16} />
+        </button>
+        <input
+          className="menu-cat-title"
+          value={title}
+          onChange={(e) => onTitle(e.target.value)}
+          placeholder="Category name"
+          aria-label="Category name"
+        />
+        <span className="badge">{itemCount}</span>
+        <button
+          type="button"
+          className="icon-btn icon-btn--sm btn-danger"
+          onClick={onRemove}
+          aria-label="Remove category"
+          title="Remove category (its items move to Uncategorised)"
+        >
+          <Trash2 size={15} />
+        </button>
+      </div>
+      {children}
     </div>
   );
 }
@@ -148,38 +181,22 @@ function SortableItemRow({
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: itemId });
-  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
+  const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
   return (
-    <div ref={setNodeRef} style={style} className="buffet-item-row">
-      <button type="button" className="buffet-drag-h" aria-label="Drag to reorder item" {...attributes} {...listeners}>
-        ⣿
+    <div ref={setNodeRef} style={style} className="menu-item">
+      <button type="button" className="drag-handle" aria-label="Drag to reorder item" {...attributes} {...listeners}>
+        <GripVertical size={16} />
       </button>
-      <div className="buffet-item-fields">
-        <input
-          className="buffet-item-title"
-          value={item.title}
-          onChange={(e) => onChange({ ...item, title: e.target.value })}
-          placeholder="Menu item"
-        />
-        <div className="buffet-allergen-grid">
-          {ALLERGENS.map((a) => (
-            <label key={a.id} className="buffet-allergen-cell">
-              <input
-                type="checkbox"
-                checked={item.allergens[a.id as AllergenId]}
-                onChange={(e) =>
-                  onChange({
-                    ...item,
-                    allergens: { ...item.allergens, [a.id]: e.target.checked }
-                  })
-                }
-              />
-              <span>{a.shortLabel}</span>
-            </label>
-          ))}
-        </div>
-        <div className="buffet-diet-row">
-          <label>
+      <div className="menu-item-fields">
+        <div className="menu-item-top">
+          <input
+            className="menu-item-title"
+            value={item.title}
+            onChange={(e) => onChange({ ...item, title: e.target.value })}
+            placeholder="Dish name"
+            aria-label="Dish name"
+          />
+          <label className="chip chip--diet" title="Vegetarian">
             <input
               type="checkbox"
               checked={item.vegetarian}
@@ -190,7 +207,7 @@ function SortableItemRow({
             />
             Vegetarian
           </label>
-          <label>
+          <label className="chip chip--diet" title="Vegan">
             <input
               type="checkbox"
               checked={item.vegan}
@@ -202,9 +219,26 @@ function SortableItemRow({
             Vegan
           </label>
         </div>
+        <div className="chip-group chip-group--allergens" role="group" aria-label="Allergens">
+          {ALLERGENS.map((a) => (
+            <label key={a.id} className="chip chip--sm" title={a.fullLabel}>
+              <input
+                type="checkbox"
+                checked={item.allergens[a.id as AllergenId]}
+                onChange={(e) =>
+                  onChange({
+                    ...item,
+                    allergens: { ...item.allergens, [a.id]: e.target.checked }
+                  })
+                }
+              />
+              {a.shortLabel}
+            </label>
+          ))}
+        </div>
       </div>
-      <button type="button" className="secondary buffet-item-remove" onClick={onRemove}>
-        Remove
+      <button type="button" className="icon-btn icon-btn--sm btn-danger" onClick={onRemove} aria-label="Remove item">
+        <X size={16} />
       </button>
     </div>
   );
@@ -213,17 +247,19 @@ function SortableItemRow({
 function ItemColumnDrop({
   id,
   children,
+  isEmpty,
   emptyLabel
 }: {
   id: string;
   children: React.ReactNode;
+  isEmpty: boolean;
   emptyLabel: string;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
-    <div ref={setNodeRef} className={`buffet-item-col${isOver ? " buffet-item-col--over" : ""}`}>
+    <div ref={setNodeRef} className={`menu-items${isOver ? " menu-items--over" : ""}`}>
       {children}
-      <p className="buffet-empty-hint text-muted">{emptyLabel}</p>
+      {isEmpty ? <p className="menu-items-empty">{emptyLabel}</p> : null}
     </div>
   );
 }
@@ -242,7 +278,7 @@ export default function BuffetMenuPage() {
   const [settings, setSettings] = useState<BuffetMenuSettings>({ allergenStatement: "", showAllergenStatement: false });
   const [savedSettings, setSavedSettings] = useState<BuffetMenuSettings | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [statementOpen, setStatementOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
   const settingsDirty =
     savedSettings !== null &&
     (settings.allergenStatement !== savedSettings.allergenStatement ||
@@ -458,6 +494,7 @@ export default function BuffetMenuPage() {
       if (savedId === id) {
         setSavedId(null);
         setStore(createEmptyMenuStore());
+        setSavedName("Untitled menu");
       }
       await refreshSaved();
     } catch (e) {
@@ -472,213 +509,244 @@ export default function BuffetMenuPage() {
     setSavedName("Untitled menu");
   };
 
+  const uncatIds = store.orderMap[BUFFET_UNCAT_CONTAINER] ?? [];
+  const itemTotal = Object.keys(store.items).length;
+  const statementSummary =
+    (settings.showAllergenStatement && settings.allergenStatement.trim()
+      ? "Printed at the foot of the allergen matrix"
+      : "Not printed on the allergen matrix") + (settingsDirty ? " · unsaved changes" : "");
+
+  const renderItems = (ids: string[]) =>
+    ids.map((id) => {
+      const it = store.items[id];
+      if (!it) return null;
+      return <SortableItemRow key={id} itemId={id} item={it} onChange={updateItem} onRemove={() => removeItem(id)} />;
+    });
+
   return (
-    <main className="app-buffet">
-      <header className="app-header">
-        <Link href="/" className="app-backlink">
-          ← Home
-        </Link>
-        <h1>Buffet menu documents</h1>
-        <p className="app-tagline">Build a menu with categories and allergen data, then download display menu, allergen matrix, and buffet label sheets. Saved menus are stored in the cloud when R2 is configured.</p>
-      </header>
+    <main className="page">
+      <PageHeader
+        title="Buffet menus"
+        description="Build the menu once with allergens, then print the display menu, allergen matrix and buffet labels."
+        actions={
+          <>
+            <input
+              className="header-input"
+              value={savedName}
+              onChange={(e) => setSavedName(e.target.value)}
+              maxLength={200}
+              aria-label="Menu name"
+              placeholder="Menu name"
+            />
+            <button
+              type="button"
+              onClick={saveToCloud}
+              disabled={busy || !r2SaveEnabled}
+              title={!r2SaveEnabled ? "R2 is not configured" : undefined}
+            >
+              <Save size={15} aria-hidden /> Save
+            </button>
+            <button type="button" onClick={() => setSavedOpen(true)}>
+              <FolderOpen size={15} aria-hidden /> Open
+            </button>
+            <button type="button" className="icon-btn icon-btn--bordered" onClick={newMenu} disabled={busy} aria-label="New menu" title="New menu">
+              <FilePlus size={16} />
+            </button>
+          </>
+        }
+      />
 
-      {error ? <p className="error panel">{error}</p> : null}
+      {savedOpen ? (
+        <Modal title="Saved menus" onClose={() => setSavedOpen(false)}>
+          {!r2SaveEnabled ? (
+            <Callout tone="warning">R2 isn&apos;t configured, so menus can&apos;t be saved or loaded.</Callout>
+          ) : savedList.length === 0 ? (
+            <p className="text-muted" style={{ margin: 0 }}>
+              No saved menus yet.
+            </p>
+          ) : (
+            <ul className="list">
+              {savedList.map((s) => (
+                <li key={s.id} className={s.id === savedId ? "list-item list-item--active" : "list-item"}>
+                  <div className="list-item-main">
+                    <button
+                      type="button"
+                      className="list-item-title"
+                      disabled={busy}
+                      onClick={() => {
+                        void loadSaved(s.id);
+                        setSavedOpen(false);
+                      }}
+                    >
+                      {s.name}
+                    </button>
+                    <span className="list-item-meta">{new Date(s.savedAt).toLocaleString()}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-sm"
+                    disabled={busy}
+                    onClick={() => {
+                      void loadSaved(s.id);
+                      setSavedOpen(false);
+                    }}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm btn-danger"
+                    aria-label={`Delete ${s.name}`}
+                    onClick={() => void deleteSaved(s.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Modal>
+      ) : null}
 
-      <div className="panel">
-        <h2>Saved menus</h2>
-        <div className="grid two buffet-saved-bar">
-          <div className="field-stack">
-            <span className="field-label-text">Menu name</span>
-            <input value={savedName} onChange={(e) => setSavedName(e.target.value)} maxLength={200} />
-          </div>
-          <div className="field-stack" style={{ justifyContent: "flex-end" }}>
-            <div className="buffet-saved-actions">
-              <button type="button" onClick={saveToCloud} disabled={busy || !r2SaveEnabled} title={!r2SaveEnabled ? "R2 is not configured" : ""}>
-                Save
-              </button>
-              <button type="button" className="secondary" onClick={newMenu} disabled={busy}>
-                New
+      <Section
+        title="Menu"
+        description="Drag the handles to reorder categories and dishes, or to move a dish between categories. Tick the allergens each dish contains."
+      >
+        <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={onDragEnd}>
+          <div className="stack">
+            <div className="menu-cat menu-cat--uncat">
+              <div className="menu-cat-head">
+                <span className="menu-cat-label">Uncategorised</span>
+                <span className="badge">{uncatIds.length}</span>
+              </div>
+              <ItemColumnDrop
+                id={BUFFET_UNCAT_CONTAINER}
+                isEmpty={uncatIds.length === 0}
+                emptyLabel={store.categories.length ? "Drop dishes here to remove them from a category." : "No dishes yet."}
+              >
+                <SortableContext items={uncatIds} strategy={verticalListSortingStrategy}>
+                  {renderItems(uncatIds)}
+                </SortableContext>
+              </ItemColumnDrop>
+              <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(BUFFET_UNCAT_CONTAINER)}>
+                <Plus size={14} aria-hidden /> Add dish
               </button>
             </div>
-          </div>
-        </div>
-        {savedList.length > 0 ? (
-          <ul className="buffet-saved-list">
-            {savedList.map((s) => (
-              <li key={s.id}>
-                <button type="button" className="text-button" onClick={() => void loadSaved(s.id)}>
-                  {s.name}
-                </button>
-                <span className="text-muted"> · {new Date(s.savedAt).toLocaleString()}</span>
-                <button
-                  type="button"
-                  className="secondary small buffet-saved-delete"
-                  onClick={() => void deleteSaved(s.id)}
-                >
-                  Delete
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-muted">{r2SaveEnabled ? "No saved menus yet." : "R2 is not configured — save/load disabled."}</p>
-        )}
-      </div>
 
-      <div className="panel">
-        <h2>Venue logo (matrix and labels)</h2>
-        <p className="text-muted">Select a logo from the library for the allergen matrix and buffet labels.</p>
-        <LogoPicker
-          title="Venue logo selection"
-          items={venueLogos}
-          value={venueLogoKey}
-          onChange={setVenueLogoKey}
-          emptyOption={{ label: "None", value: "" }}
-          disabled={!logosConfigured || busy}
-        />
-      </div>
-
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
-        <div className="panel">
-          <h2>Categories</h2>
-          <p className="text-muted">Drag to reorder. Items stay inside their block until you move them in the item sections below.</p>
-          <SortableContext items={categoryIds} strategy={verticalListSortingStrategy}>
-            {store.categories.map((c) => (
-              <SortableCategoryRow
-                key={c.id}
-                id={c.id}
-                title={c.title}
-                onTitle={(t) => setStore((s) => ({ ...s, categories: s.categories.map((x) => (x.id === c.id ? { ...x, title: t } : x)) }))}
-                onRemove={() => removeCategory(c.id)}
-              />
-            ))}
-          </SortableContext>
-          <button type="button" onClick={addCategory} className="secondary" style={{ marginTop: 8 }}>
-            Add category
-          </button>
-        </div>
-
-        <div className="panel">
-          <h2>Menu items</h2>
-          <p className="text-muted">Drag items with the handle. Use “Add” in each section — uncategorised first, then each category’s block.</p>
-
-          <h3>Uncategorised</h3>
-          <ItemColumnDrop id={BUFFET_UNCAT_CONTAINER} emptyLabel="Drop items here or add new.">
-            <SortableContext
-              items={store.orderMap[BUFFET_UNCAT_CONTAINER] ?? []}
-              strategy={verticalListSortingStrategy}
-            >
-              {(store.orderMap[BUFFET_UNCAT_CONTAINER] ?? []).map((id) => {
-                const it = store.items[id];
-                if (!it) return null;
+            <SortableContext items={categoryIds} strategy={verticalListSortingStrategy}>
+              {store.categories.map((c) => {
+                const ids = store.orderMap[c.id] ?? [];
                 return (
-                  <SortableItemRow key={id} itemId={id} item={it} onChange={updateItem} onRemove={() => removeItem(id)} />
+                  <SortableCategoryBlock
+                    key={c.id}
+                    id={c.id}
+                    title={c.title}
+                    itemCount={ids.length}
+                    onTitle={(t) =>
+                      setStore((s) => ({ ...s, categories: s.categories.map((x) => (x.id === c.id ? { ...x, title: t } : x)) }))
+                    }
+                    onRemove={() => removeCategory(c.id)}
+                  >
+                    <ItemColumnDrop id={c.id} isEmpty={ids.length === 0} emptyLabel="Drop dishes here or add one.">
+                      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                        {renderItems(ids)}
+                      </SortableContext>
+                    </ItemColumnDrop>
+                    <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(c.id)}>
+                      <Plus size={14} aria-hidden /> Add dish
+                    </button>
+                  </SortableCategoryBlock>
                 );
               })}
             </SortableContext>
-          </ItemColumnDrop>
-          <button type="button" className="secondary" onClick={() => addItemTo(BUFFET_UNCAT_CONTAINER)} style={{ marginTop: 6 }}>
-            Add item (uncategorised)
-          </button>
 
-          {store.categories.map((c) => (
-            <div key={c.id} className="buffet-cat-block">
-              <h3>{c.title || "Untitled category"}</h3>
-              <ItemColumnDrop id={c.id} emptyLabel="Drop items here or add.">
-                <SortableContext items={store.orderMap[c.id] ?? []} strategy={verticalListSortingStrategy}>
-                  {(store.orderMap[c.id] ?? []).map((id) => {
-                    const it = store.items[id];
-                    if (!it) return null;
-                    return (
-                      <SortableItemRow key={id} itemId={id} item={it} onChange={updateItem} onRemove={() => removeItem(id)} />
-                    );
-                  })}
-                </SortableContext>
-              </ItemColumnDrop>
-              <button type="button" className="secondary" onClick={() => addItemTo(c.id)} style={{ marginTop: 6 }}>
-                Add item
-              </button>
-            </div>
-          ))}
+            <button type="button" className="btn-dashed" onClick={addCategory}>
+              <Plus size={15} aria-hidden /> Add category
+            </button>
+          </div>
+        </DndContext>
+      </Section>
+
+      <Section
+        title="Download"
+        description="A4 display menu (no allergens shown), A4 landscape allergen matrix, and buffet labels at A6 (4 per sheet) or A7 (8 per sheet)."
+      >
+        <div className="form-grid">
+          <LogoPicker
+            title="Venue logo (matrix and labels)"
+            items={venueLogos}
+            value={venueLogoKey}
+            onChange={setVenueLogoKey}
+            emptyOption={{ label: "None", value: "" }}
+            disabled={!logosConfigured || busy}
+          />
         </div>
-      </DndContext>
-
-      <div className="panel">
-        <h2>Download</h2>
-        <p className="text-muted">
-          A4 display menu (no allergens on the menu), A4 landscape allergen matrix, and A4 pages of buffet labels at A6 (4 per sheet) or A7 (8 per sheet). Get each file on its own or all of them in one ZIP.
-        </p>
-        <div className="buffet-download-actions">
-          <button type="button" className="secondary" onClick={() => void downloadExport("display")} disabled={busy}>
-            {busy ? "Working…" : "Display menu (PDF)"}
-          </button>
-          <button type="button" className="secondary" onClick={() => void downloadExport("matrix")} disabled={busy}>
-            {busy ? "Working…" : "Allergen matrix (PDF)"}
-          </button>
-          <button type="button" className="secondary" onClick={() => void downloadExport("labels")} disabled={busy}>
-            {busy ? "Working…" : "A6 label sheets (PDF)"}
-          </button>
-          <button type="button" className="secondary" onClick={() => void downloadExport("labelsA7")} disabled={busy}>
-            {busy ? "Working…" : "A7 label sheets (PDF)"}
-          </button>
-          <button type="button" onClick={() => void downloadExport("zip")} disabled={busy}>
-            {busy ? "Working…" : "All documents (ZIP)"}
+        <div className="card-foot card-foot--inset card-foot--between">
+          <div className="row">
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("display")} disabled={busy || itemTotal === 0}>
+              Display menu
+            </button>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("matrix")} disabled={busy || itemTotal === 0}>
+              Allergen matrix
+            </button>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("labels")} disabled={busy || itemTotal === 0}>
+              A6 labels
+            </button>
+            <button type="button" className="btn-sm" onClick={() => void downloadExport("labelsA7")} disabled={busy || itemTotal === 0}>
+              A7 labels
+            </button>
+          </div>
+          <button type="button" className="btn-primary" onClick={() => void downloadExport("zip")} disabled={busy || itemTotal === 0}>
+            <Download size={16} aria-hidden />
+            {busy ? "Working…" : "Download all (ZIP)"}
           </button>
         </div>
-      </div>
-      <div className="panel panel--collapsible">
-        <div className={statementOpen ? "panel-collapsible-head panel-collapsible-head--open" : "panel-collapsible-head"}>
-          <h2 className="step-heading--collapsible">
+      </Section>
+
+      <Section title="Allergen statement" collapsible defaultOpen={false} summary={statementSummary}>
+        <div className="stack">
+          <p className="text-muted" style={{ margin: 0 }}>
+            Small print at the foot of every allergen matrix page. Saved for all future menus — it isn&apos;t part of an
+            individual menu.
+          </p>
+          <Switch
+            checked={settings.showAllergenStatement}
+            onChange={(checked) => setSettings((s) => ({ ...s, showAllergenStatement: checked }))}
+            label="Print on the allergen matrix"
+          />
+          <Field label="Statement" as="div">
+            <textarea
+              value={settings.allergenStatement}
+              onChange={(e) => setSettings((s) => ({ ...s, allergenStatement: e.target.value }))}
+              maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
+              rows={4}
+              aria-label="Allergen statement"
+              placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
+            />
+          </Field>
+          <div className="row">
             <button
               type="button"
-              className="panel-collapsible-trigger"
-              aria-expanded={statementOpen}
-              aria-controls="buffet-statement-settings"
-              onClick={() => setStatementOpen((o) => !o)}
+              className="btn-primary btn-sm"
+              onClick={() => void saveSettings()}
+              disabled={settingsBusy || savedSettings === null || !settingsDirty}
             >
-              <span className="panel-collapsible-title">Settings: allergen statement</span>
-              <span className="panel-collapsible-chevron" aria-hidden>
-                {statementOpen ? "▼" : "▶"}
-              </span>
-            </button>
-          </h2>
-          {!statementOpen ? (
-            <p className="text-muted panel-collapsible-summary">
-              {settings.showAllergenStatement && settings.allergenStatement.trim()
-                ? "Shown at the foot of the allergen matrix"
-                : "Not shown on the allergen matrix"}
-              {settingsDirty ? " · unsaved changes" : null}
-            </p>
-          ) : null}
-        </div>
-        <div id="buffet-statement-settings" hidden={!statementOpen}>
-          <p className="text-muted">
-            Small print at the foot of every allergen matrix page. Saved for future menus — it isn’t part of an individual menu.
-          </p>
-          <label className="buffet-statement-toggle">
-            <input
-              type="checkbox"
-              checked={settings.showAllergenStatement}
-              onChange={(e) => setSettings((s) => ({ ...s, showAllergenStatement: e.target.checked }))}
-            />
-            Show on allergen matrix
-          </label>
-          <textarea
-            className="buffet-statement-text"
-            value={settings.allergenStatement}
-            onChange={(e) => setSettings((s) => ({ ...s, allergenStatement: e.target.value }))}
-            maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
-            rows={4}
-            placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
-          />
-          <div className="buffet-saved-actions">
-            <button type="button" onClick={() => void saveSettings()} disabled={settingsBusy || savedSettings === null || !settingsDirty}>
               {settingsBusy ? "Saving…" : "Save statement"}
             </button>
-            <span className="text-muted">{settingsDirty ? "Unsaved changes — downloads still use what’s shown here." : savedSettings ? "Saved" : ""}</span>
+            <span className="text-muted text-sm">
+              {settingsDirty ? "Unsaved — downloads still use what’s shown here." : savedSettings ? "Saved" : ""}
+            </span>
           </div>
         </div>
-      </div>
+      </Section>
+
+      <Toasts>
+        {error ? (
+          <Callout tone="error" onDismiss={() => setError("")}>
+            {error}
+          </Callout>
+        ) : null}
+      </Toasts>
     </main>
   );
 }

@@ -1,47 +1,36 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
+import { NAV_TOOLS } from "./components/navTools";
 
 export default function HomePage() {
   return (
-    <main className="home-landing">
-      <header className="app-header home-landing-header">
-        <h1>Event Collateral</h1>
-        <p className="app-tagline">
-          Choose a tool: banqueting documents from guest data, buffet menus with allergen outputs, or directional event
-          signage from venue profiles. Manage all logos in one shared logo library.
-        </p>
+    <main className="page">
+      <header className="page-header home-header">
+        <div className="page-header-text">
+          <h1>Event Collateral</h1>
+          <p>Quick tools for the print jobs every event needs. Pick one to get started.</p>
+        </div>
       </header>
 
-      <div className="home-landing-grid">
-        <Link className="home-landing-card" href="/banqueting">
-          <span className="home-landing-card-title">Generate Banqueting Documents</span>
-          <span className="home-landing-card-desc">
-            Table plans, place cards, menu booklets, service plans, and floorplans from client data.
-          </span>
-        </Link>
-        <Link className="home-landing-card home-landing-card--buffet" href="/buffet-menu">
-          <span className="home-landing-card-title">Generate Buffet Menus</span>
-          <span className="home-landing-card-desc">
-            Display menu, allergen matrix, and buffet label sheets. Save drafts to the cloud.
-          </span>
-        </Link>
-        <Link className="home-landing-card home-landing-card--signage" href="/signage">
-          <span className="home-landing-card-title">Generate Event Signage</span>
-          <span className="home-landing-card-desc">
-            Sign packs for venues. Directional signage, ad-hoc sign generator.
-          </span>
-        </Link>
-        <Link className="home-landing-card" href="/floorplans">
-          <span className="home-landing-card-title">Floorplans Tool</span>
-          <span className="home-landing-card-desc">
-            Build custom floorplans with draggable tables, shapes, labels, and printable outputs.
-          </span>
-        </Link>
-        <Link className="home-landing-card home-landing-card--logos" href="/logo-library">
-          <span className="home-landing-card-title">Logo Library</span>
-          <span className="home-landing-card-desc">
-            Upload, rename, and delete venue and client logos used across all tools.
-          </span>
-        </Link>
+      <div className="home-grid">
+        {NAV_TOOLS.map((tool) => {
+          const Icon = tool.icon;
+          return (
+            <Link
+              key={tool.href}
+              className="home-card"
+              href={tool.href}
+              style={{ ["--tool-color" as string]: tool.color }}
+            >
+              <span className="home-card-icon" aria-hidden>
+                <Icon size={20} />
+              </span>
+              <span className="home-card-title">{tool.name}</span>
+              <span className="home-card-desc">{tool.description}</span>
+              <ArrowRight size={16} className="home-card-arrow" aria-hidden />
+            </Link>
+          );
+        })}
       </div>
     </main>
   );

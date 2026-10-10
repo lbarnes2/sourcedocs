@@ -3,7 +3,22 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
+import { Download, FileSpreadsheet, FolderOpen, Save, Trash2, X } from "lucide-react";
 import { LogoPicker } from "@/app/components/LogoPicker";
+import {
+  Callout,
+  ColorField,
+  Disclosure,
+  Dropzone,
+  Field,
+  Modal,
+  PageHeader,
+  Section,
+  Segmented,
+  Switch,
+  Tabs,
+  Toasts
+} from "@/app/components/ui";
 import { autoDetectMapping, canonicalColumns, getRequiredMappingIssues } from "@/lib/csv/mapping";
 import { excelFileToCsvText, isExcelFile } from "@/lib/csv/excelToCsv";
 import { normalizeDietary, validateGuests } from "@/lib/csv/validation";
@@ -31,12 +46,35 @@ import type {
   RawCsvRow
 } from "@/types";
 
-const DOCUMENTS: Array<{ id: DocumentType; label: string }> = [
-  { id: "tablePlanByTable", label: "Table Plan (By Table)" },
-  { id: "tablePlanByPerson", label: "Table Plan (By Person)" },
-  { id: "placeCards", label: "Place Cards" },
-  { id: "menuBooklet", label: "Menu Card (A4 landscape, 2 sheets half-page layout)" },
-  { id: "servicePlan", label: "Service Plan" }
+const DOCUMENTS: Array<{ id: DocumentType; label: string; description: string }> = [
+  { id: "tablePlanByTable", label: "Table plan · by table", description: "Guests listed under each table" },
+  { id: "tablePlanByPerson", label: "Table plan · by person", description: "A–Z guest list with table numbers" },
+  { id: "placeCards", label: "Place cards", description: "Six per sheet, with logo backs" },
+  { id: "menuBooklet", label: "Menu card", description: "Two A4 landscape sheets, half-page layout" },
+  { id: "servicePlan", label: "Service plan", description: "Dish totals by table, dietary highlighted" }
+];
+
+const COLUMN_LABELS: Record<string, string> = {
+  table: "Table",
+  name: "Full name",
+  firstName: "First name",
+  lastName: "Last name",
+  starter: "Starter",
+  main: "Main",
+  dessert: "Dessert",
+  dietary: "Dietary"
+};
+
+type SettingsTab = "branding" | "tablePlans" | "placeCards" | "menu" | "dishes";
+
+const PAPER_OPTIONS = PAPER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.value }));
+const ORIENTATION_OPTIONS = [
+  { value: "portrait" as const, label: "Portrait" },
+  { value: "landscape" as const, label: "Landscape" }
+];
+const DENSITY_OPTIONS = [
+  { value: "auto" as const, label: "Auto" },
+  { value: "manual" as const, label: "Manual" }
 ];
 
 const DOCUMENT_IMAGE_BASENAMES: Record<DocumentType, string> = {
@@ -55,7 +93,12 @@ function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[]
     transformHeader: (header) => header.trim()
   });
   if (parsed.errors.length) {
-    throw new Error(parsed.errors.map((error) => error.message).join("; "));
+    // Papa's row index excludes the header line; +2 gives the spreadsheet row number.
+    const details = parsed.errors
+      .slice(0, 3)
+      .map((error) => (typeof error.row === "number" ? `row ${error.row + 2}: ${error.message}` : error.message));
+    const more = parsed.errors.length > 3 ? ` (and ${parsed.errors.length - 3} more)` : "";
+    throw new Error(`Couldn't read that file — ${details.join("; ")}${more}.`);
   }
   return { headers: parsed.meta.fields ?? [], rows: parsed.data };
 }
@@ -209,8 +252,11 @@ export default function HomePage() {
   const [projectStorage, setProjectStorage] = useState<"r2" | "local" | "">("");
   const [projectLibraryName, setProjectLibraryName] = useState("");
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-  const [projectLoadSelection, setProjectLoadSelection] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [profileSaveOpen, setProfileSaveOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("branding");
+  const [guestFileName, setGuestFileName] = useState("");
 
   /** True after user has used Preview and Validate at least once this session (shows mapping + report UI). */
   const [hasAttemptedPreviewValidate, setHasAttemptedPreviewValidate] = useState(false);
@@ -303,7 +349,7 @@ export default function HomePage() {
     setSelectedClientLogoKey(file.selectedClientLogoKey ?? null);
     setCurrentProjectId(file.id);
     setProjectLibraryName(file.name);
-    setProjectLoadSelection("");
+    setGuestFileName("");
     setError("");
     setExportWarnings([]);
     // The saved guest list already includes last-minute edits, so export straight away —
@@ -377,12 +423,7 @@ export default function HomePage() {
     }
   }
 
-  async function loadSelectedProject() {
-    const id = projectLoadSelection.trim();
-    if (!id) {
-      setError("Choose a saved project to load.");
-      return;
-    }
+  async function loadSelectedProject(id: string) {
     setProjectBusy(true);
     setError("");
     try {
@@ -390,6 +431,7 @@ export default function HomePage() {
       if (!response.ok) throw new Error(await readResponseError(response, "Load failed."));
       const data = await response.json();
       await applyLoadedProject(data.project as EventProjectFile);
+      setProjectsOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed.");
     } finally {
@@ -397,9 +439,7 @@ export default function HomePage() {
     }
   }
 
-  async function deleteSelectedProject() {
-    const id = projectLoadSelection.trim();
-    if (!id) return;
+  async function deleteSelectedProject(id: string) {
     if (!window.confirm("Delete this saved project from storage? This cannot be undone.")) return;
     setProjectBusy(true);
     setError("");
@@ -409,7 +449,6 @@ export default function HomePage() {
       if (currentProjectId === id) {
         setCurrentProjectId(null);
       }
-      setProjectLoadSelection("");
       await refreshProjectList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
@@ -500,12 +539,14 @@ export default function HomePage() {
 
   async function handleGuestDataFile(file: File) {
     setError("");
-    setHasAttemptedPreviewValidate(false);
-    setExportUnlocked(false);
     try {
       const text = isExcelFile(file) ? await excelFileToCsvText(file) : await file.text();
-      setCsvText(text);
+      // Parse before touching state so a broken file doesn't half-replace the current one.
       const parsed = parseCsvClient(text);
+      setHasAttemptedPreviewValidate(false);
+      setExportUnlocked(false);
+      setCsvText(text);
+      setGuestFileName(file.name);
       setHeaders(parsed.headers);
       setMapping(autoDetectMapping(parsed.headers));
     } catch (readError) {
@@ -607,6 +648,7 @@ export default function HomePage() {
       return;
     }
     setError("");
+    setProfileSaveOpen(false);
     setProfiles((previous) => {
       const withoutExisting = previous.filter((entry) => entry.id !== id);
       return [...withoutExisting, profile].sort((a, b) => a.name.localeCompare(b.name));
@@ -633,7 +675,7 @@ export default function HomePage() {
 
   function addMenuDuplicateGroup() {
     if (menuMergePick.length < 2) {
-      setError("Select at least two dishes (⌘ or Ctrl-click) to merge onto one menu line.");
+      setError("Tick at least two dishes to merge onto one menu line.");
       return;
     }
     const match = [...menuMergePick];
@@ -779,897 +821,842 @@ export default function HomePage() {
     }
   }
 
+  function updateGuest(index: number, patch: Partial<GuestRecord>) {
+    setGuests((previous) => {
+      const next = previous.slice();
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  }
+
+  const columns = canonicalColumns();
+  const mappedCount = columns.filter((column) => Boolean(mapping[column])).length;
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.length - errorCount;
+  const logoLibraryReady =
+    venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured;
+  const logoLibraryMissing =
+    (venueLogoLibrary.loaded && !venueLogoLibrary.configured) || (clientLogoLibrary.loaded && !clientLogoLibrary.configured);
+  const dishCount = Object.keys(dishNameOverrides).length;
+  const mergedDishes = new Set(dishMenuDuplicateGroups.flatMap((group) => group.match.map((member) => member.trim())));
+  const singleFileBlocked = outputFormat === "pdf" && bundleMode === "single" && selectedDocuments.length !== 1;
+
+  const guestColumns: Array<{ key: "name" | "tableNumber" | "starter" | "main" | "dessert"; label: string }> = [
+    { key: "name", label: "Name" },
+    { key: "tableNumber", label: "Table" },
+    { key: "starter", label: "Starter" },
+    { key: "main", label: "Main" },
+    { key: "dessert", label: "Dessert" }
+  ];
+
   return (
-    <main>
-      <header className="app-header">
-        <Link href="/" className="app-backlink">
-          ← Home
-        </Link>
-        <h1>Event Document Generator</h1>
-        <p className="app-tagline">
-          Upload guest data, tune branding and print settings, then export table plans, place cards, menu booklets, and
-          service plans as PDF.
-        </p>
-      </header>
-      <div className="panel">
-        <h2>Saved projects</h2>
-        <p style={{ marginTop: 0, marginBottom: 12, fontSize: 14, opacity: 0.88 }}>
-          Save or load the full workspace (guest data, guest edits, theme, logos, print settings, dish overrides).
-          Nothing is saved until you click <strong>Save project</strong>.
-        </p>
-        {projectStorage === "local" && (
-          <p className="pill" style={{ marginBottom: 12 }}>
-            R2 is not configured — projects are stored on this server in <code>data/projects/</code> (see{" "}
-            <code>.env.example</code>).
-          </p>
-        )}
-        <div className="grid two">
-          <label>
-            Project name
+    <main className="page">
+      <PageHeader
+        title="Banqueting documents"
+        description="Upload a guest list, check it, then print table plans, place cards, menus and service plans."
+        actions={
+          <>
             <input
+              className="header-input"
               value={projectLibraryName}
               onChange={(event) => setProjectLibraryName(event.target.value)}
-              placeholder="e.g. Smith Wedding — April 2026"
+              placeholder="Project name"
+              aria-label="Project name"
             />
-          </label>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "flex-end" }}>
-            {currentProjectId && (
-              <p style={{ margin: 0, fontSize: 12, opacity: 0.82 }}>
-                Updating saved id <code>{currentProjectId.slice(0, 8)}…</code> — save again to overwrite.
-              </p>
-            )}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-              <button type="button" disabled={projectBusy} onClick={() => void saveProjectToLibrary()}>
-                {projectBusy ? "Working…" : "Save project"}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={projectBusy}
-                onClick={() => {
-                  setCurrentProjectId(null);
-                  setError("");
-                }}
-              >
-                New save target
-              </button>
-            </div>
-          </div>
-        </div>
-        <div className="grid two" style={{ marginTop: 14 }}>
-          <label>
-            Open saved project
-            <select
-              value={projectLoadSelection}
-              onChange={(event) => setProjectLoadSelection(event.target.value)}
-            >
-              <option value="">— choose —</option>
-              {projectList.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                  {item.eventName ? ` (${item.eventName})` : ""} —{" "}
-                  {new Date(item.savedAt).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short"
-                  })}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
-            <button type="button" disabled={projectBusy || !projectLoadSelection} onClick={() => void loadSelectedProject()}>
-              Load project
+            <button type="button" disabled={projectBusy} onClick={() => void saveProjectToLibrary()}>
+              <Save size={15} aria-hidden />
+              {projectBusy ? "Saving…" : "Save"}
             </button>
             <button
               type="button"
-              className="secondary"
-              disabled={projectBusy || !projectLoadSelection}
-              onClick={() => void deleteSelectedProject()}
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className="panel">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">1</span>
-          <span>Upload guest data and map columns</span>
-        </h2>
-        <div className="grid two">
-          <label>
-            CSV or Excel file
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void handleGuestDataFile(file);
-                }
+              onClick={() => {
+                void refreshProjectList();
+                setProjectsOpen(true);
               }}
-            />
-            <span style={{ display: "block", marginTop: 6, fontSize: 12, opacity: 0.82 }}>
-              Excel workbooks use the <strong>first sheet</strong> only (exported to CSV, then parsed like a normal CSV).
-            </span>
-          </label>
-          <label>
-            Event name
-            <input
-              value={theme.eventName}
-              onChange={(event) => setTheme((previous) => ({ ...previous, eventName: event.target.value }))}
-              placeholder="Smith Wedding 2026"
-            />
-          </label>
-          <label>
-            Event date
-            <input
-              value={theme.eventDate ?? ""}
-              onChange={(event) => setTheme((previous) => ({ ...previous, eventDate: event.target.value }))}
-              placeholder="Thursday 9th April 2026"
-            />
-          </label>
-        </div>
-        {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured && (
-          <div style={{ marginTop: 14 }}>
-            <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Shared logo library</h3>
-            <p style={{ margin: "0 0 10px", fontSize: 13, opacity: 0.86 }}>
-              Select event logos from the shared library. To upload, rename, or delete logos, use{" "}
-              <Link href="/logo-library" className="inline-tool-link">Logo Library</Link>.
-            </p>
-            {venueLibraryBusy && <p style={{ fontSize: 12, margin: "8px 0 0" }}>Loading…</p>}
-            <div className="grid two" style={{ marginTop: 10 }}>
-              <LogoPicker
-                title="Client logo"
-                items={clientLogoLibrary.items}
-                value={selectedClientLogoKey ?? ""}
-                onChange={(key) => {
-                  if (!key) {
-                    setSelectedClientLogoKey(null);
-                    setTheme((previous) => ({ ...previous, clientLogoDataUrl: undefined }));
-                    setClientLogoLuminance(null);
-                    return;
-                  }
-                  const item = clientLogoLibrary.items.find((entry) => entry.key === key);
-                  if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
-                }}
-                emptyOption={{ label: "No client logo", value: "" }}
-                manageHref="/logo-library"
-              />
-              <LogoPicker
-                title="Venue logo"
-                items={venueLogoLibrary.items}
-                value={selectedVenueLogoKey ?? ""}
-                onChange={(key) => {
-                  if (!key) {
-                    setSelectedVenueLogoKey(null);
-                    setTheme((previous) => ({ ...previous, venueLogoDataUrl: undefined }));
-                    return;
-                  }
-                  const item = venueLogoLibrary.items.find((entry) => entry.key === key);
-                  if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
-                }}
-                emptyOption={{ label: "No venue logo", value: "" }}
-                manageHref="/logo-library"
-              />
-            </div>
-          </div>
-        )}
-        {((venueLogoLibrary.loaded && !venueLogoLibrary.configured) ||
-          (clientLogoLibrary.loaded && !clientLogoLibrary.configured)) && (
-          <p className="pill" style={{ marginTop: 12 }}>
-            R2 env vars not set — profiles stay in <code>data/profiles</code>; logo library is disabled. See{" "}
-            <code>.env.example</code>.
+            >
+              <FolderOpen size={15} aria-hidden />
+              Open
+            </button>
+          </>
+        }
+      />
+      {currentProjectId ? (
+        <p className="text-muted header-note">
+          Saving updates the open project.{" "}
+          <button
+            type="button"
+            className="text-button"
+            disabled={projectBusy}
+            onClick={() => {
+              setCurrentProjectId(null);
+              setError("");
+            }}
+          >
+            Save as a new project instead
+          </button>
+        </p>
+      ) : null}
+
+      {projectsOpen ? (
+        <Modal title="Saved projects" onClose={() => setProjectsOpen(false)}>
+          <p className="text-muted" style={{ marginTop: 0 }}>
+            A project holds the whole workspace: guest list and edits, branding, logos, print settings and dish names.
           </p>
-        )}
-        {menuLogoLegibilityWarning && (
-          <ul>
-            {menuLogoLegibilityWarning && <li className="warning">{menuLogoLegibilityWarning}</li>}
-          </ul>
-        )}
-        {headers.length > 0 && (
-          <div className="grid two">
-            {canonicalColumns().map((column) => (
-              <label key={column}>
-                {column}
-                <select
-                  value={mapping[column] ?? ""}
-                  onChange={(event) => {
-                    const value = event.target.value || undefined;
-                    setMapping((previous) => ({ ...previous, [column]: value }));
-                  }}
-                >
-                  <option value="">-- not mapped --</option>
-                  {headers.map((header) => (
-                    <option key={`${column}-${header}`} value={header}>
-                      {header}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-          </div>
-        )}
-        {hasAttemptedPreviewValidate && mappingIssues.length > 0 && (
-          <ul>
-            {mappingIssues.map((issue) => (
-              <li key={issue} className="warning">
-                {issue}
-              </li>
-            ))}
-          </ul>
-        )}
-        <button disabled={loadingPreview} onClick={runPreview}>
-          {loadingPreview ? "Validating..." : "Preview and Validate"}
-        </button>
-      </div>
-
-      <div className="panel panel--step-copy-gap">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">2</span>
-          <span>Validation report</span>
-        </h2>
-        {!hasAttemptedPreviewValidate && (
-          <p className="pill step-section-intro">Run Preview and Validate to see the validation report.</p>
-        )}
-        {hasAttemptedPreviewValidate && !issues.length && (
-          <p className="pill step-section-intro">No validation issues reported yet.</p>
-        )}
-        {hasAttemptedPreviewValidate && issues.length > 0 && (
-          <ul className="step-section-intro">
-            {issues.map((issue, index) => (
-              <li key={`${issue.message}-${index}`} className={issue.severity === "error" ? "error" : "warning"}>
-                {issue.severity.toUpperCase()}: {issue.message}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="panel panel--step-copy-gap">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">3</span>
-          <span>Last-minute edits</span>
-        </h2>
-        {guests.length === 0 && <p className="pill step-section-intro">Run Preview to populate the editable guest list.</p>}
-        {guests.length > 0 && (
-          <details open>
-            <summary style={{ cursor: "pointer", marginBottom: 10 }}>
-              Editing {guests.length} guest{guests.length === 1 ? "" : "s"} (click to collapse)
-            </summary>
-            <div className="guest-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Table</th>
-                <th>Starter</th>
-                <th>Main</th>
-                <th>Dessert</th>
-                <th>Dietary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {guests.map((guest, guestIndex) => (
-                <tr key={guest.id}>
-                  <td>
-                    <input
-                      value={guest.name}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = { ...next[guestIndex], name: value };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={guest.tableNumber}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = { ...next[guestIndex], tableNumber: value };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={guest.starter}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = { ...next[guestIndex], starter: value };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={guest.main}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = { ...next[guestIndex], main: value };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={guest.dessert}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = { ...next[guestIndex], dessert: value };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={guest.dietaryOriginal}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGuests((previous) => {
-                          const next = previous.slice();
-                          next[guestIndex] = {
-                            ...next[guestIndex],
-                            dietaryOriginal: value,
-                            dietaryNormalized: normalizeDietary(value)
-                          };
-                          return next;
-                        });
-                      }}
-                    />
-                  </td>
-                </tr>
+          {projectStorage === "local" ? (
+            <Callout tone="warning">
+              R2 isn&apos;t configured — projects are stored on this server in <code>data/projects/</code>.
+            </Callout>
+          ) : null}
+          {projectList.length === 0 ? (
+            <p className="text-muted">No saved projects yet.</p>
+          ) : (
+            <ul className="list">
+              {projectList.map((item) => (
+                <li key={item.id} className={item.id === currentProjectId ? "list-item list-item--active" : "list-item"}>
+                  <div className="list-item-main">
+                    <button
+                      type="button"
+                      className="list-item-title"
+                      disabled={projectBusy}
+                      onClick={() => void loadSelectedProject(item.id)}
+                    >
+                      {item.name}
+                    </button>
+                    <span className="list-item-meta">
+                      {item.eventName ? `${item.eventName} · ` : ""}
+                      {new Date(item.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                    </span>
+                  </div>
+                  <button type="button" className="btn-sm" disabled={projectBusy} onClick={() => void loadSelectedProject(item.id)}>
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm btn-danger"
+                    aria-label={`Delete ${item.name}`}
+                    disabled={projectBusy}
+                    onClick={() => void deleteSelectedProject(item.id)}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </li>
               ))}
-            </tbody>
-          </table>
-            </div>
-          </details>
-        )}
-      </div>
+            </ul>
+          )}
+        </Modal>
+      ) : null}
 
-      <div className="panel">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">4</span>
-          <span>Profiles and print settings</span>
-        </h2>
-        <div className="grid two">
-          <label>
-            Load profile
+      {/* 1 — Guest list */}
+      <Section step={1} title="Guest list" description="CSV or Excel. Excel workbooks use the first sheet only.">
+        <div className="stack">
+          <div className="form-grid">
+            <Field label="Event name">
+              <input
+                value={theme.eventName}
+                onChange={(event) => setTheme((previous) => ({ ...previous, eventName: event.target.value }))}
+                placeholder="Smith Wedding 2026"
+              />
+            </Field>
+            <Field label="Event date">
+              <input
+                value={theme.eventDate ?? ""}
+                onChange={(event) => setTheme((previous) => ({ ...previous, eventDate: event.target.value }))}
+                placeholder="Thursday 9th April 2026"
+              />
+            </Field>
+          </div>
+
+          <Dropzone
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onFile={(file) => void handleGuestDataFile(file)}
+            icon={<FileSpreadsheet size={20} aria-hidden />}
+            title={guestFileName ? guestFileName : headers.length ? "Guest list loaded" : "Choose a guest list file"}
+            subtitle={
+              headers.length
+                ? `${headers.length} columns found · click or drop to replace`
+                : "Click to browse, or drop a .csv / .xlsx file here"
+            }
+          />
+
+          {headers.length > 0 ? (
+            <Disclosure
+              label={
+                <>
+                  Column mapping{" "}
+                  <span className={mappingIssues.length ? "badge badge--warning" : "badge badge--success"}>
+                    {mappedCount} of {columns.length} mapped
+                  </span>
+                </>
+              }
+              defaultOpen={mappingIssues.length > 0}
+            >
+              <div className="form-grid form-grid--3">
+                {columns.map((column) => (
+                  <Field key={column} label={COLUMN_LABELS[column] ?? column}>
+                    <select
+                      value={mapping[column] ?? ""}
+                      onChange={(event) => {
+                        const value = event.target.value || undefined;
+                        setMapping((previous) => ({ ...previous, [column]: value }));
+                      }}
+                    >
+                      <option value="">Not mapped</option>
+                      {headers.map((header) => (
+                        <option key={`${column}-${header}`} value={header}>
+                          {header}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                ))}
+              </div>
+            </Disclosure>
+          ) : null}
+
+          {hasAttemptedPreviewValidate && mappingIssues.length > 0 ? (
+            <Callout tone="warning">
+              <ul>
+                {mappingIssues.map((issue) => (
+                  <li key={issue}>{issue}</li>
+                ))}
+              </ul>
+            </Callout>
+          ) : null}
+
+          {logoLibraryReady ? (
+            <div>
+              <h3 className="subhead">Logos</h3>
+              <div className="form-grid">
+                <LogoPicker
+                  title="Client logo"
+                  items={clientLogoLibrary.items}
+                  value={selectedClientLogoKey ?? ""}
+                  onChange={(key) => {
+                    if (!key) {
+                      setSelectedClientLogoKey(null);
+                      setTheme((previous) => ({ ...previous, clientLogoDataUrl: undefined }));
+                      setClientLogoLuminance(null);
+                      return;
+                    }
+                    const item = clientLogoLibrary.items.find((entry) => entry.key === key);
+                    if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
+                  }}
+                  emptyOption={{ label: "No client logo", value: "" }}
+                  disabled={venueLibraryBusy}
+                />
+                <LogoPicker
+                  title="Venue logo"
+                  items={venueLogoLibrary.items}
+                  value={selectedVenueLogoKey ?? ""}
+                  onChange={(key) => {
+                    if (!key) {
+                      setSelectedVenueLogoKey(null);
+                      setTheme((previous) => ({ ...previous, venueLogoDataUrl: undefined }));
+                      return;
+                    }
+                    const item = venueLogoLibrary.items.find((entry) => entry.key === key);
+                    if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
+                  }}
+                  emptyOption={{ label: "No venue logo", value: "" }}
+                  disabled={venueLibraryBusy}
+                />
+              </div>
+            </div>
+          ) : null}
+          {logoLibraryMissing ? (
+            <Callout tone="warning">
+              R2 isn&apos;t configured — profiles are stored in <code>data/profiles</code> and the logo library is
+              disabled. See <code>.env.example</code>.
+            </Callout>
+          ) : null}
+          {menuLogoLegibilityWarning ? <Callout tone="warning">{menuLogoLegibilityWarning}</Callout> : null}
+        </div>
+        <div className="card-foot card-foot--inset">
+          <button type="button" className="btn-primary" disabled={loadingPreview} onClick={runPreview}>
+            {loadingPreview ? "Checking…" : exportUnlocked ? "Re-check guest list" : "Check guest list"}
+          </button>
+        </div>
+      </Section>
+
+      {/* 2 — Review */}
+      <Section
+        step={2}
+        title="Review guests"
+        description={
+          hasAttemptedPreviewValidate && (guests.length || issues.length)
+            ? undefined
+            : "Check the guest list above to see any problems and make last-minute edits."
+        }
+      >
+        {hasAttemptedPreviewValidate && (guests.length || issues.length) ? (
+          <div className="stack">
+            <div className="row">
+              <span className="badge">
+                {guests.length} guest{guests.length === 1 ? "" : "s"}
+              </span>
+              <span className="badge">
+                {uniqueTableCount} table{uniqueTableCount === 1 ? "" : "s"}
+              </span>
+              {errorCount ? (
+                <span className="badge badge--danger">
+                  {errorCount} error{errorCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              {warningCount ? (
+                <span className="badge badge--warning">
+                  {warningCount} warning{warningCount === 1 ? "" : "s"}
+                </span>
+              ) : null}
+              {!issues.length ? <span className="badge badge--success">No problems found</span> : null}
+            </div>
+            {issues.length > 0 ? (
+              <ul className="issue-list issue-list--scroll">
+                {issues.map((issue, index) => (
+                  <li key={`${issue.message}-${index}`}>
+                    <span className={issue.severity === "error" ? "badge badge--danger" : "badge badge--warning"}>
+                      {issue.severity === "error" ? "Error" : "Warning"}
+                    </span>
+                    <span>{issue.message}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {guests.length > 0 ? (
+              <Disclosure label={`Last-minute edits (${guests.length} guests)`}>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        {guestColumns.map((column) => (
+                          <th key={column.key}>{column.label}</th>
+                        ))}
+                        <th>Dietary</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {guests.map((guest, guestIndex) => (
+                        <tr key={guest.id}>
+                          {guestColumns.map((column) => (
+                            <td key={column.key}>
+                              <input
+                                value={guest[column.key]}
+                                aria-label={`${column.label} for ${guest.name || `guest ${guestIndex + 1}`}`}
+                                onChange={(event) => updateGuest(guestIndex, { [column.key]: event.target.value })}
+                              />
+                            </td>
+                          ))}
+                          <td>
+                            <input
+                              value={guest.dietaryOriginal}
+                              aria-label={`Dietary for ${guest.name || `guest ${guestIndex + 1}`}`}
+                              onChange={(event) =>
+                                updateGuest(guestIndex, {
+                                  dietaryOriginal: event.target.value,
+                                  dietaryNormalized: normalizeDietary(event.target.value)
+                                })
+                              }
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Disclosure>
+            ) : null}
+          </div>
+        ) : null}
+      </Section>
+
+      {/* 3 — Settings */}
+      <Section
+        step={3}
+        title="Design and print settings"
+        actions={
+          <>
             {/* Resets after each pick so the same profile can be re-applied to undo tweaks. */}
-            <select value="" onChange={(event) => applyProfile(event.target.value)}>
-              <option value="">-- select profile --</option>
+            <select
+              className="select-sm"
+              value=""
+              onChange={(event) => applyProfile(event.target.value)}
+              aria-label="Load profile"
+            >
+              <option value="">Load profile…</option>
               {profiles.map((profile) => (
                 <option key={profile.id} value={profile.id}>
                   {profile.name}
                 </option>
               ))}
             </select>
-          </label>
-          <label>
-            Save as profile name
-            <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-          </label>
-        </div>
-        <button className="secondary" onClick={saveCurrentProfile}>
-          Save profile
-        </button>
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Theme</h3>
-          <div className="grid two">
-            <label>
-              Primary color
-              <div className="color-field-row">
-                <span className="color-swatch" style={{ backgroundColor: theme.primaryColor }} title="Preview" />
-                <input
-                  type="color"
-                  className="color-input"
-                  value={theme.primaryColor}
-                  onChange={(event) => setTheme((previous) => ({ ...previous, primaryColor: event.target.value }))}
+            <button type="button" className="btn-sm" onClick={() => setProfileSaveOpen(true)}>
+              Save as profile
+            </button>
+          </>
+        }
+      >
+        <Tabs<SettingsTab>
+          value={settingsTab}
+          onChange={setSettingsTab}
+          aria-label="Settings"
+          tabs={[
+            { value: "branding", label: "Branding" },
+            { value: "tablePlans", label: "Table plans" },
+            { value: "placeCards", label: "Place cards" },
+            { value: "menu", label: "Menu card" },
+            { value: "dishes", label: "Dish names", badge: dishCount || undefined }
+          ]}
+        />
+
+        {settingsTab === "branding" ? (
+          <div className="stack">
+            <div className="color-row">
+              <ColorField
+                label="Primary"
+                value={theme.primaryColor}
+                onChange={(value) => setTheme((previous) => ({ ...previous, primaryColor: value }))}
+              />
+              <ColorField
+                label="Accent"
+                value={theme.accentColor}
+                onChange={(value) => setTheme((previous) => ({ ...previous, accentColor: value }))}
+              />
+            </div>
+            <p className="field-hint" style={{ margin: 0 }}>
+              Primary is the menu card front background; accent is used for borders and highlights.
+            </p>
+          </div>
+        ) : null}
+
+        {settingsTab === "tablePlans" ? (
+          <div className="form-grid">
+            <div className="inset stack">
+              <h3 style={{ margin: 0 }}>By table</h3>
+              <Field label="Paper" as="div">
+                <Segmented
+                  value={tablePlan.paperSize}
+                  options={PAPER_OPTIONS}
+                  onChange={(value) => setTablePlan((previous) => ({ ...previous, paperSize: value as PaperSize }))}
                 />
-                <span className="color-hex">{theme.primaryColor}</span>
-              </div>
-            </label>
-            <label>
-              Accent color
-              <div className="color-field-row">
-                <span className="color-swatch" style={{ backgroundColor: theme.accentColor }} title="Preview" />
-                <input
-                  type="color"
-                  className="color-input"
-                  value={theme.accentColor}
-                  onChange={(event) => setTheme((previous) => ({ ...previous, accentColor: event.target.value }))}
+              </Field>
+              <Field label="Orientation" as="div">
+                <Segmented
+                  value={tablePlan.orientation}
+                  options={ORIENTATION_OPTIONS}
+                  onChange={(value) => setTablePlan((previous) => ({ ...previous, orientation: value }))}
                 />
-                <span className="color-hex">{theme.accentColor}</span>
+              </Field>
+              <Field label="Tables per sheet" as="div">
+                <div className="row">
+                  <Segmented
+                    value={tablePlan.tablesPerSheetMode}
+                    options={DENSITY_OPTIONS}
+                    onChange={(value) => setTablePlan((previous) => ({ ...previous, tablesPerSheetMode: value }))}
+                  />
+                  {tablePlan.tablesPerSheetMode === "manual" ? (
+                    <input
+                      type="number"
+                      min={1}
+                      className="input-narrow"
+                      aria-label="Tables per sheet"
+                      value={tablePlan.tablesPerSheet}
+                      onChange={(event) =>
+                        setTablePlan((previous) => ({ ...previous, tablesPerSheet: Number(event.target.value) || 1 }))
+                      }
+                    />
+                  ) : null}
+                </div>
+              </Field>
+            </div>
+            <div className="inset stack">
+              <h3 style={{ margin: 0 }}>By person</h3>
+              <Field label="Paper" as="div">
+                <Segmented
+                  value={tablePlanByPerson.paperSize}
+                  options={PAPER_OPTIONS}
+                  onChange={(value) => setTablePlanByPerson((previous) => ({ ...previous, paperSize: value as PaperSize }))}
+                />
+              </Field>
+              <Field label="Orientation" as="div" hint="Landscape gives a two-column layout.">
+                <Segmented
+                  value={tablePlanByPerson.orientation}
+                  options={ORIENTATION_OPTIONS}
+                  onChange={(value) => setTablePlanByPerson((previous) => ({ ...previous, orientation: value }))}
+                />
+              </Field>
+              <Field label="Rows per page" as="div">
+                <div className="row">
+                  <Segmented
+                    value={tablePlanByPerson.tablesPerSheetMode}
+                    options={DENSITY_OPTIONS}
+                    onChange={(value) => setTablePlanByPerson((previous) => ({ ...previous, tablesPerSheetMode: value }))}
+                  />
+                  {tablePlanByPerson.tablesPerSheetMode === "manual" ? (
+                    <input
+                      type="number"
+                      min={1}
+                      className="input-narrow"
+                      aria-label="Rows per page"
+                      value={tablePlanByPerson.tablesPerSheet}
+                      onChange={(event) =>
+                        setTablePlanByPerson((previous) => ({
+                          ...previous,
+                          tablesPerSheet: Number(event.target.value) || 1
+                        }))
+                      }
+                    />
+                  ) : null}
+                </div>
+              </Field>
+            </div>
+            <p className="field-hint span-all" style={{ margin: 0 }}>
+              Floorplans have their own tool now — see{" "}
+              <Link href="/floorplans" className="text-link">
+                Floorplans
+              </Link>
+              .
+            </p>
+          </div>
+        ) : null}
+
+        {settingsTab === "placeCards" ? (
+          <div className="stack">
+            <p className="field-hint" style={{ margin: 0 }}>
+              Six guests per sheet: rows 2, 4 and 6 carry name, table, menu and dietary; rows 1, 3 and 5 are tent backs
+              with the client logo.
+            </p>
+            <div className="form-grid">
+              <Field label="Stock name">
+                <input
+                  value={placeCard.stockName}
+                  onChange={(event) => setPlaceCard((previous) => ({ ...previous, stockName: event.target.value }))}
+                />
+              </Field>
+            </div>
+            <Disclosure label="Card dimensions (reference only)">
+              <div className="form-grid form-grid--3">
+                <Field label="Card width (mm)">
+                  <input
+                    type="number"
+                    value={placeCard.cardWidthMm}
+                    onChange={(event) =>
+                      setPlaceCard((previous) => ({ ...previous, cardWidthMm: Number(event.target.value) || 0 }))
+                    }
+                  />
+                </Field>
+                <Field label="Card height (mm)">
+                  <input
+                    type="number"
+                    value={placeCard.cardHeightMm}
+                    onChange={(event) =>
+                      setPlaceCard((previous) => ({ ...previous, cardHeightMm: Number(event.target.value) || 0 }))
+                    }
+                  />
+                </Field>
+                <Field label="Fold offset (mm, unused)">
+                  <input
+                    type="number"
+                    value={placeCard.foldOffsetMm}
+                    onChange={(event) =>
+                      setPlaceCard((previous) => ({ ...previous, foldOffsetMm: Number(event.target.value) || 0 }))
+                    }
+                  />
+                </Field>
               </div>
-            </label>
+            </Disclosure>
           </div>
-        </div>
+        ) : null}
 
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Table plan (by table) print controls</h3>
-          <div className="grid two">
-          <label>
-            Paper size
-            <select
-              value={tablePlan.paperSize}
-              onChange={(event) =>
-                setTablePlan((previous) => ({
-                  ...previous,
-                  paperSize: event.target.value as PaperSize
-                }))
-              }
-            >
-              {PAPER_SIZE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Orientation
-            <select
-              value={tablePlan.orientation}
-              onChange={(event) =>
-                setTablePlan((previous) => ({
-                  ...previous,
-                  orientation: event.target.value as "portrait" | "landscape"
-                }))
-              }
-            >
-              <option value="portrait">Portrait</option>
-              <option value="landscape">Landscape</option>
-            </select>
-          </label>
-          <label>
-            Density mode
-            <select
-              value={tablePlan.tablesPerSheetMode}
-              onChange={(event) =>
-                setTablePlan((previous) => ({
-                  ...previous,
-                  tablesPerSheetMode: event.target.value as "auto" | "manual"
-                }))
-              }
-            >
-              <option value="auto">Auto paginate</option>
-              <option value="manual">Manual tables-per-sheet</option>
-            </select>
-          </label>
-          <label>
-            Tables per sheet
-            <input
-              type="number"
-              min={1}
-              value={tablePlan.tablesPerSheet}
-              onChange={(event) =>
-                setTablePlan((previous) => ({ ...previous, tablesPerSheet: Number(event.target.value) || 1 }))
-              }
-            />
-          </label>
-          </div>
-        </div>
-
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Table plan (by person) print controls</h3>
-          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-            Often A4 for legibility; you can also switch to landscape to enable a two-column layout.
-          </p>
-          <div className="grid two">
-            <label>
-              Paper size
-              <select
-                value={tablePlanByPerson.paperSize}
-                onChange={(event) =>
-                  setTablePlanByPerson((previous) => ({
-                    ...previous,
-                    paperSize: event.target.value as PaperSize
-                  }))
-                }
-              >
-                {PAPER_SIZE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Orientation
-              <select
-                value={tablePlanByPerson.orientation}
-                onChange={(event) =>
-                  setTablePlanByPerson((previous) => ({
-                    ...previous,
-                    orientation: event.target.value as "portrait" | "landscape"
-                  }))
-                }
-              >
-                <option value="portrait">Portrait</option>
-                <option value="landscape">Landscape (two-column)</option>
-              </select>
-            </label>
-            <label>
-              Density mode
-              <select
-                value={tablePlanByPerson.tablesPerSheetMode}
-                onChange={(event) =>
-                  setTablePlanByPerson((previous) => ({
-                    ...previous,
-                    tablesPerSheetMode: event.target.value as "auto" | "manual"
-                  }))
-                }
-              >
-                <option value="auto">Auto paginate</option>
-                <option value="manual">Manual rows-per-page</option>
-              </select>
-            </label>
-            <label>
-              Rows per page (manual)
-              <input
-                type="number"
-                min={1}
-                value={tablePlanByPerson.tablesPerSheet}
-                onChange={(event) =>
-                  setTablePlanByPerson((previous) => ({
-                    ...previous,
-                    tablesPerSheet: Number(event.target.value) || 1
-                  }))
-                }
-            />
-          </label>
-          </div>
-        </div>
-
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Floorplans moved</h3>
-          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-            Floorplan generation now lives in the dedicated <Link href="/floorplans">Floorplans tool</Link> so layouts can
-            be edited interactively, saved, duplicated, and printed separately from banqueting document bundles.
-          </p>
-        </div>
-
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Place-card stock calibration</h3>
-          <p style={{ marginTop: 0, marginBottom: 8, fontSize: 13, opacity: 0.85 }}>
-            Six guest panels per sheet: rows 2, 4, and 6 (1-based) carry name/table/menu/dietary; rows 1, 3, and 5 are
-            tent backs with the client logo. Width and height below are reference only; text nudge still applies.
-          </p>
-          <div className="grid two">
-            <label>
-              Stock name
-              <input
-                value={placeCard.stockName}
-                onChange={(event) => setPlaceCard((previous) => ({ ...previous, stockName: event.target.value }))}
-              />
-            </label>
-            <label>
-              Card width (mm)
-              <input
-                type="number"
-                value={placeCard.cardWidthMm}
-                onChange={(event) =>
-                  setPlaceCard((previous) => ({ ...previous, cardWidthMm: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Card height (mm)
-              <input
-                type="number"
-                value={placeCard.cardHeightMm}
-                onChange={(event) =>
-                  setPlaceCard((previous) => ({ ...previous, cardHeightMm: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Fold offset (mm, unused)
-              <input
-                type="number"
-                value={placeCard.foldOffsetMm}
-                onChange={(event) =>
-                  setPlaceCard((previous) => ({ ...previous, foldOffsetMm: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="subpanel">
-          <h3 style={{ marginTop: 0 }}>Menu card extras</h3>
-          <p className="text-muted" style={{ marginTop: 0, marginBottom: 12 }}>
-            Optional text above the first course and/or below the last course (for example bread and butter, tea and
-            coffee).
-          </p>
-          <div className="paired-fields">
-            <label className="field-stack">
-              <span className="field-label-text">Pre-meal line (optional)</span>
+        {settingsTab === "menu" ? (
+          <div className="form-grid">
+            <Field label="Before the first course" hint="e.g. bread and butter">
               <textarea
-                className="textarea-paired"
                 rows={3}
                 placeholder="Bread and butter"
                 value={menuBooklet.preMealText ?? ""}
-                onChange={(event) =>
-                  setMenuBooklet((previous) => ({ ...previous, preMealText: event.target.value }))
-                }
+                onChange={(event) => setMenuBooklet((previous) => ({ ...previous, preMealText: event.target.value }))}
               />
-            </label>
-            <label className="field-stack">
-              <span className="field-label-text">Post-meal line (optional)</span>
+            </Field>
+            <Field label="After the last course" hint="e.g. tea and coffee">
               <textarea
-                className="textarea-paired"
                 rows={3}
                 placeholder="Fairtrade Tea & Coffee"
                 value={menuBooklet.postMealText ?? ""}
-                onChange={(event) =>
-                  setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))
-                }
+                onChange={(event) => setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))}
               />
-            </label>
+            </Field>
           </div>
-        </div>
-
-        <h3 style={{ marginTop: 16 }}>Dish name overrides (short + long)</h3>
-        <p className="text-muted" style={{ marginBottom: 14 }}>
-          Run Preview to auto-populate dish names. You can override the short name (place cards/service plans/table views)
-          and/or long name (menu card) before export.
-        </p>
-        <div className="grid">
-          {Object.keys(dishNameOverrides).length === 0 && (
-            <p className="pill">Run Preview first to populate dish options.</p>
-          )}
-          {Object.entries(dishNameOverrides).map(([originalName, override]) => (
-            <div key={originalName} className="dish-override-card">
-              <p className="dish-source">
-                Source: <strong>{originalName}</strong>
-              </p>
-              <div className="paired-fields">
-                <label className="field-stack">
-                  <span className="field-label-text">Short name override</span>
-                  <textarea
-                    className="textarea-paired"
-                    rows={3}
-                    autoComplete="off"
-                    value={override.shortName}
-                    onChange={(event) =>
-                      setDishNameOverrides((previous) => ({
-                        ...previous,
-                        [originalName]: {
-                          ...previous[originalName],
-                          shortName: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field-stack">
-                  <span className="field-label-text">Long name override</span>
-                  <textarea
-                    className="textarea-paired"
-                    rows={3}
-                    autoComplete="off"
-                    value={override.longName}
-                    onChange={(event) =>
-                      setDishNameOverrides((previous) => ({
-                        ...previous,
-                        [originalName]: {
-                          ...previous[originalName],
-                          longName: event.target.value
-                        }
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <h3 style={{ marginTop: 20 }}>Menu: merge duplicate spellings</h3>
-        <p style={{ marginTop: 0, marginBottom: 8, fontSize: 14, opacity: 0.88 }}>
-          After short-name overrides, the same dish may still appear twice on the menu (for example{" "}
-          <em>Beef</em> and <em>beef</em>). Select the exact lines that should print once; place cards
-          and service plans keep each guest&apos;s wording. Long-name overrides on any merged spelling
-          still apply to the single menu line when possible.
-        </p>
-        {uniqueEffectiveDishes.length < 2 ? (
-          <p className="pill" style={{ marginBottom: 0 }}>
-            Run Preview to list dishes (with overrides applied) here.
-          </p>
-        ) : (
-          <div className="grid" style={{ marginBottom: 12 }}>
-            <label>
-              Dishes to merge (multi-select)
-              <select
-                multiple
-                size={Math.min(12, Math.max(4, uniqueEffectiveDishes.length))}
-                value={menuMergePick}
-                onChange={(event) =>
-                  setMenuMergePick(Array.from(event.target.selectedOptions).map((option) => option.value))
-                }
-                style={{ width: "100%", minHeight: 120 }}
-              >
-                {uniqueEffectiveDishes.map((dish) => (
-                  <option key={dish} value={dish}>
-                    {dish}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, justifyContent: "flex-end" }}>
-              <button type="button" onClick={addMenuDuplicateGroup}>
-                Add merge group
-              </button>
-              <p style={{ margin: 0, fontSize: 12, opacity: 0.8 }}>
-                The menu line defaults to the first spelling in A–Z order; edit it in the group below.
-              </p>
-            </div>
-          </div>
-        )}
-        {dishMenuDuplicateGroups.length > 0 && (
-          <div className="grid">
-            {dishMenuDuplicateGroups.map((group) => (
-              <div key={group.id} className="panel" style={{ marginBottom: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <label>
-                      Single menu line
-                      <input
-                        value={group.canonical}
-                        onChange={(event) =>
-                          setDishMenuDuplicateGroups((previous) =>
-                            previous.map((entry) =>
-                              entry.id === group.id ? { ...entry, canonical: event.target.value } : entry
-                            )
-                          )
-                        }
-                      />
-                    </label>
-                    <p style={{ margin: "10px 0 0", fontSize: 13, opacity: 0.8 }}>
-                      Merges:{" "}
-                      <strong>{group.match.join(" · ")}</strong>
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDishMenuDuplicateGroups((previous) => previous.filter((entry) => entry.id !== group.id))
-                    }
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <h2 className="step-heading">
-          <span className="step-heading-badge">5</span>
-          <span>Export bundle</span>
-        </h2>
-        <p className="text-muted" style={{ marginTop: 0, marginBottom: 12 }}>
-          Select which PDFs to include. Single-file mode only applies when exactly one output is checked.
-        </p>
-        <div className="export-doc-grid">
-          {DOCUMENTS.map((document) => {
-            const checked = selectedDocuments.includes(document.id);
-            return (
-              <label key={document.id} className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => {
-                    setSelectedDocuments((previous) =>
-                      checked ? previous.filter((item) => item !== document.id) : [...previous, document.id]
-                    );
-                  }}
-                />
-                <span>{document.label}</span>
-              </label>
-            );
-          })}
-        </div>
-        <div className="export-options-row">
-          <label>
-            <span className="field-label-text">Format</span>
-            <select value={outputFormat} onChange={(event) => setOutputFormat(event.target.value as "pdf" | "png")}>
-              <option value="pdf">PDF</option>
-              <option value="png">PNG image</option>
-            </select>
-          </label>
-          <label>
-            <span className="field-label-text">Download mode</span>
-            <select
-              value={bundleMode}
-              disabled={outputFormat === "png"}
-              onChange={(event) => setBundleMode(event.target.value as "single" | "zip")}
-            >
-              <option value="zip">ZIP (multiple files)</option>
-              <option value="single">Single file (one selected output)</option>
-            </select>
-          </label>
-        </div>
-        {outputFormat === "png" ? (
-          <p className="text-muted" style={{ marginTop: 8, marginBottom: 0, fontSize: 13 }}>
-            PNG export converts each generated PDF page into an image. Multi-page or multi-document exports download as a
-            ZIP of PNG files.
-          </p>
         ) : null}
-        <div className="export-name-block">
-          <div className="export-name-heading">Name normalization</div>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={normalizeGuestNamesToTitleCase}
-              onChange={(event) => setNormalizeGuestNamesToTitleCase(event.target.checked)}
-            />
-            <span>
-              Apply title case to guest names on export{" "}
-              <span style={{ color: "var(--ink-muted)", fontWeight: 400 }}>(optional)</span>
-            </span>
-          </label>
-          <p className="text-muted checkbox-hint">
-            Useful for ALL CAPS source lists. Leave off if names like McSomething should remain untouched.
-          </p>
-        </div>
-        <button
-          style={{ marginTop: 16 }}
-          type="button"
-          disabled={loadingExport || loadingPreview || !exportUnlocked}
-          title={!exportUnlocked ? "Run Preview and Validate with a valid guest list first." : undefined}
-          onClick={exportDocuments}
-        >
-          {loadingExport ? "Generating..." : "Generate and Download"}
-        </button>
-        {exportProgressPct > 0 && (
-          <div style={{ marginTop: 10 }}>
-            <progress value={exportProgressPct} max={100} style={{ width: "100%", height: 10 }} />
-            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#3d4556" }}>
-              Generating files... {exportProgressPct < 100 ? `${exportProgressPct}%` : "done"}
-            </p>
-          </div>
-        )}
-      </div>
 
-      {exportWarnings.length > 0 && (
-        <div className="panel">
-          <p style={{ marginTop: 0 }}>
-            <strong>Check these before printing:</strong>
-          </p>
+        {settingsTab === "dishes" ? (
+          dishCount === 0 ? (
+            <p className="text-muted" style={{ margin: 0 }}>
+              Check the guest list first — every dish it contains will appear here so you can rename it.
+            </p>
+          ) : (
+            <div className="stack">
+              <p className="field-hint" style={{ margin: 0 }}>
+                <strong>Short name</strong> is used on place cards, service plans and table plans.{" "}
+                <strong>Long name</strong> is used on the menu card.
+              </p>
+              <div className="dish-table">
+                <div className="dish-table-head">
+                  <span>From guest list</span>
+                  <span>Short name</span>
+                  <span>Long name</span>
+                </div>
+                {Object.entries(dishNameOverrides).map(([originalName, override]) => (
+                  <div key={originalName} className="dish-table-row">
+                    <span className="dish-table-source">{originalName}</span>
+                    <label className="dish-table-cell">
+                    <span className="dish-table-mobile-label">Short name</span>
+                    <textarea
+                      rows={1}
+                      autoComplete="off"
+                      aria-label={`Short name for ${originalName}`}
+                      value={override.shortName}
+                      onChange={(event) =>
+                        setDishNameOverrides((previous) => ({
+                          ...previous,
+                          [originalName]: { ...previous[originalName], shortName: event.target.value }
+                        }))
+                      }
+                    />
+                    </label>
+                    <label className="dish-table-cell">
+                    <span className="dish-table-mobile-label">Long name</span>
+                    <textarea
+                      rows={1}
+                      autoComplete="off"
+                      aria-label={`Long name for ${originalName}`}
+                      value={override.longName}
+                      onChange={(event) =>
+                        setDishNameOverrides((previous) => ({
+                          ...previous,
+                          [originalName]: { ...previous[originalName], longName: event.target.value }
+                        }))
+                      }
+                    />
+                    </label>
+                  </div>
+                ))}
+              </div>
+
+              <Disclosure label="Merge duplicate spellings on the menu" defaultOpen={dishMenuDuplicateGroups.length > 0}>
+                <div className="stack">
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    If the same dish still appears twice after renaming (e.g. <em>Beef</em> and <em>beef</em>), tick both
+                    to print it once on the menu. Place cards and service plans keep each guest&apos;s wording.
+                  </p>
+                  {uniqueEffectiveDishes.length >= 2 ? (
+                    <>
+                      <div className="chip-group">
+                        {uniqueEffectiveDishes.map((dish) => (
+                          <label
+                            key={dish}
+                            className={mergedDishes.has(dish) ? "chip chip--disabled" : "chip"}
+                            title={mergedDishes.has(dish) ? "Already in a merge group below" : undefined}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={mergedDishes.has(dish)}
+                              checked={menuMergePick.includes(dish)}
+                              onChange={(event) =>
+                                setMenuMergePick((previous) =>
+                                  event.target.checked ? [...previous, dish] : previous.filter((item) => item !== dish)
+                                )
+                              }
+                            />
+                            {dish}
+                          </label>
+                        ))}
+                      </div>
+                      <div className="row">
+                        <button type="button" className="btn-sm" disabled={menuMergePick.length < 2} onClick={addMenuDuplicateGroup}>
+                          Merge {menuMergePick.length >= 2 ? `${menuMergePick.length} dishes` : "selected"}
+                        </button>
+                        <span className="field-hint">The menu line defaults to the first spelling A–Z; edit it below.</span>
+                      </div>
+                    </>
+                  ) : null}
+                  {dishMenuDuplicateGroups.map((group) => (
+                    <div key={group.id} className="inset row row--top" style={{ flexWrap: "nowrap" }}>
+                      <div className="stack stack--sm" style={{ flex: 1, minWidth: 0 }}>
+                        <Field label="Prints on the menu as">
+                          <input
+                            value={group.canonical}
+                            onChange={(event) =>
+                              setDishMenuDuplicateGroups((previous) =>
+                                previous.map((entry) =>
+                                  entry.id === group.id ? { ...entry, canonical: event.target.value } : entry
+                                )
+                              )
+                            }
+                          />
+                        </Field>
+                        <span className="field-hint">Merges: {group.match.join(" · ")}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn icon-btn--sm"
+                        aria-label="Remove merge group"
+                        onClick={() =>
+                          setDishMenuDuplicateGroups((previous) => previous.filter((entry) => entry.id !== group.id))
+                        }
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </Disclosure>
+            </div>
+          )
+        ) : null}
+      </Section>
+
+      {profileSaveOpen ? (
+        <Modal
+          title="Save as profile"
+          size="sm"
+          onClose={() => setProfileSaveOpen(false)}
+          footer={
+            <>
+              <button type="button" onClick={() => setProfileSaveOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void saveCurrentProfile()}>
+                Save profile
+              </button>
+            </>
+          }
+        >
+          <div className="stack">
+            <p className="text-muted" style={{ margin: 0 }}>
+              Profiles store colours and print settings to reuse on future events. Event details and logos stay with the
+              event.
+            </p>
+            <Field label="Profile name" hint="Using an existing name updates that profile.">
+              <input
+                value={profileName}
+                autoFocus
+                onChange={(event) => setProfileName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveCurrentProfile();
+                }}
+              />
+            </Field>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* 4 — Export */}
+      <Section step={4} title="Download">
+        <div className="stack">
+          <div className="doc-grid">
+            {DOCUMENTS.map((document) => {
+              const checked = selectedDocuments.includes(document.id);
+              return (
+                <label key={document.id} className={checked ? "doc-option doc-option--on" : "doc-option"}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setSelectedDocuments((previous) =>
+                        checked ? previous.filter((item) => item !== document.id) : [...previous, document.id]
+                      );
+                    }}
+                  />
+                  <span className="doc-option-text">
+                    <span className="doc-option-title">{document.label}</span>
+                    <span className="doc-option-desc">{document.description}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="row" style={{ gap: 24, alignItems: "flex-start" }}>
+            <Field label="Format" as="div">
+              <Segmented
+                value={outputFormat}
+                options={[
+                  { value: "pdf", label: "PDF" },
+                  { value: "png", label: "PNG" }
+                ]}
+                onChange={setOutputFormat}
+              />
+            </Field>
+            <Field
+              label="Files"
+              as="div"
+              hint={outputFormat === "png" ? "PNG exports come as a ZIP of page images." : undefined}
+            >
+              <Segmented
+                value={bundleMode}
+                disabled={outputFormat === "png"}
+                options={[
+                  { value: "zip", label: "ZIP of all" },
+                  { value: "single", label: "Single PDF", title: "Only when exactly one document is ticked" }
+                ]}
+                onChange={setBundleMode}
+              />
+            </Field>
+          </div>
+          <Switch
+            checked={normalizeGuestNamesToTitleCase}
+            onChange={setNormalizeGuestNamesToTitleCase}
+            label="Convert guest names to title case"
+            hint="Handy for ALL CAPS lists. Leave off if names like McSomething must stay as typed."
+          />
+          {singleFileBlocked ? (
+            <Callout tone="warning">Single PDF needs exactly one document ticked.</Callout>
+          ) : null}
+        </div>
+        <div className="card-foot card-foot--inset card-foot--between">
+          <div className="export-progress">
+            {exportProgressPct > 0 ? (
+              <>
+                <div className="progress">
+                  <div className="progress-bar" style={{ width: `${exportProgressPct}%` }} />
+                </div>
+                <span className="text-muted text-sm">
+                  {exportProgressPct < 100 ? `Generating… ${exportProgressPct}%` : "Done"}
+                </span>
+              </>
+            ) : !exportUnlocked ? (
+              <span className="text-muted text-sm">Check the guest list (step 1) to enable downloads.</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn-primary btn-lg"
+            disabled={loadingExport || loadingPreview || !exportUnlocked}
+            title={!exportUnlocked ? "Check the guest list first." : undefined}
+            onClick={exportDocuments}
+          >
+            <Download size={16} aria-hidden />
+            {loadingExport ? "Generating…" : "Generate and download"}
+          </button>
+        </div>
+      </Section>
+
+      {exportWarnings.length > 0 ? (
+        <Callout tone="warning">
+          <strong>Check these before printing:</strong>
           <ul>
             {exportWarnings.map((warning, index) => (
-              <li key={`${warning}-${index}`} className="warning">
-                {warning}
-              </li>
+              <li key={`${warning}-${index}`}>{warning}</li>
             ))}
           </ul>
-        </div>
-      )}
-      {error && (
-        <div className="panel">
-          <p className="error">{error}</p>
-        </div>
-      )}
+        </Callout>
+      ) : null}
+
+      <Toasts>
+        {error ? (
+          <Callout tone="error" onDismiss={() => setError("")}>
+            {error}
+          </Callout>
+        ) : null}
+      </Toasts>
     </main>
   );
 }
