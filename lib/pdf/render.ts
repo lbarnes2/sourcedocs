@@ -1010,17 +1010,10 @@ export async function renderMenuBookletPdf(
     };
   };
 
+  /** Double frame for the white panels; both strokes in the light blue "water" accent. */
   const drawFancyBorder = (
     page: import("pdf-lib").PDFPage,
-    options: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-      primaryColor: ReturnType<typeof rgb>;
-      accentColor: ReturnType<typeof rgb>;
-      halfSide: MenuHalfSide;
-    }
+    options: { x: number; y: number; width: number; height: number; halfSide: MenuHalfSide }
   ) => {
     const outer = outerBorderFrame(options.x, options.y, options.width, options.height, options.halfSide);
     page.drawRectangle({
@@ -1028,7 +1021,7 @@ export async function renderMenuBookletPdf(
       y: outer.y,
       width: outer.width,
       height: outer.height,
-      borderColor: options.primaryColor,
+      borderColor: accent,
       borderWidth: 1.8
     });
     const inner = innerBorderFromOuter(outer);
@@ -1037,7 +1030,7 @@ export async function renderMenuBookletPdf(
       y: inner.y,
       width: inner.width,
       height: inner.height,
-      borderColor: options.accentColor,
+      borderColor: accent,
       borderWidth: 1.2
     });
   };
@@ -1052,7 +1045,7 @@ export async function renderMenuBookletPdf(
       y: outer.y,
       width: outer.width,
       height: outer.height,
-      borderColor: white,
+      borderColor: accent,
       borderWidth: 1.6
     });
     const inner = innerBorderFromOuter(outer);
@@ -1114,8 +1107,6 @@ export async function renderMenuBookletPdf(
     y: panelY,
     width: leftPanelW,
     height: panelH,
-    primaryColor: primary,
-    accentColor: accent,
     halfSide: "left"
   });
   const venueLogoW = 118;
@@ -1244,8 +1235,6 @@ export async function renderMenuBookletPdf(
     y: panelY,
     width: leftPanelW,
     height: panelH,
-    primaryColor: primary,
-    accentColor: accent,
     halfSide: "left"
   });
 
@@ -1254,8 +1243,6 @@ export async function renderMenuBookletPdf(
     y: panelY,
     width: rightPanelW,
     height: panelH,
-    primaryColor: primary,
-    accentColor: accent,
     halfSide: "right"
   });
   type MenuSection = { heading: string; lines: string[] };

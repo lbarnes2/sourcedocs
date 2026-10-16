@@ -83,11 +83,12 @@ function mmToPt(mm: number): number {
 
 const INNER_BORDER_INSET = mmToPt(2.5);
 
-/** Greedy word wrap to maxWidth; long words split by character. */
+/** Greedy word wrap to maxWidth; long words split by character (reported through `onWordSplit`). */
 function breakSignageTitleIntoLines(
   text: string,
   measure: (t: string) => number,
-  maxWidth: number
+  maxWidth: number,
+  onWordSplit?: () => void
 ): string[] {
   const raw = text.replace(/\t|\u0085|\u2028|\u2029/g, "    ").trim();
   if (!raw) return [""];
@@ -105,6 +106,7 @@ function breakSignageTitleIntoLines(
     if (measure(word) <= maxWidth) {
       line = word;
     } else {
+      onWordSplit?.();
       let wchunk = "";
       for (const ch of word) {
         const t = wchunk + ch;
@@ -123,12 +125,63 @@ function breakSignageTitleIntoLines(
 }
 
 /** Like `breakSignageTitleIntoLines`, but keeps the author's explicit line breaks (blank lines dropped). */
-function breakMultilineText(text: string, measure: (t: string) => number, maxWidth: number): string[] {
+function breakMultilineText(
+  text: string,
+  measure: (t: string) => number,
+  maxWidth: number,
+  onWordSplit?: () => void
+): string[] {
   return text
     .split(/\r?\n/)
     .map((para) => para.trim())
     .filter(Boolean)
-    .flatMap((para) => breakSignageTitleIntoLines(para, measure, maxWidth));
+    .flatMap((para) => breakSignageTitleIntoLines(para, measure, maxWidth, onWordSplit));
+}
+
+/**
+ * How much word splitting one layout attempt may use. Size searches try "none" first, so a sign only ever
+ * breaks a word when no size fits it whole: venue/date lines have minimum sizes, so a long word there may
+ * still need "meta"; "any" is the last resort for a title word too long for the sign at any size.
+ */
+type WordSplitAllowance = "none" | "meta" | "any";
+
+/** Wrappers for one layout attempt that note whether any title or venue/date/message word had to be split. */
+function signageWrapper() {
+  let titleSplit = false;
+  let metaSplit = false;
+  return {
+    title: (text: string, measure: (t: string) => number, maxWidth: number) =>
+      breakSignageTitleIntoLines(text, measure, maxWidth, () => (titleSplit = true)),
+    meta: (text: string, measure: (t: string) => number, maxWidth: number) =>
+      breakSignageTitleIntoLines(text, measure, maxWidth, () => (metaSplit = true)),
+    metaMultiline: (text: string, measure: (t: string) => number, maxWidth: number) =>
+      breakMultilineText(text, measure, maxWidth, () => (metaSplit = true)),
+    /** True when the lines wrapped so far split more words than `allow` permits. */
+    exceeds: (allow: WordSplitAllowance) => (titleSplit && allow !== "any") || (metaSplit && allow === "none")
+  };
+}
+
+/** Title sizes to try, largest first: preferred down in 1pt steps to 12pt, then 11pt down to 8pt. */
+function titleSizeCandidates(preferred: number): number[] {
+  const sizes: number[] = [];
+  for (let s = preferred; s > 12; s -= 1) sizes.push(s);
+  for (let s = 12; s >= 8; s -= 1) sizes.push(s);
+  return sizes;
+}
+
+/** Largest title size that lays out, preferring any size without split words over a bigger one with them. */
+function fitSignageTitle(
+  preferred: number,
+  tryAt: (titleSize: number, allow: WordSplitAllowance) => SignageLayout | null
+): SignageLayout | null {
+  const sizes = titleSizeCandidates(preferred);
+  for (const allow of ["none", "meta", "any"] as const) {
+    for (const s of sizes) {
+      const layout = tryAt(s, allow);
+      if (layout) return layout;
+    }
+  }
+  return null;
 }
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
@@ -618,11 +671,13 @@ function layoutSignageContent(
    */
   const tryLayoutAtSize = (
     titleSize: number,
+    allow: WordSplitAllowance,
     fit: { messageSize?: number; arrowScale?: number; tightArrowBox?: boolean } = {}
   ): SignageLayout | null => {
     const { messageSize: messageSizeOverride, arrowScale = 1, tightArrowBox = false } = fit;
+    const wrap = signageWrapper();
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
-    const titleLines = breakSignageTitleIntoLines(name, measure, titleMaxW);
+    const titleLines = wrap.title(name, measure, titleMaxW);
     const n = titleLines.length;
     const { capH, desc, lineHeight } = titleMetricsAtSize(titleSize);
 
@@ -640,17 +695,18 @@ function layoutSignageContent(
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const metaMaxW = borderW - mmToPt(28);
     const venueLines = vRaw
-      ? breakSignageTitleIntoLines(vRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(vRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const subVenueLines = sRaw
-      ? breakSignageTitleIntoLines(sRaw, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(sRaw, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const dateLines = dRaw
-      ? breakSignageTitleIntoLines(dRaw, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
+      ? wrap.meta(dRaw, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
     const messageLines = mRaw
-      ? breakMultilineText(mRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, messageSize), metaMaxW)
+      ? wrap.metaMultiline(mRaw, (t) => bodyBoldFont.widthOfTextAtSize(t, messageSize), metaMaxW)
       : [];
+    if (wrap.exceeds(allow)) return null;
 
     const vn = venueLines.length;
     const sn = subVenueLines.length;
@@ -807,40 +863,22 @@ function layoutSignageContent(
    * little, before giving up on that title size.
    * Signs without a message keep the original title-only shrink.
    */
-  const tryFitAtSize = (titleSize: number): SignageLayout | null => {
-    const fitted = tryLayoutAtSize(titleSize);
+  const tryFitAtSize = (titleSize: number, allow: WordSplitAllowance): SignageLayout | null => {
+    const fitted = tryLayoutAtSize(titleSize, allow);
     if (fitted || !mRaw) return fitted;
     const { venueSize, dateSize } = bodySizesForTitle(titleSize);
     for (let messageSize = venueSize; messageSize > dateSize; messageSize -= 2) {
-      const l = tryLayoutAtSize(titleSize, { messageSize, tightArrowBox: true });
+      const l = tryLayoutAtSize(titleSize, allow, { messageSize, tightArrowBox: true });
       if (l) return l;
     }
     for (const arrowScale of hasArrow ? [1, 0.9, 0.8, 0.7] : [1]) {
-      const l = tryLayoutAtSize(titleSize, { messageSize: dateSize, arrowScale, tightArrowBox: true });
+      const l = tryLayoutAtSize(titleSize, allow, { messageSize: dateSize, arrowScale, tightArrowBox: true });
       if (l) return l;
     }
     return null;
   };
 
-  let titleSize = preferredTitleSize;
-  const minTitleSize = 12;
-  let layout: SignageLayout | null = tryFitAtSize(titleSize);
-
-  while (!layout && titleSize > minTitleSize) {
-    titleSize -= 1;
-    layout = tryFitAtSize(titleSize);
-  }
-
-  if (!layout) {
-    layout = tryFitAtSize(minTitleSize);
-  }
-  if (!layout) {
-    for (let s = minTitleSize - 1; s >= 8; s -= 1) {
-      layout = tryFitAtSize(s);
-      if (layout) break;
-    }
-  }
-
+  const layout = fitSignageTitle(preferredTitleSize, tryFitAtSize);
   if (!layout) {
     throw new Error("Signage: event title cannot be laid out on this page (logos + title + arrow).");
   }
@@ -907,10 +945,11 @@ function layoutDualSideBySide(
   const sRawR = subVenueLineR.trim();
   const dRawR = dateLineR.trim();
 
-  const tryLayoutAtSize = (titleSize: number): SignageLayout | null => {
+  const tryLayoutAtSize = (titleSize: number, allow: WordSplitAllowance): SignageLayout | null => {
+    const wrap = signageWrapper();
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
-    const leftTitleLines = breakSignageTitleIntoLines(nameL, measure, titleMaxWCol);
-    const rightTitleLines = breakSignageTitleIntoLines(nameR, measure, titleMaxWCol);
+    const leftTitleLines = wrap.title(nameL, measure, titleMaxWCol);
+    const rightTitleLines = wrap.title(nameR, measure, titleMaxWCol);
     const nL = leftTitleLines.length;
     const nR = rightTitleLines.length;
     const nRows = Math.max(nL, nR);
@@ -921,23 +960,24 @@ function layoutDualSideBySide(
     const { capH: vCap, desc: vDesc, lineHeight: vLh } = bodyMetricsAtSize(venueSize);
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const venueLinesL = vRawL
-      ? breakSignageTitleIntoLines(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
+      ? wrap.meta(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
       : [];
     const subVenueLinesL = sRawL
-      ? breakSignageTitleIntoLines(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
+      ? wrap.meta(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
       : [];
     const dateLinesL = dRawL
-      ? breakSignageTitleIntoLines(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxWColVenue)
+      ? wrap.meta(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxWColVenue)
       : [];
     const venueLinesR = vRawR
-      ? breakSignageTitleIntoLines(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
+      ? wrap.meta(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
       : [];
     const subVenueLinesR = sRawR
-      ? breakSignageTitleIntoLines(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
+      ? wrap.meta(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxWColVenue)
       : [];
     const dateLinesR = dRawR
-      ? breakSignageTitleIntoLines(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxWColVenue)
+      ? wrap.meta(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxWColVenue)
       : [];
+    if (wrap.exceeds(allow)) return null;
 
     const vnL = venueLinesL.length;
     const snL = subVenueLinesL.length;
@@ -1119,23 +1159,7 @@ function layoutDualSideBySide(
     return buildDualSideLayout(firstLineY, metaL, metaR, arrowSize, arrowCyLeft, arrowCyRight);
   };
 
-  let titleSize = preferredTitleSize;
-  const minTitleSize = 12;
-  let layout: SignageLayout | null = tryLayoutAtSize(titleSize);
-
-  while (!layout && titleSize > minTitleSize) {
-    titleSize -= 1;
-    layout = tryLayoutAtSize(titleSize);
-  }
-  if (!layout) {
-    layout = tryLayoutAtSize(minTitleSize);
-  }
-  if (!layout) {
-    for (let s = minTitleSize - 1; s >= 8; s -= 1) {
-      layout = tryLayoutAtSize(s);
-      if (layout) break;
-    }
-  }
+  const layout = fitSignageTitle(preferredTitleSize, tryLayoutAtSize);
   if (!layout) {
     throw new Error("Signage: dual event titles cannot be laid out on this page (logos + titles + arrows).");
   }
@@ -1202,10 +1226,11 @@ function layoutDualStackedPortrait(
   const sRawR = subVenueLineR.trim();
   const dRawR = dateLineR.trim();
 
-  const tryLayoutAtSize = (titleSize: number): SignageLayout | null => {
+  const tryLayoutAtSize = (titleSize: number, allow: WordSplitAllowance): SignageLayout | null => {
+    const wrap = signageWrapper();
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
-    const leftTitleLines = breakSignageTitleIntoLines(nameL, measure, titleMaxW);
-    const rightTitleLines = breakSignageTitleIntoLines(nameR, measure, titleMaxW);
+    const leftTitleLines = wrap.title(nameL, measure, titleMaxW);
+    const rightTitleLines = wrap.title(nameR, measure, titleMaxW);
     const n1 = leftTitleLines.length;
     const n2 = rightTitleLines.length;
     const { capH, desc, lineHeight } = titleMetricsAtSize(titleSize);
@@ -1216,23 +1241,24 @@ function layoutDualStackedPortrait(
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const metaMaxW = borderW - mmToPt(28);
     const venueLinesL = vRawL
-      ? breakSignageTitleIntoLines(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const subVenueLinesL = sRawL
-      ? breakSignageTitleIntoLines(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const dateLinesL = dRawL
-      ? breakSignageTitleIntoLines(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
+      ? wrap.meta(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
     const venueLinesR = vRawR
-      ? breakSignageTitleIntoLines(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const subVenueLinesR = sRawR
-      ? breakSignageTitleIntoLines(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const dateLinesR = dRawR
-      ? breakSignageTitleIntoLines(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
+      ? wrap.meta(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
+    if (wrap.exceeds(allow)) return null;
 
     const vnL = venueLinesL.length;
     const snL = subVenueLinesL.length;
@@ -1344,23 +1370,7 @@ function layoutDualStackedPortrait(
     };
   };
 
-  let titleSize = preferredTitleSize;
-  const minTitleSize = 12;
-  let layout: SignageLayout | null = tryLayoutAtSize(titleSize);
-
-  while (!layout && titleSize > minTitleSize) {
-    titleSize -= 1;
-    layout = tryLayoutAtSize(titleSize);
-  }
-  if (!layout) {
-    layout = tryLayoutAtSize(minTitleSize);
-  }
-  if (!layout) {
-    for (let s = minTitleSize - 1; s >= 8; s -= 1) {
-      layout = tryLayoutAtSize(s);
-      if (layout) break;
-    }
-  }
+  const layout = fitSignageTitle(preferredTitleSize, tryLayoutAtSize);
   if (!layout) {
     throw new Error("Signage: stacked portrait dual titles cannot be laid out on this page.");
   }
@@ -1429,10 +1439,11 @@ function layoutDualStackedLandscape(
   const sRawR = subVenueLineR.trim();
   const dRawR = dateLineR.trim();
 
-  const tryLayoutAtSize = (titleSize: number): SignageLayout | null => {
+  const tryLayoutAtSize = (titleSize: number, allow: WordSplitAllowance): SignageLayout | null => {
+    const wrap = signageWrapper();
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
-    const leftTitleLines = breakSignageTitleIntoLines(nameL, measure, textMaxW);
-    const rightTitleLines = breakSignageTitleIntoLines(nameR, measure, textMaxW);
+    const leftTitleLines = wrap.title(nameL, measure, textMaxW);
+    const rightTitleLines = wrap.title(nameR, measure, textMaxW);
     const n1 = leftTitleLines.length;
     const n2 = rightTitleLines.length;
     const { capH, desc, lineHeight } = titleMetricsAtSize(titleSize);
@@ -1443,23 +1454,24 @@ function layoutDualStackedLandscape(
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const metaMaxW = borderW - mmToPt(28);
     const venueLinesL = vRawL
-      ? breakSignageTitleIntoLines(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(vRawL, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const subVenueLinesL = sRawL
-      ? breakSignageTitleIntoLines(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(sRawL, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const dateLinesL = dRawL
-      ? breakSignageTitleIntoLines(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
+      ? wrap.meta(dRawL, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
     const venueLinesR = vRawR
-      ? breakSignageTitleIntoLines(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(vRawR, (t) => bodyBoldFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const subVenueLinesR = sRawR
-      ? breakSignageTitleIntoLines(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
+      ? wrap.meta(sRawR, (t) => bodyFont.widthOfTextAtSize(t, venueSize), metaMaxW)
       : [];
     const dateLinesR = dRawR
-      ? breakSignageTitleIntoLines(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
+      ? wrap.meta(dRawR, (t) => bodyFont.widthOfTextAtSize(t, dateSize), metaMaxW)
       : [];
+    if (wrap.exceeds(allow)) return null;
 
     const vnL = venueLinesL.length;
     const snL = subVenueLinesL.length;
@@ -1582,23 +1594,7 @@ function layoutDualStackedLandscape(
     };
   };
 
-  let titleSize = preferredTitleSize;
-  const minTitleSize = 12;
-  let layout: SignageLayout | null = tryLayoutAtSize(titleSize);
-
-  while (!layout && titleSize > minTitleSize) {
-    titleSize -= 1;
-    layout = tryLayoutAtSize(titleSize);
-  }
-  if (!layout) {
-    layout = tryLayoutAtSize(minTitleSize);
-  }
-  if (!layout) {
-    for (let s = minTitleSize - 1; s >= 8; s -= 1) {
-      layout = tryLayoutAtSize(s);
-      if (layout) break;
-    }
-  }
+  const layout = fitSignageTitle(preferredTitleSize, tryLayoutAtSize);
   if (!layout) {
     throw new Error("Signage: stacked landscape dual titles cannot be laid out on this page.");
   }
