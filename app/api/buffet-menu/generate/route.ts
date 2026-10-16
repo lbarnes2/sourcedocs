@@ -1,6 +1,8 @@
 import JSZip from "jszip";
 import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/http/errorMessage";
+import { getAppSettings } from "@/lib/appSettings/store";
+import { resolveDisplayBackgroundBytes } from "@/lib/displayBackgrounds/store";
 import { renderAllBuffetPdfs } from "@/lib/pdf/buffetMenuPdf";
 import { loadLogoBytesFromKey, parseDataUrlImage } from "@/lib/signage/loadLogoBytes";
 import { isR2Configured } from "@/lib/storage/r2";
@@ -35,11 +37,14 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  const { menu, venueLogoKey, venueLogoDataUrl, allergenStatement, export: exportMode } = parsed.data;
+  const { menu, venueLogoKey, venueLogoDataUrl, displayBackgroundKey, allergenStatement, export: exportMode } =
+    parsed.data;
   let rendered: Awaited<ReturnType<typeof renderAllBuffetPdfs>>;
   try {
     const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
-    rendered = await renderAllBuffetPdfs(menu, logo, { allergenStatement });
+    const { defaultDisplayBackgroundKey } = await getAppSettings();
+    const displayBackground = await resolveDisplayBackgroundBytes([displayBackgroundKey, defaultDisplayBackgroundKey]);
+    rendered = await renderAllBuffetPdfs(menu, logo, { allergenStatement, displayBackground });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error, "Generation failed.") }, { status: 500 });
   }

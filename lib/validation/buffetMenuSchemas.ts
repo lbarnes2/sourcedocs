@@ -57,6 +57,8 @@ export const buffetMenuGenerateBodySchema = z.object({
   menu: buffetMenuStateSchema,
   venueLogoKey: optionalKey,
   venueLogoDataUrl: z.string().max(limits.MAX_DATA_URL_CHARS).optional(),
+  /** Display menu background; omitted or blank = the default chosen on the Settings page. */
+  displayBackgroundKey: optionalKey,
   /** Small print for the foot of the allergen matrix; omitted or blank = none. */
   allergenStatement: z.string().max(limits.MAX_BUFFET_ALLERGEN_STATEMENT_CHARS).optional(),
   /** Omitted or `"zip"`: return a ZIP of all PDFs; otherwise a single PDF (`"labels"` = A6, `"labelsA7"` = A7). */
@@ -68,6 +70,8 @@ export const buffetMenuSavedFileSchema = z.object({
   savedAt: z.string().min(1).max(80),
   name: z.string().min(1).max(limits.MAX_BUFFET_SAVED_NAME_CHARS),
   venueLogoKey: z.string().min(1).max(512).nullable(),
+  /** Absent in menus saved before backgrounds could be chosen; null = use the default. */
+  displayBackgroundKey: z.string().min(1).max(512).nullable().optional(),
   menu: buffetMenuStateSchema
 });
 
@@ -75,6 +79,7 @@ export const buffetMenuSavePutBodySchema = z.object({
   id: z.string().min(1).max(200).optional(),
   name: z.string().min(1).max(limits.MAX_BUFFET_SAVED_NAME_CHARS),
   venueLogoKey: z.union([z.string().min(1).max(512), z.null()]).optional(),
+  displayBackgroundKey: z.union([z.string().min(1).max(512), z.null()]).optional(),
   menu: buffetMenuStateSchema
 });
 

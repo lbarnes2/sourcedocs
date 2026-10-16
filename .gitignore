@@ -12,3 +12,5 @@ data/floorplans/*.json
 data/buffet-settings.json
 .DS_Store
 *.tsbuildinfo
+data/app-settings.json
+data/backgrounds/

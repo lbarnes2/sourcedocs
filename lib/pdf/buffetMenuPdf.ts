@@ -20,7 +20,6 @@ const PDF_FONT_SOURCES = {
   bodyItalic: path.join(LIB_FONTS, "NotoSans-Italic.ttf")
 };
 
-const WATER_BG_PATH = path.join(process.cwd(), "lib", "assets", "buffet", "water-menu-bg.png");
 
 const A4_PORTRAIT_W = mmToPt(210);
 const A4_PORTRAIT_H = mmToPt(297);
@@ -180,23 +179,24 @@ function packDisplayColumns(blocks: DisplayBlock[], maxColumns: number, columnH:
 }
 
 /**
- * A4 portrait display menu: full-bleed water background, Noto Sans Light (or Regular if Light is missing), centred in band.
+ * A4 portrait display menu: full-bleed background (an "Empty Belly poster", stretched to the page), Noto Sans Light
+ * (or Regular if Light is missing), centred in the poster's clear band.
  */
-export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise<Uint8Array> {
+export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState, backgroundBytes: Uint8Array): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const { body, bodyBold } = await loadEmbeddedFonts(doc);
   const displayFont = await loadNotoForDisplayMenu(doc, body);
   const fonts: DisplayFonts = { item: displayFont, category: bodyBold };
-  const bgBytes = new Uint8Array(await readFile(WATER_BG_PATH));
-  const bgImage = await embedImageFromBytes(doc, bgBytes);
+  const bgImage = await embedRasterBytes(doc, backgroundBytes);
+  if (!bgImage) throw new Error("The display menu background is not a PNG or JPEG image.");
 
   const page = doc.addPage([A4_PORTRAIT_W, A4_PORTRAIT_H]);
   const ph = A4_PORTRAIT_H;
   const pw = A4_PORTRAIT_W;
   page.drawImage(bgImage, { x: 0, y: 0, width: pw, height: ph });
 
-  /* White band of the water background runs ~18%–82%; keep text clear of its edges. */
+  /* Posters keep a clear band from 18% to 82% of the height (see the guide on the Settings page); keep text clear of its edges. */
   const bandInset = mmToPt(6);
   const contentBottom = 0.18 * ph + bandInset;
   const contentTop = 0.82 * ph - bandInset;
@@ -699,10 +699,10 @@ export async function renderBuffetLabelSheetsPdf(
 export async function renderAllBuffetPdfs(
   menu: BuffetMenuState,
   logo: { bytes: Uint8Array; contentType?: string } | null,
-  options: { allergenStatement?: string } = {}
+  options: { allergenStatement?: string; displayBackground: Uint8Array }
 ): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
   const [display, matrix, labelsA6, labelsA7] = await Promise.all([
-    renderBuffetDisplayMenuPdf(menu),
+    renderBuffetDisplayMenuPdf(menu, options.displayBackground),
     renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, options.allergenStatement ?? ""),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")

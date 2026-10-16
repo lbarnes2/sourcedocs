@@ -29,6 +29,8 @@ export type BuffetMenuSavedFile = {
   savedAt: string;
   name: string;
   venueLogoKey: string | null;
+  /** Display menu background; null or absent = the Settings page default. */
+  displayBackgroundKey?: string | null;
   menu: BuffetMenuState;
 };
 

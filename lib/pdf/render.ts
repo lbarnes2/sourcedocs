@@ -958,12 +958,16 @@ export async function renderPlaceCardsPdf(
   return doc.save();
 }
 
+export type MenuCardContact = { phone: string; websites: string };
+
 export async function renderMenuBookletPdf(
   model: EventModel,
   settings: MenuBookletSettings,
   theme: ThemeSettings,
   menuLongNames: Record<string, string> = {},
-  dishMenuDuplicateGroups: DishMenuDuplicateGroup[] = []
+  dishMenuDuplicateGroups: DishMenuDuplicateGroup[] = [],
+  /** Back cover lines from the Settings page; blank lines are left off. */
+  contact: MenuCardContact = { phone: "", websites: "" }
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const pageWidth = mmToPt(297);
@@ -1115,17 +1119,26 @@ export async function renderMenuBookletPdf(
     x: leftCoverOuter.x + (leftCoverOuter.width - venueLogoW) / 2,
     y: pageHeight / 2 + 18
   });
-  drawCenteredInPanel(sheet1, "0117 428 4000", pageHeight / 2 - 6, bold, 16, primary, leftCoverOuter.x, leftCoverOuter.width);
-  drawCenteredInPanel(
-    sheet1,
-    "bristol.ac.uk/venues | bristol.ac.uk/catering",
-    pageHeight / 2 - 32,
-    font,
-    11,
-    rgb(0.23, 0.27, 0.35),
-    leftCoverOuter.x,
-    leftCoverOuter.width
-  );
+  const contactPhone = contact.phone.trim();
+  const contactWebsites = contact.websites.trim();
+  if (contactPhone) {
+    drawCenteredInPanel(sheet1, contactPhone, pageHeight / 2 - 6, bold, 16, primary, leftCoverOuter.x, leftCoverOuter.width);
+  }
+  if (contactWebsites) {
+    /* Long web address lines shrink to fit inside the frame rather than running over it. */
+    const maxW = leftCoverOuter.width - 40;
+    const size = Math.max(7, Math.min(11, (11 * maxW) / font.widthOfTextAtSize(contactWebsites, 11)));
+    drawCenteredInPanel(
+      sheet1,
+      contactWebsites,
+      pageHeight / 2 - (contactPhone ? 32 : 6),
+      font,
+      size,
+      rgb(0.23, 0.27, 0.35),
+      leftCoverOuter.x,
+      leftCoverOuter.width
+    );
+  }
 
   // Right half: front cover (solid primary, white text)
   sheet1.drawRectangle({
@@ -2007,6 +2020,7 @@ export async function renderDocumentPdf(
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
     dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
+    menuCardContact?: MenuCardContact;
     /** Collects human-readable notices about content that could not be laid out as requested. */
     warnings?: string[];
   }
@@ -2030,7 +2044,8 @@ export async function renderDocumentPdf(
       options.menuBooklet,
       options.theme,
       options.menuLongNames ?? {},
-      options.dishMenuDuplicateGroups ?? []
+      options.dishMenuDuplicateGroups ?? [],
+      options.menuCardContact
     );
   }
   if (documentType === "floorplan") {

@@ -13,13 +13,14 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, FilePlus, FolderOpen, GripVertical, Plus, Save, Trash2, X } from "lucide-react";
 import { catSortableId, parseSortableId } from "@/app/buffet-menu/dndTypes";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob } from "@/lib/pdf/pdfToPngExport";
 import { LogoPicker } from "@/app/components/LogoPicker";
-import { Callout, Field, Modal, PageHeader, Section, Switch, Toasts } from "@/app/components/ui";
+import { Callout, Field, Modal, PageHeader, Section, Toasts } from "@/app/components/ui";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import {
   BUFFET_UNCAT_CONTAINER,
@@ -31,8 +32,10 @@ import {
   newItem,
   toMenuState
 } from "@/lib/buffetMenu/menuStore";
-import { MAX_BUFFET_ALLERGEN_STATEMENT_CHARS } from "@/lib/validation/limits";
+import type { AppSettings } from "@/types/appSettings";
 import type { BuffetMenuItem, BuffetMenuSettings } from "@/types/buffetMenu";
+
+type BackgroundItem = { key: string; label: string; assetUrl: string };
 
 type Store = BuffetMenuStore;
 
@@ -275,14 +278,13 @@ export default function BuffetMenuPage() {
   const [error, setError] = useState("");
   const [savedList, setSavedList] = useState<{ id: string; name: string; savedAt: string }[]>([]);
   const [r2SaveEnabled, setR2SaveEnabled] = useState(false);
-  const [settings, setSettings] = useState<BuffetMenuSettings>({ allergenStatement: "", showAllergenStatement: false });
-  const [savedSettings, setSavedSettings] = useState<BuffetMenuSettings | null>(null);
-  const [settingsBusy, setSettingsBusy] = useState(false);
+  /** Edited on the Settings page; read here so downloads include it. */
+  const [settings, setSettings] = useState<BuffetMenuSettings | null>(null);
+  const [backgrounds, setBackgrounds] = useState<BackgroundItem[]>([]);
+  const [defaultBackgroundKey, setDefaultBackgroundKey] = useState("");
+  /** "" = use the default from Settings. */
+  const [displayBackgroundKey, setDisplayBackgroundKey] = useState("");
   const [savedOpen, setSavedOpen] = useState(false);
-  const settingsDirty =
-    savedSettings !== null &&
-    (settings.allergenStatement !== savedSettings.allergenStatement ||
-      settings.showAllergenStatement !== savedSettings.showAllergenStatement);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -318,34 +320,21 @@ export default function BuffetMenuPage() {
       try {
         const res = await fetch("/api/buffet-menu/settings");
         if (!res.ok) throw new Error(await readResponseError(res, "Could not load the allergen statement."));
-        const data = (await res.json()) as BuffetMenuSettings;
-        setSettings(data);
-        setSavedSettings(data);
+        setSettings((await res.json()) as BuffetMenuSettings);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not load the allergen statement.");
       }
     })();
+    void (async () => {
+      try {
+        const [bgRes, appRes] = await Promise.all([fetch("/api/settings/backgrounds"), fetch("/api/settings")]);
+        if (bgRes.ok) setBackgrounds(((await bgRes.json()) as { items: BackgroundItem[] }).items);
+        if (appRes.ok) setDefaultBackgroundKey(((await appRes.json()) as AppSettings).defaultDisplayBackgroundKey);
+      } catch {
+        setBackgrounds([]);
+      }
+    })();
   }, [refreshSaved]);
-
-  const saveSettings = async () => {
-    setError("");
-    setSettingsBusy(true);
-    try {
-      const res = await fetch("/api/buffet-menu/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings)
-      });
-      if (!res.ok) throw new Error(await readResponseError(res, "Could not save the allergen statement."));
-      const data = (await res.json()) as BuffetMenuSettings;
-      setSettings(data);
-      setSavedSettings(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the allergen statement.");
-    } finally {
-      setSettingsBusy(false);
-    }
-  };
 
   const categoryIds = useMemo(() => store.categories.map((c) => catSortableId(c.id)), [store.categories]);
 
@@ -428,7 +417,8 @@ export default function BuffetMenuPage() {
         body: JSON.stringify({
           menu,
           venueLogoKey: venueLogoKey || null,
-          allergenStatement: settings.showAllergenStatement ? settings.allergenStatement : "",
+          displayBackgroundKey: displayBackgroundKey || null,
+          allergenStatement: settings?.showAllergenStatement ? settings.allergenStatement : "",
           export: exportMode
         })
       });
@@ -453,7 +443,8 @@ export default function BuffetMenuPage() {
           id: savedId ?? undefined,
           name: savedName.trim() || "Untitled menu",
           menu,
-          venueLogoKey: venueLogoKey || null
+          venueLogoKey: venueLogoKey || null,
+          displayBackgroundKey: displayBackgroundKey || null
         })
       });
       if (!res.ok) throw new Error(await readResponseError(res, "Save failed."));
@@ -473,10 +464,11 @@ export default function BuffetMenuPage() {
     try {
       const res = await fetch(`/api/buffet-menu/saved/${encodeURIComponent(id)}`);
       if (!res.ok) throw new Error(await readResponseError(res, "Could not load."));
-      const doc = (await res.json()) as { name: string; venueLogoKey: string | null; menu: import("@/types/buffetMenu").BuffetMenuState };
+      const doc = (await res.json()) as import("@/types/buffetMenu").BuffetMenuSavedFile;
       setSavedName(doc.name);
       setSavedId(id);
       setVenueLogoKey(doc.venueLogoKey || "");
+      setDisplayBackgroundKey(doc.displayBackgroundKey || "");
       setStore(fromMenuState(doc.menu));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Load failed.");
@@ -507,14 +499,13 @@ export default function BuffetMenuPage() {
     setSavedId(null);
     setStore(createEmptyMenuStore());
     setSavedName("Untitled menu");
+    setDisplayBackgroundKey("");
   };
 
   const uncatIds = store.orderMap[BUFFET_UNCAT_CONTAINER] ?? [];
   const itemTotal = Object.keys(store.items).length;
-  const statementSummary =
-    (settings.showAllergenStatement && settings.allergenStatement.trim()
-      ? "Printed at the foot of the allergen matrix"
-      : "Not printed on the allergen matrix") + (settingsDirty ? " · unsaved changes" : "");
+  const statementPrinted = Boolean(settings?.showAllergenStatement && settings.allergenStatement.trim());
+  const defaultBackground = backgrounds.find((b) => b.key === defaultBackgroundKey);
 
   const renderItems = (ids: string[]) =>
     ids.map((id) => {
@@ -680,7 +671,28 @@ export default function BuffetMenuPage() {
             emptyOption={{ label: "None", value: "" }}
             disabled={!logosConfigured || busy}
           />
+          <LogoPicker
+            title="Display menu background"
+            items={backgrounds}
+            value={displayBackgroundKey}
+            onChange={setDisplayBackgroundKey}
+            emptyOption={{
+              label: defaultBackground ? `Default (${defaultBackground.label})` : "Default",
+              value: "",
+              assetUrl: defaultBackground?.assetUrl
+            }}
+            disabled={busy || backgrounds.length === 0}
+            manageHref="/settings"
+            manageLabel="Manage backgrounds"
+            portrait
+          />
         </div>
+        <p className="text-muted text-sm" style={{ margin: "12px 0 0" }}>
+          Allergen statement: {settings === null ? "…" : statementPrinted ? "printed on the matrix" : "not printed"}.{" "}
+          <Link className="text-link" href="/settings">
+            Edit in Settings
+          </Link>
+        </p>
         <div className="card-foot card-foot--inset card-foot--between">
           <div className="row">
             <button type="button" className="btn-sm" onClick={() => void downloadExport("display")} disabled={busy || itemTotal === 0}>
@@ -700,43 +712,6 @@ export default function BuffetMenuPage() {
             <Download size={16} aria-hidden />
             {busy ? "Working…" : "Download all (ZIP)"}
           </button>
-        </div>
-      </Section>
-
-      <Section title="Allergen statement" collapsible defaultOpen={false} summary={statementSummary}>
-        <div className="stack">
-          <p className="text-muted" style={{ margin: 0 }}>
-            Small print at the foot of every allergen matrix page. Saved for all future menus — it isn&apos;t part of an
-            individual menu.
-          </p>
-          <Switch
-            checked={settings.showAllergenStatement}
-            onChange={(checked) => setSettings((s) => ({ ...s, showAllergenStatement: checked }))}
-            label="Print on the allergen matrix"
-          />
-          <Field label="Statement" as="div">
-            <textarea
-              value={settings.allergenStatement}
-              onChange={(e) => setSettings((s) => ({ ...s, allergenStatement: e.target.value }))}
-              maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
-              rows={4}
-              aria-label="Allergen statement"
-              placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
-            />
-          </Field>
-          <div className="row">
-            <button
-              type="button"
-              className="btn-primary btn-sm"
-              onClick={() => void saveSettings()}
-              disabled={settingsBusy || savedSettings === null || !settingsDirty}
-            >
-              {settingsBusy ? "Saving…" : "Save statement"}
-            </button>
-            <span className="text-muted text-sm">
-              {settingsDirty ? "Unsaved — downloads still use what’s shown here." : savedSettings ? "Saved" : ""}
-            </span>
-          </div>
         </div>
       </Section>
 
