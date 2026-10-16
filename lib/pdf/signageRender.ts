@@ -1413,10 +1413,6 @@ function layoutDualStackedLandscape(
   const gapBelowLogo = mmToPt(10);
   const arrowEdgePad = mmToPt(6);
   const textBottomPad = mmToPt(8);
-  const gapAfterTitle = mmToPt(10);
-  const gapVenueSub = mmToPt(4);
-  const gapVenueDate = mmToPt(5);
-  const gapAroundRule = mmToPt(10);
   const dividerInset = mmToPt(10);
   const dividerX1 = margin + INNER_BORDER_INSET + dividerInset;
   const dividerX2 = margin + borderW - INNER_BORDER_INSET - dividerInset;
@@ -1427,8 +1423,8 @@ function layoutDualStackedLandscape(
 
   const hasArrow = leftArrow !== "none" || rightArrow !== "none";
   const minDim = Math.min(_pageWidth, pageHeight);
-  const arrowSize = hasArrow ? minDim * 0.2 : 0;
-  const arrowHalf = arrowSize * 0.52;
+  /** Arrow top limit for event 1: inside the border and not up into the logo row. */
+  const arrow1TopLimit = Math.min(innerTop - arrowEdgePad, logoRowBottomY);
 
   const nameL = normalizeForCormorantLigatureSafe(eventNameLeft.trim() || "Event");
   const nameR = normalizeForCormorantLigatureSafe(eventNameRight.trim() || "Event");
@@ -1439,7 +1435,43 @@ function layoutDualStackedLandscape(
   const sRawR = subVenueLineR.trim();
   const dRawR = dateLineR.trim();
 
-  const tryLayoutAtSize = (titleSize: number, allow: WordSplitAllowance): SignageLayout | null => {
+  /**
+   * Two events, each with an arrow row plus up to three venue/date lines, can overflow a short landscape page
+   * (A4, 16:9) however small the title gets, because the arrow and venue/date sizes have fixed floors. Each
+   * step shrinks the arrow, the venue/date sizes and the vertical gaps a little more. After the first
+   * ("compact"), venue/date stay at that step's size instead of growing with the title, and the arrow lines up
+   * with the title's bottom rather than its middle, so a bigger title costs no extra height. Every step but
+   * the last keeps the title clearly larger than the venue line, so a sign compacts before its title turns tiny.
+   */
+  const compactSteps = [
+    { arrow: 1, venueMin: 20, dateMin: 16, gap: 1, compact: false },
+    { arrow: 0.85, venueMin: 18, dateMin: 15, gap: 0.8, compact: true },
+    { arrow: 0.72, venueMin: 16, dateMin: 13, gap: 0.65, compact: true },
+    { arrow: 0.6, venueMin: 14, dateMin: 12, gap: 0.5, compact: true }
+  ];
+  const minTitleToVenueRatio = 1.3;
+
+  const tryLayoutAtSize = (
+    titleSize: number,
+    allow: WordSplitAllowance,
+    step: (typeof compactSteps)[number],
+    lastStep: boolean
+  ): SignageLayout | null => {
+    const arrowSize = hasArrow ? minDim * 0.2 * step.arrow : 0;
+    const arrowHalf = arrowSize * 0.52;
+    const gapAfterTitle = mmToPt(10) * step.gap;
+    const gapVenueSub = mmToPt(4) * step.gap;
+    const gapVenueDate = mmToPt(5) * step.gap;
+    const gapAroundRule = mmToPt(10) * step.gap;
+
+    const venueSize = step.compact
+      ? step.venueMin
+      : Math.min(40, Math.max(step.venueMin, Math.round(titleSize * 0.52)));
+    const dateSize = step.compact
+      ? step.dateMin
+      : Math.min(28, Math.max(step.dateMin, Math.round(titleSize * 0.38)));
+    if (!lastStep && titleSize < venueSize * minTitleToVenueRatio) return null;
+
     const wrap = signageWrapper();
     const measure = (t: string) => titleFont.widthOfTextAtSize(t, titleSize);
     const leftTitleLines = wrap.title(nameL, measure, textMaxW);
@@ -1448,8 +1480,6 @@ function layoutDualStackedLandscape(
     const n2 = rightTitleLines.length;
     const { capH, desc, lineHeight } = titleMetricsAtSize(titleSize);
 
-    const venueSize = Math.min(40, Math.max(20, Math.round(titleSize * 0.52)));
-    const dateSize = Math.min(28, Math.max(16, Math.round(titleSize * 0.38)));
     const { capH: vCap, desc: vDesc, lineHeight: vLh } = bodyMetricsAtSize(venueSize);
     const { capH: dCap, desc: dDesc, lineHeight: dLh } = bodyMetricsAtSize(dateSize);
     const metaMaxW = borderW - mmToPt(28);
@@ -1482,8 +1512,17 @@ function layoutDualStackedLandscape(
 
     const firstLineYMax = logoRowBottomY - gapBelowLogo - capH;
     const firstLineY1 = firstLineYMax - titleDropFromCeiling;
-    const textSpan1 = (Math.max(1, n1) - 1) * lineHeight + desc;
-    const arrowCy1 = firstLineY1 - textSpan1 / 2;
+    /**
+     * Arrow centre beside a title: centred on it, but never above `topLimit`. In compact steps an arrow taller
+     * than the title rises from the title's bottom edge instead, so a bigger title doesn't push it further down.
+     */
+    const arrowCyBeside = (firstLineY: number, n: number, topLimit: number) => {
+      const textSpan = (Math.max(1, n) - 1) * lineHeight + desc;
+      const centred = firstLineY - textSpan / 2;
+      const cy = step.compact ? Math.max(centred, firstLineY - textSpan + arrowHalf) : centred;
+      return Math.min(cy, topLimit - arrowHalf);
+    };
+    const arrowCy1 = arrowCyBeside(firstLineY1, n1, arrow1TopLimit);
     const row1TextBottom = firstLineY1 - (n1 - 1) * lineHeight - desc;
     const row1Bottom =
       leftArrow !== "none" ? Math.min(row1TextBottom, arrowCy1 - arrowHalf) : row1TextBottom;
@@ -1505,8 +1544,8 @@ function layoutDualStackedLandscape(
     );
     const dividerLineY = meta1.metaLowestY - gapAroundRule - dividerThickness / 2;
     const firstLineY2 = dividerLineY - dividerThickness / 2 - gapAroundRule - capH;
-    const textSpan2 = (Math.max(1, n2) - 1) * lineHeight + desc;
-    const arrowCy2 = firstLineY2 - textSpan2 / 2;
+    /** Event 2's arrow box must not cross the divider (the glyph's own padding keeps it off the rule). */
+    const arrowCy2 = arrowCyBeside(firstLineY2, n2, dividerLineY - dividerThickness / 2);
     const row2TextBottom = firstLineY2 - (n2 - 1) * lineHeight - desc;
     const floorY =
       rightArrow !== "none" ? Math.min(row2TextBottom, arrowCy2 - arrowHalf) : row2TextBottom;
@@ -1515,15 +1554,11 @@ function layoutDualStackedLandscape(
       return null;
     }
 
-    if (leftArrow !== "none") {
-      if (arrowCy1 - arrowHalf < innerBottom + arrowEdgePad || arrowCy1 + arrowHalf > innerTop - arrowEdgePad) {
-        return null;
-      }
+    if (leftArrow !== "none" && arrowCy1 - arrowHalf < innerBottom + arrowEdgePad) {
+      return null;
     }
-    if (rightArrow !== "none") {
-      if (arrowCy2 - arrowHalf < innerBottom + arrowEdgePad || arrowCy2 + arrowHalf > innerTop - arrowEdgePad) {
-        return null;
-      }
+    if (rightArrow !== "none" && arrowCy2 - arrowHalf < innerBottom + arrowEdgePad) {
+      return null;
     }
 
     const meta2 = computeMetaBaselinesFromContentFloor(
@@ -1594,11 +1629,13 @@ function layoutDualStackedLandscape(
     };
   };
 
-  const layout = fitSignageTitle(preferredTitleSize, tryLayoutAtSize);
-  if (!layout) {
-    throw new Error("Signage: stacked landscape dual titles cannot be laid out on this page.");
+  for (let i = 0; i < compactSteps.length; i++) {
+    const step = compactSteps[i]!;
+    const lastStep = i === compactSteps.length - 1;
+    const layout = fitSignageTitle(preferredTitleSize, (s, allow) => tryLayoutAtSize(s, allow, step, lastStep));
+    if (layout) return layout;
   }
-  return layout;
+  throw new Error("Signage: stacked landscape dual titles cannot be laid out on this page.");
 }
 
 function layoutSignageContentDual(
