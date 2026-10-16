@@ -1,20 +1,37 @@
 import { readFile } from "node:fs/promises";
 import { embedRasterDataUrl } from "@/lib/pdf/imageFormat";
 import path from "node:path";
-import { PDFDocument, rgb } from "pdf-lib";
+import { PDFDocument, degrees, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import type { FloorplanCanvasObject, FloorplanDocument } from "@/types";
 import { pdfPageDimensions } from "@/lib/paperSizes";
 import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
 import { hexToRgb } from "@/lib/pdf/color";
-import type { PDFFont } from "pdf-lib";
-
-function pickColor(type: FloorplanCanvasObject["type"]) {
-  if (type === "table") return rgb(0.67, 0.76, 0.83);
-  if (type === "rect") return rgb(0.84, 0.88, 0.92);
-  if (type === "circle") return rgb(0.82, 0.9, 0.86);
-  return rgb(0.2, 0.25, 0.3);
-}
+import type { PDFFont, PDFPage } from "pdf-lib";
+import {
+  DEFAULT_FILLS,
+  OCCUPANCY_COLORS,
+  OCCUPANCY_LABELS,
+  OUTLINE_COLOR,
+  TEXT_DEFAULT_COLOR,
+  chairMetrics,
+  estimateTextSize,
+  fixedPointsPerUnit,
+  ratioForScale,
+  objectBox,
+  objectsPrintBounds,
+  occupancyStatus,
+  printFit,
+  printLayout,
+  resolvePrintOptions,
+  rotatePoint,
+  seatOffsets,
+  tableSeatCount,
+  tableShape,
+  type OccupancyStatus
+} from "@/lib/floorplans/geometry";
+import { planTotals } from "@/lib/floorplans/checks";
+import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
@@ -34,14 +51,6 @@ async function loadFontBytes() {
   ]);
   cachedFontBytes = { body, bodyBold, title };
   return cachedFontBytes;
-}
-
-/** Outer radius from table centre including chair ring (matches draw loop). */
-function tableCanvasOuterRadius(radius: number): number {
-  const chairRadius = Math.max(2, radius * 0.18);
-  const chairGap = Math.max(2, radius * 0.14);
-  const chairRingRadius = radius + chairGap + chairRadius;
-  return chairRingRadius + chairRadius;
 }
 
 /** Shrink font until the full string fits on one line; at min size, truncate with an ellipsis. */
@@ -95,90 +104,223 @@ async function embedLogoFromDataUrl(
   }
 }
 
-type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
-
-function includePoint(bounds: Bounds, x: number, y: number): Bounds {
-  return {
-    minX: Math.min(bounds.minX, x),
-    minY: Math.min(bounds.minY, y),
-    maxX: Math.max(bounds.maxX, x),
-    maxY: Math.max(bounds.maxY, y)
-  };
+export interface FloorplanRenderOptions {
+  /** Guest list for the linked project; enables counts, occupancy colours and the guest list page. */
+  tableGuests?: TableGuestMap | null;
 }
 
-function estimateObjectBounds(item: FloorplanCanvasObject, textFontSizeFallback = 16): Bounds {
-  if (item.type === "table") {
-    const outer = tableCanvasOuterRadius(item.radius);
-    return {
-      minX: item.x - outer,
-      minY: item.y - outer,
-      maxX: item.x + outer,
-      maxY: item.y + outer
-    };
-  }
-  if (item.type === "rect") {
-    return {
-      minX: item.x,
-      minY: item.y,
-      maxX: item.x + item.width,
-      maxY: item.y + item.height
-    };
-  }
-  if (item.type === "circle") {
-    return {
-      minX: item.x - item.radius,
-      minY: item.y - item.radius,
-      maxX: item.x + item.radius,
-      maxY: item.y + item.radius
-    };
-  }
-  const fontSize = item.fontSize || textFontSizeFallback;
-  const approxW = Math.max(40, item.text.length * fontSize * 0.58);
-  const approxH = Math.max(12, fontSize * 1.25);
-  return {
-    minX: item.x,
-    minY: item.y,
-    maxX: item.x + approxW,
-    maxY: item.y + approxH
-  };
+type Rgb = ReturnType<typeof rgb>;
+
+const FRAME_BORDER: Rgb = rgb(0.58, 0.64, 0.72);
+const OUTLINE: Rgb = hexToRgb(OUTLINE_COLOR, "#8092a8");
+
+/** Polygon through PDF-space points; pdf-lib's SVG path origin is y-flipped, so negate y. */
+function drawPolygon(
+  page: PDFPage,
+  points: Array<{ x: number; y: number }>,
+  style: { color?: Rgb; borderColor: Rgb; borderWidth: number }
+) {
+  const d = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(3)} ${(-p.y).toFixed(3)}`).join(" ") + " Z";
+  page.drawSvgPath(d, { x: 0, y: 0, ...style });
 }
 
-function objectBounds(items: FloorplanCanvasObject[]): Bounds | null {
-  if (!items.length) return null;
-  let bounds: Bounds = {
-    minX: Number.POSITIVE_INFINITY,
-    minY: Number.POSITIVE_INFINITY,
-    maxX: Number.NEGATIVE_INFINITY,
-    maxY: Number.NEGATIVE_INFINITY
-  };
-  for (const item of items) {
-    const b = estimateObjectBounds(item);
-    bounds = includePoint(bounds, b.minX, b.minY);
-    bounds = includePoint(bounds, b.maxX, b.maxY);
-  }
-  if (!Number.isFinite(bounds.minX) || !Number.isFinite(bounds.minY)) return null;
-  return bounds;
+function parseFill(value: string | undefined, fallbackHex: string): Rgb | null {
+  if (value === "none") return null;
+  return hexToRgb(value, fallbackHex);
 }
 
-export async function renderFloorplanDocumentPdf(docInput: FloorplanDocument): Promise<Uint8Array> {
+/** Centre text in a box; shrinks to fit `maxWidth`. Returns the size used. */
+function drawCentered(
+  page: PDFPage,
+  font: PDFFont,
+  text: string,
+  cx: number,
+  baselineY: number,
+  maxWidth: number,
+  maxSize: number,
+  minSize: number,
+  color: Rgb
+): number {
+  const fit = fitTextSingleLine(font, text, Math.max(8, maxWidth), maxSize, minSize);
+  const w = font.widthOfTextAtSize(fit.line, fit.size);
+  page.drawText(fit.line, { x: cx - w / 2, y: baselineY, size: fit.size, font, color });
+  return fit.size;
+}
+
+function drawLegend(
+  page: PDFPage,
+  fonts: { body: PDFFont; bold: PDFFont },
+  layout: ReturnType<typeof printLayout>,
+  opts: {
+    summary: string;
+    occupancyKey: boolean;
+    scaleBar: { points: number; label: string } | null;
+    scaleNote: string | null;
+  }
+) {
+  const left = layout.margin + 14;
+  const right = layout.width - layout.margin - 14;
+  const base = layout.margin + layout.footerH / 2 - 3;
+  page.drawLine({
+    start: { x: layout.margin, y: layout.margin + layout.footerH },
+    end: { x: layout.width - layout.margin, y: layout.margin + layout.footerH },
+    thickness: 0.6,
+    color: FRAME_BORDER
+  });
+  const textColor = rgb(0.2, 0.26, 0.33);
+  page.drawText(opts.summary, { x: left, y: base, size: 9.5, font: fonts.bold, color: textColor });
+  let cursor = left + fonts.bold.widthOfTextAtSize(opts.summary, 9.5) + 22;
+
+  if (opts.occupancyKey) {
+    (Object.keys(OCCUPANCY_COLORS) as Array<keyof typeof OCCUPANCY_COLORS>).forEach((status) => {
+      page.drawRectangle({
+        x: cursor,
+        y: base - 1.5,
+        width: 9,
+        height: 9,
+        color: hexToRgb(OCCUPANCY_COLORS[status], "#cccccc"),
+        borderColor: OUTLINE,
+        borderWidth: 0.5
+      });
+      const label = OCCUPANCY_LABELS[status];
+      page.drawText(label, { x: cursor + 13, y: base, size: 8.5, font: fonts.body, color: textColor });
+      cursor += 13 + fonts.body.widthOfTextAtSize(label, 8.5) + 12;
+    });
+  }
+
+  let rightEdge = right;
+  if (opts.scaleNote) {
+    const noteW = fonts.bold.widthOfTextAtSize(opts.scaleNote, 8.5);
+    page.drawText(opts.scaleNote, { x: right - noteW, y: base, size: 8.5, font: fonts.bold, color: textColor });
+    rightEdge = right - noteW - 14;
+  }
+
+  if (opts.scaleBar) {
+    const { points, label } = opts.scaleBar;
+    const labelW = fonts.body.widthOfTextAtSize(label, 8.5);
+    const x1 = rightEdge - labelW - 8;
+    const x0 = x1 - points;
+    const y = base + 3;
+    page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 1.2, color: textColor });
+    page.drawLine({ start: { x: x0, y: y - 3.5 }, end: { x: x0, y: y + 3.5 }, thickness: 1, color: textColor });
+    page.drawLine({ start: { x: x1, y: y - 3.5 }, end: { x: x1, y: y + 3.5 }, thickness: 1, color: textColor });
+    page.drawText(label, { x: x1 + 6, y: base, size: 8.5, font: fonts.body, color: textColor });
+  }
+}
+
+const SCALE_BAR_STEPS_M = [0.5, 1, 2, 5, 10, 20, 50, 100];
+
+function pickScaleBar(unitsPerMetre: number, scale: number): { points: number; label: string } | null {
+  const pointsPerMetre = unitsPerMetre * scale;
+  if (!Number.isFinite(pointsPerMetre) || pointsPerMetre <= 0) return null;
+  let chosen: number | null = null;
+  for (const metres of SCALE_BAR_STEPS_M) {
+    if (metres * pointsPerMetre <= 150) chosen = metres;
+  }
+  if (chosen == null) chosen = SCALE_BAR_STEPS_M[0];
+  return { points: chosen * pointsPerMetre, label: `${chosen} m` };
+}
+
+function drawGuestListPages(
+  pdf: PDFDocument,
+  fonts: { body: PDFFont; bold: PDFFont; title: PDFFont },
+  doc: FloorplanDocument,
+  guests: TableGuestMap,
+  seatsByTable: Map<string, number>
+) {
+  const [width, height] = pdfPageDimensions(doc.canvas.paperSize, doc.canvas.orientation);
+  const margin = 40;
+  const gutter = 22;
+  const columns = width > 1000 ? 4 : width > 700 ? 3 : 2;
+  const colW = (width - margin * 2 - gutter * (columns - 1)) / columns;
+  const top = height - margin - 38;
+  const bottom = margin;
+  const lineH = 11.5;
+  const headingSize = 10.5;
+  const nameSize = 8.5;
+
+  const keys = Object.keys(guests).sort(naturalTableCompare);
+  const heading = `${doc.metadata.title || doc.themeSnapshot.eventName || "Floorplan"} — guest list`;
+  const title = normalizeForCormorantLigatureSafe(heading);
+
+  let page: PDFPage | null = null;
+  let column = 0;
+  let y = top;
+
+  const newPage = () => {
+    page = pdf.addPage([width, height]);
+    const fit = fitTextSingleLine(fonts.title, title, width - margin * 2, 22, 11);
+    page.drawText(fit.line, { x: margin, y: height - margin - 14, size: fit.size, font: fonts.title, color: rgb(0.04, 0.18, 0.26) });
+    page.drawLine({
+      start: { x: margin, y: height - margin - 24 },
+      end: { x: width - margin, y: height - margin - 24 },
+      thickness: 0.8,
+      color: FRAME_BORDER
+    });
+    column = 0;
+    y = top;
+  };
+  const advance = () => {
+    column += 1;
+    if (column >= columns) newPage();
+    else y = top;
+  };
+  newPage();
+
+  for (const key of keys) {
+    const info = guests[key];
+    // Keep a heading with at least its first few guests.
+    if (y - (lineH + 2 + Math.min(info.guests.length, 3) * lineH) < bottom) advance();
+    const seats = seatsByTable.get(key);
+    const headText = `Table ${key} · ${info.count}${seats != null ? `/${seats}` : ""}`;
+    const x = margin + column * (colW + gutter);
+    page!.drawText(headText, { x, y, size: headingSize, font: fonts.bold, color: rgb(0.04, 0.18, 0.26) });
+    y -= lineH + 2;
+    for (const guest of info.guests) {
+      if (y < bottom) {
+        advance();
+        const cx = margin + column * (colW + gutter);
+        page!.drawText(`Table ${key} (cont.)`, { x: cx, y, size: headingSize - 1, font: fonts.bold, color: rgb(0.4, 0.46, 0.54) });
+        y -= lineH + 2;
+      }
+      const cx = margin + column * (colW + gutter);
+      const name = fitTextSingleLine(fonts.body, guest.name || "—", colW, nameSize, 6.5);
+      page!.drawText(name.line, { x: cx, y, size: nameSize, font: fonts.body, color: rgb(0.12, 0.16, 0.2) });
+      if (guest.dietary) {
+        const used = fonts.body.widthOfTextAtSize(name.line, name.size) + 5;
+        const room = colW - used;
+        if (room > 24) {
+          const note = fitTextSingleLine(fonts.body, guest.dietary, room, 7, 5.5);
+          page!.drawText(note.line, { x: cx + used, y: y + 0.4, size: note.size, font: fonts.body, color: rgb(0.7, 0.28, 0.2) });
+        }
+      }
+      y -= lineH;
+    }
+    y -= 8;
+  }
+}
+
+export async function renderFloorplanDocumentPdf(
+  docInput: FloorplanDocument,
+  renderOptions: FloorplanRenderOptions = {}
+): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const fonts = await loadFontBytes();
-  const bodyFont = await pdf.embedFont(fonts.body, { subset: true });
-  const bodyBold = await pdf.embedFont(fonts.bodyBold, { subset: true });
-  const titleFont = await pdf.embedFont(fonts.title, { subset: false });
-  const [width, height] = pdfPageDimensions(docInput.canvas.paperSize, docInput.canvas.orientation);
+  const fontBytes = await loadFontBytes();
+  const bodyFont = await pdf.embedFont(fontBytes.body, { subset: true });
+  const bodyBold = await pdf.embedFont(fontBytes.bodyBold, { subset: true });
+  const titleFont = await pdf.embedFont(fontBytes.title, { subset: false });
+
+  const print = resolvePrintOptions(docInput.print);
+  const guests = renderOptions.tableGuests ?? null;
+  const layout = printLayout(docInput.canvas.paperSize, docInput.canvas.orientation, print.legend);
+  const { width, height, margin, bodyTop } = layout;
   const page = pdf.addPage([width, height]);
-  /** Extra room so scaled tables + chairs stay inside the frame (left/right/bottom). */
-  const margin = 40;
-  const bodyPad = 22;
-  const headerH = 96;
-  const bodyTop = height - headerH - margin;
-  const grid = docInput.canvas.gridSize || 24;
   const logoXInset = 24;
   const logoGap = 16;
   const logoWidth = 86;
   const titleBandMaxW = Math.max(100, width - 2 * (logoXInset + logoWidth + logoGap));
+  const headerH = layout.headerH;
 
   page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: rgb(1, 1, 1) });
   const titleText = normalizeForCormorantLigatureSafe(
@@ -230,112 +372,158 @@ export async function renderFloorplanDocumentPdf(docInput: FloorplanDocument): P
     width: width - margin * 2,
     height: bodyTop - margin,
     borderWidth: 1.3,
-    borderColor: rgb(0.58, 0.64, 0.72),
+    borderColor: FRAME_BORDER,
     color: rgb(0.99, 0.995, 1)
   });
 
-  const contentLeft = margin + bodyPad;
-  const contentBottom = margin + bodyPad;
-  const contentWidth = width - (margin + bodyPad) * 2;
-  const contentHeight = bodyTop - (margin + bodyPad) - contentBottom;
-  const bounds = objectBounds(docInput.objects);
-  const sourceMinX = bounds?.minX ?? 0;
-  const sourceMinY = bounds?.minY ?? 0;
-  const sourceWidth = Math.max(1, (bounds?.maxX ?? 1) - sourceMinX);
-  const sourceHeight = Math.max(1, (bounds?.maxY ?? 1) - sourceMinY);
-
-  // Auto-fit: scale up sparse plans and scale down dense plans.
-  const fitScale = Math.min(contentWidth / sourceWidth, contentHeight / sourceHeight);
-  const scale = Math.max(0.2, Math.min(8, fitScale));
-  const drawnWidth = sourceWidth * scale;
-  const drawnHeight = sourceHeight * scale;
-  const offsetX = contentLeft + (contentWidth - drawnWidth) / 2;
-  const offsetY = contentBottom + (contentHeight - drawnHeight) / 2;
-
-  const mapX = (x: number) => offsetX + (x - sourceMinX) * scale;
-  const mapYTop = (y: number) => offsetY + (y - sourceMinY) * scale;
+  const unitsPerMetre = docInput.canvas.unitsPerMetre && docInput.canvas.unitsPerMetre > 0 ? docInput.canvas.unitsPerMetre : null;
+  const wantedScale = fixedPointsPerUnit(print.fixedScale, unitsPerMetre);
+  const fit = printFit(objectsPrintBounds(docInput.objects), layout, wantedScale);
+  const { scale, frame } = fit;
+  const toX = (x: number) => layout.contentLeft + (x - frame.minX) * scale;
+  const toY = (y: number) => layout.contentBottom + layout.contentHeight - (y - frame.minY) * scale;
+  const strokeWidth = Math.max(0.7, Math.min(1.6, scale));
+  const textColor = hexToRgb(docInput.themeSnapshot.textColor, "#1a2430");
+  const seatsByTable = new Map<string, number>();
 
   for (const item of docInput.objects) {
-    const x = mapX(item.x);
-    const yTop = mapYTop(item.y);
-    const y = bodyTop - yTop;
+    const box = objectBox(item);
+    const cx = toX(box.cx);
+    const cy = toY(box.cy);
+
     if (item.type === "table") {
-      const radius = item.radius * scale;
-      const chairRadius = Math.max(2, radius * 0.18);
-      const chairGap = Math.max(2, radius * 0.14);
-      const chairRingRadius = radius + chairGap + chairRadius;
-      const chairCount = 8;
-      for (let i = 0; i < chairCount; i += 1) {
-        const angle = (i / chairCount) * Math.PI * 2 - Math.PI / 2;
-        const chx = x + chairRingRadius * Math.cos(angle);
-        const chy = y + chairRingRadius * Math.sin(angle);
+      const seats = tableSeatCount(item);
+      const key = tableKey(item.tableNumber);
+      if (!seatsByTable.has(key)) seatsByTable.set(key, seats);
+      const guestCount = guestCountFor(key, guests);
+
+      const chair = chairMetrics(item);
+      for (const off of seatOffsets(item)) {
         page.drawCircle({
-          x: chx,
-          y: chy,
-          size: chairRadius,
+          x: toX(item.x + off.x),
+          y: toY(item.y + off.y),
+          size: chair.radius * scale,
           color: rgb(0.83, 0.9, 0.95),
-          borderWidth: Math.max(0.45, scale * 0.65),
+          borderWidth: Math.max(0.45, strokeWidth * 0.65),
           borderColor: rgb(0.5, 0.57, 0.66)
         });
       }
-      page.drawCircle({
-        x,
-        y,
-        size: radius,
-        color: pickColor("table"),
-        borderWidth: Math.max(0.7, scale),
-        borderColor: rgb(0.5, 0.57, 0.66)
-      });
-      const label = `Table ${item.tableNumber}`;
-      const labelColor = hexToRgb(docInput.themeSnapshot.textColor, "#1a2430");
-      let tableLabelSize = Math.min(15, Math.max(8, (radius * 2) / 6.5));
-      let labelWidth = bodyBold.widthOfTextAtSize(label, tableLabelSize);
-      const maxLabelW = (radius * 2 - 5) * 0.95;
-      while (labelWidth > maxLabelW && tableLabelSize > 6) {
-        tableLabelSize -= 0.5;
-        labelWidth = bodyBold.widthOfTextAtSize(label, tableLabelSize);
+
+      const status: OccupancyStatus =
+        print.colorByOccupancy && guestCount != null ? occupancyStatus(seats, guestCount) : "none";
+      const fill = hexToRgb(
+        item.fill ?? (status !== "none" ? OCCUPANCY_COLORS[status] : DEFAULT_FILLS.table),
+        DEFAULT_FILLS.table
+      );
+      const style = { color: fill, borderColor: rgb(0.5, 0.57, 0.66), borderWidth: strokeWidth };
+      if (tableShape(item) === "round") {
+        page.drawCircle({ x: cx, y: cy, size: item.radius * scale, ...style });
+      } else {
+        const corners = [
+          [-1, -1],
+          [1, -1],
+          [1, 1],
+          [-1, 1]
+        ].map(([sx, sy]) => {
+          const p = rotatePoint({ x: (sx * box.w) / 2, y: (sy * box.h) / 2 }, box.rotation);
+          return { x: toX(box.cx + p.x), y: toY(box.cy + p.y) };
+        });
+        drawPolygon(page, corners, style);
       }
-      page.drawText(label, {
-        x: x - labelWidth / 2,
-        y: y - tableLabelSize * 0.35,
-        font: bodyBold,
-        size: tableLabelSize,
-        color: labelColor
-      });
+
+      const customLabel = item.label?.trim();
+      let label = customLabel || `Table ${item.tableNumber}`;
+      const showCount = print.guestCounts && guestCount != null;
+      const innerW = tableShape(item) === "round" ? box.w * scale : Math.min(box.w, box.h * 2.6) * scale;
+      const mainMax = Math.min(15, Math.max(8, innerW / 6.5));
+      const maxLabelW = (innerW - 5) * 0.95;
+      // At small print scales "Table 12" can't fit legibly; the number alone still can.
+      if (!customLabel && bodyBold.widthOfTextAtSize(label, 6) > maxLabelW) label = item.tableNumber;
+      if (showCount) {
+        const sub = `${guestCount}/${seats}`;
+        const mainSize = fitTextSingleLine(bodyBold, label, maxLabelW, mainMax, 4.5).size;
+        const subSize = Math.max(5.5, mainSize * 0.78);
+        const total = mainSize + subSize * 1.15;
+        drawCentered(page, bodyBold, label, cx, cy + total / 2 - mainSize * 0.78, maxLabelW, mainMax, 4.5, textColor);
+        drawCentered(page, bodyFont, sub, cx, cy + total / 2 - mainSize - subSize * 0.95, maxLabelW, subSize, 5, textColor);
+      } else {
+        drawCentered(page, bodyBold, label, cx, cy - mainMax * 0.35, maxLabelW, mainMax, 4.5, textColor);
+      }
       continue;
     }
-    if (item.type === "rect") {
-      page.drawRectangle({
-        x,
-        y: y - item.height * scale,
-        width: item.width * scale,
-        height: item.height * scale,
-        color: pickColor("rect"),
-        borderWidth: Math.max(0.7, scale),
-        borderColor: rgb(0.5, 0.57, 0.66)
-      });
+
+    if (item.type === "rect" || item.type === "circle") {
+      const fill = parseFill(item.fill, item.type === "rect" ? DEFAULT_FILLS.rect : DEFAULT_FILLS.circle);
+      const style = { ...(fill ? { color: fill } : {}), borderColor: rgb(0.5, 0.57, 0.66), borderWidth: strokeWidth };
+      if (item.type === "circle") {
+        page.drawCircle({ x: cx, y: cy, size: item.radius * scale, ...style, ...(fill ? {} : { color: undefined }) });
+      } else {
+        const corners = [
+          [-1, -1],
+          [1, -1],
+          [1, 1],
+          [-1, 1]
+        ].map(([sx, sy]) => {
+          const p = rotatePoint({ x: (sx * box.w) / 2, y: (sy * box.h) / 2 }, box.rotation);
+          return { x: toX(box.cx + p.x), y: toY(box.cy + p.y) };
+        });
+        drawPolygon(page, corners, style);
+      }
+      const label = item.label?.trim();
+      if (label) {
+        const sideways = Math.abs(Math.sin((box.rotation * Math.PI) / 180)) > 0.7;
+        const usable = (sideways ? box.h : box.w) * scale;
+        const tall = (sideways ? box.w : box.h) * scale;
+        const maxSize = Math.max(7, Math.min(16, tall * 0.4));
+        const size = fitTextSingleLine(bodyBold, label, usable - 6, maxSize, 5).size;
+        drawCentered(page, bodyBold, label, cx, cy - size * 0.35, usable - 6, maxSize, 5, textColor);
+      }
       continue;
     }
-    if (item.type === "circle") {
-      page.drawCircle({
-        x,
-        y,
-        size: item.radius * scale,
-        color: pickColor("circle"),
-        borderWidth: Math.max(0.7, scale),
-        borderColor: rgb(0.5, 0.57, 0.66)
+
+    // Text: rotates about the centre of its box.
+    const size = Math.max(4, Math.min(120, item.fontSize * scale));
+    const font = item.bold ? bodyBold : bodyFont;
+    const color = hexToRgb(item.color, TEXT_DEFAULT_COLOR);
+    const lines = (item.text || "").split("\n");
+    const { w, h } = estimateTextSize(item);
+    lines.forEach((line, index) => {
+      if (!line) return;
+      const local = rotatePoint({ x: -w / 2, y: -h / 2 + index * item.fontSize * 1.25 + item.fontSize * 0.98 }, box.rotation);
+      page.drawText(line, {
+        x: toX(box.cx + local.x),
+        y: toY(box.cy + local.y),
+        size,
+        font,
+        color,
+        rotate: degrees(-box.rotation)
       });
-      continue;
-    }
-    page.drawText(item.text, {
-      x,
-      y,
-      size: Math.max(7, Math.min(48, item.fontSize * scale)),
-      font: bodyFont,
-      color: pickColor("text"),
-      maxWidth: Math.max(grid * 8, 160) * scale
     });
   }
+
+  if (print.legend) {
+    const totals = planTotals(docInput.objects, guests);
+    const parts = [`${totals.tables} table${totals.tables === 1 ? "" : "s"}`, `${totals.seats} seats`];
+    if (totals.guests != null) parts.push(`${totals.guests} guests`);
+    let scaleNote: string | null = null;
+    if (unitsPerMetre) {
+      if (wantedScale != null && fit.fits) scaleNote = `1:${print.fixedScale}`;
+      else {
+        const approx = Math.round(ratioForScale(scale, unitsPerMetre) / 5) * 5 || 1;
+        scaleNote = wantedScale != null ? `approx. 1:${approx} (too big for 1:${print.fixedScale})` : `approx. 1:${approx}`;
+      }
+    }
+    drawLegend(page, { body: bodyFont, bold: bodyBold }, layout, {
+      summary: parts.join("  ·  "),
+      occupancyKey: print.colorByOccupancy && guests != null,
+      scaleBar: print.scaleBar && unitsPerMetre ? pickScaleBar(unitsPerMetre, scale) : null,
+      scaleNote: print.scaleBar || print.fixedScale ? scaleNote : null
+    });
+  }
+
+  if (print.guestListPage && guests && Object.keys(guests).length) {
+    drawGuestListPages(pdf, { body: bodyFont, bold: bodyBold, title: titleFont }, docInput, guests, seatsByTable);
+  }
+
   return pdf.save();
 }
-

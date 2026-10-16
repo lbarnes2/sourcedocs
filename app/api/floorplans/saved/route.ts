@@ -52,7 +52,9 @@ export async function PUT(request: Request) {
           data.metadata.subtitle || data.themeSnapshot?.eventSubtitle || defaultThemeSettings.eventSubtitle
       },
       selectedClientLogoKey: data.selectedClientLogoKey ?? null,
-      selectedVenueLogoKey: data.selectedVenueLogoKey ?? null
+      selectedVenueLogoKey: data.selectedVenueLogoKey ?? null,
+      projectId: data.projectId ?? null,
+      ...(data.print ? { print: data.print } : {})
     };
     await saveFloorplan(doc);
     return NextResponse.json({ ok: true, id: doc.id, savedAt: doc.savedAt });
