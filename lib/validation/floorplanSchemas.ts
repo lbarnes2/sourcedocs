@@ -13,27 +13,58 @@ const objectBase = z.object({
   y: z.number().min(-20_000).max(20_000)
 });
 
+const rotationSchema = z.number().min(-360).max(720);
+const colorSchema = z.string().max(20);
+
 const tableObjectSchema = objectBase.extend({
   type: z.literal("table"),
   tableNumber: z.string().min(1).max(100),
-  radius: z.number().min(6).max(200)
+  radius: z.number().min(6).max(400),
+  shape: z.enum(["round", "rect"]).optional(),
+  seats: z.number().int().min(0).max(60).optional(),
+  width: z.number().min(6).max(10_000).optional(),
+  height: z.number().min(6).max(10_000).optional(),
+  rotation: rotationSchema.optional(),
+  seatSpan: z.number().min(30).max(360).optional(),
+  seatsOneSide: z.boolean().optional(),
+  label: z.string().max(200).optional(),
+  fill: colorSchema.optional()
 });
 
 const rectObjectSchema = objectBase.extend({
   type: z.literal("rect"),
   width: z.number().min(6).max(10_000),
-  height: z.number().min(6).max(10_000)
+  height: z.number().min(6).max(10_000),
+  rotation: rotationSchema.optional(),
+  label: z.string().max(200).optional(),
+  fill: colorSchema.optional()
 });
 
 const circleObjectSchema = objectBase.extend({
   type: z.literal("circle"),
-  radius: z.number().min(4).max(10_000)
+  radius: z.number().min(4).max(10_000),
+  label: z.string().max(200).optional(),
+  fill: colorSchema.optional()
 });
 
 const textObjectSchema = objectBase.extend({
   type: z.literal("text"),
   text: z.string().max(5_000),
-  fontSize: z.number().min(6).max(200)
+  fontSize: z.number().min(6).max(200),
+  rotation: rotationSchema.optional(),
+  bold: z.boolean().optional(),
+  color: colorSchema.optional()
+});
+
+const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();
+
+export const floorplanPrintOptionsSchema = z.object({
+  legend: z.boolean(),
+  guestCounts: z.boolean(),
+  colorByOccupancy: z.boolean(),
+  guestListPage: z.boolean(),
+  scaleBar: z.boolean(),
+  fixedScale: z.number().min(1).max(5000).nullable().optional()
 });
 
 export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
@@ -60,13 +91,16 @@ export const floorplanDocumentSchema = z.object({
   canvas: z.object({
     paperSize: floorplanSchema.shape.paperSize,
     orientation: floorplanSchema.shape.orientation,
-    gridSize: z.number().int().min(4).max(200)
+    gridSize: z.number().int().min(4).max(200),
+    unitsPerMetre: canvasUnitsPerMetreSchema
   }),
   objects: z.array(floorplanCanvasObjectSchema).max(5000),
   autoLayout: autoLayoutFloorplanDocSchema,
   themeSnapshot: themeSchema,
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
-  selectedVenueLogoKey: z.string().max(500).nullable().optional()
+  selectedVenueLogoKey: z.string().max(500).nullable().optional(),
+  projectId: z.string().max(200).nullable().optional(),
+  print: floorplanPrintOptionsSchema.optional()
 });
 
 export const floorplanSavePayloadSchema = z.object({
@@ -82,14 +116,17 @@ export const floorplanSavePayloadSchema = z.object({
     .object({
       paperSize: floorplanSchema.shape.paperSize.optional(),
       orientation: floorplanSchema.shape.orientation.optional(),
-      gridSize: z.number().int().min(4).max(200).optional()
+      gridSize: z.number().int().min(4).max(200).optional(),
+      unitsPerMetre: canvasUnitsPerMetreSchema
     })
     .optional(),
   objects: z.array(floorplanCanvasObjectSchema).max(5000),
   autoLayout: autoLayoutFloorplanDocSchema.optional(),
   themeSnapshot: themeSchema.optional(),
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
-  selectedVenueLogoKey: z.string().max(500).nullable().optional()
+  selectedVenueLogoKey: z.string().max(500).nullable().optional(),
+  projectId: z.string().max(200).nullable().optional(),
+  print: floorplanPrintOptionsSchema.optional()
 });
 
 export function withFloorplanSaveDefaults(raw: z.infer<typeof floorplanSavePayloadSchema>) {

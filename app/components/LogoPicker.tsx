@@ -12,12 +12,17 @@ type Props = {
   items: LogoPickerItem[];
   value: string;
   onChange: (key: string) => void;
-  emptyOption?: { label: string; value: string };
+  /** Leading tile for "no choice"; `assetUrl` shows an image instead of the empty icon (e.g. the default it stands for). */
+  emptyOption?: { label: string; value: string; assetUrl?: string };
   /** Extra leading tile (e.g. “No logo” vs “Use profile default”) with its own `value`. */
   secondaryEmptyOption?: { label: string; value: string };
   disabled?: boolean;
   manageHref?: string;
   manageLabel?: string;
+  /** Tall A4-shaped tiles, for page backgrounds rather than logos. */
+  portrait?: boolean;
+  /** Text shown when the library is empty. */
+  emptyText?: string;
 };
 
 /**
@@ -33,13 +38,15 @@ export function LogoPicker({
   secondaryEmptyOption,
   disabled,
   manageHref = "/logo-library",
-  manageLabel = "Manage logos"
+  manageLabel = "Manage logos",
+  portrait,
+  emptyText = "No logos in this library yet."
 }: Props) {
   const [open, setOpen] = useState(false);
   const off = Boolean(disabled);
   const selectedItem = items.find((item) => item.key === value);
   const emptyChoices = [emptyOption, secondaryEmptyOption].filter(
-    (option): option is { label: string; value: string } => Boolean(option)
+    (option): option is { label: string; value: string; assetUrl?: string } => Boolean(option)
   );
   const selectedEmpty = emptyChoices.find((option) => option.value === value);
   const currentLabel = selectedItem?.label ?? selectedEmpty?.label ?? (value ? "Unknown logo" : "None");
@@ -61,7 +68,13 @@ export function LogoPicker({
         aria-label={title ? `${title}: ${currentLabel}` : currentLabel}
       >
         <span className="logo-trigger-thumb" aria-hidden>
-          {selectedItem ? <img src={selectedItem.assetUrl} alt="" /> : <ImageOff size={16} />}
+          {selectedItem ? (
+            <img src={selectedItem.assetUrl} alt="" />
+          ) : selectedEmpty?.assetUrl ? (
+            <img src={selectedEmpty.assetUrl} alt="" />
+          ) : (
+            <ImageOff size={16} />
+          )}
         </span>
         <span className="logo-trigger-label">{currentLabel}</span>
         <ChevronDown size={16} className="logo-trigger-chevron" aria-hidden />
@@ -80,7 +93,7 @@ export function LogoPicker({
             ) : undefined
           }
         >
-          <div className="logo-grid">
+          <div className={portrait ? "logo-grid logo-grid--portrait" : "logo-grid"}>
             {emptyChoices.map((option) => (
               <button
                 key={`empty-${option.value}`}
@@ -89,9 +102,15 @@ export function LogoPicker({
                 className={value === option.value ? "logo-tile logo-tile--selected" : "logo-tile"}
                 onClick={() => choose(option.value)}
               >
-                <span className="logo-tile-img logo-tile-img--empty">
-                  <ImageOff size={22} aria-hidden />
-                </span>
+                {option.assetUrl ? (
+                  <span className="logo-tile-img">
+                    <img src={option.assetUrl} alt="" />
+                  </span>
+                ) : (
+                  <span className="logo-tile-img logo-tile-img--empty">
+                    <ImageOff size={22} aria-hidden />
+                  </span>
+                )}
                 <span className="logo-tile-label">{option.label}</span>
                 {value === option.value ? <Check size={14} className="logo-tile-check" aria-hidden /> : null}
               </button>
@@ -121,7 +140,7 @@ export function LogoPicker({
           </div>
           {items.length === 0 ? (
             <p className="text-muted" style={{ marginTop: 12 }}>
-              No logos in this library yet.
+              {emptyText}
             </p>
           ) : null}
         </Modal>

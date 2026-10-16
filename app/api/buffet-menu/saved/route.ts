@@ -36,7 +36,7 @@ export async function PUT(request: Request) {
       { status: 400 }
     );
   }
-  const { id: bodyId, name, menu, venueLogoKey } = parsed.data;
+  const { id: bodyId, name, menu, venueLogoKey, displayBackgroundKey } = parsed.data;
   const id = bodyId?.trim() || randomUUID();
   const savedAt = new Date().toISOString();
   const doc: BuffetMenuSavedFile = {
@@ -44,6 +44,7 @@ export async function PUT(request: Request) {
     savedAt,
     name: name.trim(),
     venueLogoKey: venueLogoKey !== undefined && venueLogoKey !== null ? venueLogoKey : null,
+    displayBackgroundKey: displayBackgroundKey ?? null,
     menu
   };
   try {

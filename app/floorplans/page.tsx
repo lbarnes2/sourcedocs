@@ -1,6 +1,6 @@
 "use client";
 
-import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -10,132 +10,564 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalDistributeCenter,
-  Circle,
-  CircleDot,
   Copy,
+  CopyPlus,
   Download,
   Eraser,
+  Eye,
+  FilePlus,
   FolderOpen,
+  Frame,
+  Grid3x3,
+  Hand,
   Maximize,
-  RotateCcw,
+  Redo2,
   Save,
-  Square,
-  SquareDashed,
-  SquareDashedMousePointer,
   Trash2,
-  Type,
   Undo2,
   ZoomIn,
   ZoomOut
 } from "lucide-react";
 import { LogoPicker } from "@/app/components/LogoPicker";
-import { Callout, Field, Modal, PageHeader, Section, Segmented, Toasts } from "@/app/components/ui";
-import { buildEmptyFloorplanDraft, buildTablesFromAutoLayout, copyForDuplicate } from "@/lib/floorplans/model";
+import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts } from "@/app/components/ui";
+import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
+import { Inspector } from "@/app/floorplans/Inspector";
+import { OBJECT_PRESETS } from "@/app/floorplans/presets";
+import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
+import {
+  DEFAULT_UNITS_PER_METRE,
+  ROUND_TABLE_SIZES,
+  type RoundTableSize,
+  FIXED_SCALE_OPTIONS,
+  fixedPointsPerUnit,
+  nextTableNumber,
+  objectBodyBounds,
+  objectBox,
+  objectsPrintBounds,
+  printFit,
+  printLayout,
+  recommendedRadius,
+  recommendedRectSize,
+  resolvePrintOptions,
+  tableSeatCount,
+  tableShape,
+  withCentre,
+  type Bounds
+} from "@/lib/floorplans/geometry";
+import { buildTableGuests, guestCountFor, naturalTableCompare, type TableGuestMap } from "@/lib/floorplans/guests";
+import {
+  buildEmptyFloorplanDraft,
+  buildTablesFromAutoLayout,
+  copyForDuplicate,
+  type TableStyle
+} from "@/lib/floorplans/model";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob, downloadPdfBlobAsPngs } from "@/lib/pdf/pdfToPngExport";
-import type { FloorplanCanvasObject, FloorplanDocument, FloorplanListItem } from "@/types";
-
-/** Next free table number: one past the highest numeric table (shapes and labels don't count). */
-function nextTableNumber(objects: FloorplanCanvasObject[]): string {
-  let highest = 0;
-  for (const obj of objects) {
-    if (obj.type !== "table") continue;
-    const n = Number(obj.tableNumber);
-    if (Number.isInteger(n) && n > highest) highest = n;
-  }
-  return String(highest + 1);
-}
+import type {
+  FloorplanCanvasObject,
+  FloorplanDocument,
+  FloorplanListItem,
+  FloorplanPrintOptions,
+  FloorplanTableObject,
+  GuestRecord,
+  ProjectListItem
+} from "@/types";
 
 const PAPER_OPTIONS = PAPER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.value }));
 const ORIENTATION_OPTIONS = [
   { value: "portrait" as const, label: "Portrait" },
   { value: "landscape" as const, label: "Landscape" }
 ];
+const STYLE_OPTIONS: Array<{ value: TableStyle; label: string; title: string }> = [
+  { value: "round", label: "Round", title: "Round tables with chairs all the way round" },
+  { value: "cabaret", label: "Cabaret", title: "Round tables seated on the side facing the stage (stage at the top)" },
+  { value: "long", label: "Long", title: "Long rectangular tables seated on both sides" }
+];
 
-function snap(value: number, grid: number, free: boolean): number {
-  if (free) return value;
-  return Math.round(value / grid) * grid;
+const AUTOSAVE_KEY = "floorplan-autosave-v1";
+const MAX_HISTORY = 100;
+
+type Library = { loaded: boolean; configured: boolean; items: Array<{ key: string; label: string; assetUrl: string }> };
+const EMPTY_LIBRARY: Library = { loaded: false, configured: false, items: [] };
+
+type Autosave = { doc: FloorplanDocument; at: string };
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "earlier" : d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
 
 export default function FloorplansPage() {
   const [draft, setDraft] = useState<FloorplanDocument>(() => buildEmptyFloorplanDraft());
-  const [undoStack, setUndoStack] = useState<FloorplanDocument[]>([]);
+  const draftRef = useRef(draft);
+  const pastRef = useRef<FloorplanDocument[]>([]);
+  const futureRef = useRef<FloorplanDocument[]>([]);
+  const coalesceRef = useRef<{ key: string | null; at: number }>({ key: null, at: 0 });
+  const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
+  const [dirty, setDirty] = useState(false);
+
   const [items, setItems] = useState<FloorplanListItem[]>([]);
-  const [tableCount, setTableCount] = useState(12);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dragState, setDragState] = useState<{
-    ids: string[];
-    startPoint: { x: number; y: number };
-    startPositions: Record<string, { x: number; y: number }>;
-  } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
+  const [view, setView] = useState<CanvasView>({ zoom: 1, pan: { x: 0, y: 0 } });
+  const [panTool, setPanTool] = useState(false);
+  const [spaceDown, setSpaceDown] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  const [showFrame, setShowFrame] = useState(true);
+  const showFrameRef = useRef(true);
+  showFrameRef.current = showFrame;
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const [outputFormat, setOutputFormat] = useState<"pdf" | "png">("pdf");
   const [listOpen, setListOpen] = useState(false);
-  const [venueLogoLibrary, setVenueLogoLibrary] = useState<{
-    loaded: boolean;
-    configured: boolean;
-    items: Array<{ key: string; label: string; assetUrl: string }>;
-  }>({ loaded: false, configured: false, items: [] });
-  const [clientLogoLibrary, setClientLogoLibrary] = useState<{
-    loaded: boolean;
-    configured: boolean;
-    items: Array<{ key: string; label: string; assetUrl: string }>;
-  }>({ loaded: false, configured: false, items: [] });
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [venueLogoLibrary, setVenueLogoLibrary] = useState<Library>(EMPTY_LIBRARY);
+  const [clientLogoLibrary, setClientLogoLibrary] = useState<Library>(EMPTY_LIBRARY);
 
-  const selected = useMemo(
-    () => draft.objects.find((obj) => obj.id === activeId) ?? null,
-    [activeId, draft.objects]
+  // Auto layout form
+  const [tableCount, setTableCount] = useState(12);
+  const [roundSize, setRoundSize] = useState<RoundTableSize>("6ft");
+  const [seatsPerTable, setSeatsPerTable] = useState<number>(ROUND_TABLE_SIZES["6ft"].seats);
+  const [tableStyle, setTableStyle] = useState<TableStyle>("round");
+  const [withTopTable, setWithTopTable] = useState(false);
+  const [useGuestNumbers, setUseGuestNumbers] = useState(true);
+
+  // Guest list link
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const [guestRecords, setGuestRecords] = useState<GuestRecord[] | null>(null);
+  const [guestsLoading, setGuestsLoading] = useState(false);
+
+  const [recovered, setRecovered] = useState<Autosave | null>(null);
+  const clipboardRef = useRef<{ objects: FloorplanCanvasObject[]; pastes: number } | null>(null);
+
+  /* ---------- derived ---------- */
+
+  const objects = draft.objects;
+  const validSelected = useMemo(() => {
+    const ids = new Set(objects.map((o) => o.id));
+    return selectedIds.filter((id) => ids.has(id));
+  }, [objects, selectedIds]);
+  const primary = useMemo(
+    () => objects.find((o) => o.id === validSelected[validSelected.length - 1]) ?? null,
+    [objects, validSelected]
   );
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const print = resolvePrintOptions(draft.print);
+  const unitsPerMetre = draft.canvas.unitsPerMetre && draft.canvas.unitsPerMetre > 0 ? draft.canvas.unitsPerMetre : null;
+  const tableGuests: TableGuestMap | null = useMemo(
+    () => (guestRecords ? buildTableGuests(guestRecords) : null),
+    [guestRecords]
+  );
+  const totals = useMemo(() => planTotals(objects, tableGuests), [objects, tableGuests]);
+  const hasTables = objects.some((o) => o.type === "table");
+  const wantedScale = fixedPointsPerUnit(print.fixedScale, unitsPerMetre);
 
-  function pushUndoSnapshot(snapshot?: FloorplanDocument) {
-    const base = snapshot ?? draft;
-    setUndoStack((previous) => [...previous, structuredClone(base)].slice(-80));
+  const fit = useMemo(() => {
+    if (objects.length === 0) return null;
+    const layout = printLayout(draft.canvas.paperSize, draft.canvas.orientation, print.legend);
+    return printFit(objectsPrintBounds(objects), layout, wantedScale);
+  }, [objects, draft.canvas.paperSize, draft.canvas.orientation, print.legend, wantedScale]);
+  const frame: Bounds | null = showFrame && fit ? fit.frame : null;
+
+  const issues = useMemo(() => {
+    const list: PlanIssue[] = buildPlanIssues(objects, tableGuests);
+    if (fit && wantedScale != null && !fit.fits) {
+      list.unshift({
+        id: "scale-fit",
+        severity: "warning",
+        message: `The plan is too big to print at 1:${print.fixedScale} on ${draft.canvas.paperSize} ${draft.canvas.orientation}. It will be scaled to fit instead; try A3, a smaller scale, or a smaller plan.`,
+        objectIds: []
+      });
+    }
+    return list;
+  }, [objects, tableGuests, fit, wantedScale, print.fixedScale, draft.canvas.paperSize, draft.canvas.orientation]);
+
+  const isSaved = items.some((item) => item.id === draft.id);
+  const canAlign = validSelected.length >= 2;
+  const canDistribute = validSelected.length >= 3;
+
+  /* ---------- document + history ---------- */
+
+  const setDoc = useCallback((next: FloorplanDocument) => {
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const syncHistory = useCallback(() => {
+    setHistorySize({ undo: pastRef.current.length, redo: futureRef.current.length });
+  }, []);
+
+  const pushHistory = useCallback(() => {
+    pastRef.current.push(draftRef.current);
+    if (pastRef.current.length > MAX_HISTORY) pastRef.current.shift();
+    futureRef.current = [];
+    syncHistory();
+  }, [syncHistory]);
+
+  /** Apply an undoable change. Edits sharing a `key` within ~1s collapse into one undo step. */
+  const commit = useCallback(
+    (updater: (doc: FloorplanDocument) => FloorplanDocument, key?: string) => {
+      const now = Date.now();
+      const same = key && coalesceRef.current.key === key && now - coalesceRef.current.at < 1000;
+      if (!same) pushHistory();
+      coalesceRef.current = { key: key ?? null, at: now };
+      setDoc(updater(draftRef.current));
+      setDirty(true);
+    },
+    [pushHistory, setDoc]
+  );
+
+  const commitObjects = useCallback(
+    (fn: (objects: FloorplanCanvasObject[]) => FloorplanCanvasObject[], key?: string) =>
+      commit((doc) => ({ ...doc, objects: fn(doc.objects) }), key),
+    [commit]
+  );
+
+  const undo = useCallback(() => {
+    const previous = pastRef.current.pop();
+    if (!previous) return;
+    futureRef.current.push(draftRef.current);
+    coalesceRef.current = { key: null, at: 0 };
+    setDoc(previous);
+    setDirty(true);
+    syncHistory();
+  }, [setDoc, syncHistory]);
+
+  const redo = useCallback(() => {
+    const next = futureRef.current.pop();
+    if (!next) return;
+    pastRef.current.push(draftRef.current);
+    coalesceRef.current = { key: null, at: 0 };
+    setDoc(next);
+    setDirty(true);
+    syncHistory();
+  }, [setDoc, syncHistory]);
+
+  const loadDocument = useCallback(
+    (doc: FloorplanDocument, markDirty = false) => {
+      pastRef.current = [];
+      futureRef.current = [];
+      coalesceRef.current = { key: null, at: 0 };
+      setDoc(doc);
+      setSelectedIds([]);
+      setDirty(markDirty);
+      syncHistory();
+    },
+    [setDoc, syncHistory]
+  );
+
+  function clearAutosave() {
+    try {
+      window.localStorage.removeItem(AUTOSAVE_KEY);
+    } catch {
+      /* storage unavailable */
+    }
   }
 
-  function undo() {
-    if (!undoStack.length) return;
-    const previous = undoStack[undoStack.length - 1];
-    setUndoStack((stack) => stack.slice(0, -1));
-    setDraft(previous);
-    setActiveId(null);
+  /* ---------- view ---------- */
+
+  const zoomBy = useCallback((factor: number) => {
+    const rect = canvasViewportRef.current?.getBoundingClientRect();
+    const cx = (rect?.width ?? 0) / 2;
+    const cy = (rect?.height ?? 0) / 2;
+    setView((v) => {
+      const zoom = clampZoom(v.zoom * factor);
+      const k = zoom / v.zoom;
+      return { zoom, pan: { x: cx - (cx - v.pan.x) * k, y: cy - (cy - v.pan.y) * k } };
+    });
+  }, []);
+
+  const zoomToFit = useCallback(() => {
+    const doc = draftRef.current;
+    const viewport = canvasViewportRef.current;
+    const bounds = objectsPrintBounds(doc.objects);
+    let target = bounds;
+    if (bounds && showFrameRef.current) {
+      // Fit the printed area, not just the objects, so the frame is never cut off.
+      const layout = printLayout(doc.canvas.paperSize, doc.canvas.orientation, resolvePrintOptions(doc.print).legend);
+      const doc2 = resolvePrintOptions(doc.print);
+      const upm = doc.canvas.unitsPerMetre && doc.canvas.unitsPerMetre > 0 ? doc.canvas.unitsPerMetre : null;
+      const f = printFit(bounds, layout, fixedPointsPerUnit(doc2.fixedScale, upm)).frame;
+      target = {
+        minX: Math.min(bounds.minX, f.minX),
+        minY: Math.min(bounds.minY, f.minY),
+        maxX: Math.max(bounds.maxX, f.maxX),
+        maxY: Math.max(bounds.maxY, f.maxY)
+      };
+    }
+    if (!target || !viewport) {
+      setView({ zoom: 1, pan: { x: 0, y: 0 } });
+      return;
+    }
+    const rect = viewport.getBoundingClientRect();
+    const pad = 48;
+    const bw = Math.max(1, target.maxX - target.minX);
+    const bh = Math.max(1, target.maxY - target.minY);
+    const zoom = clampZoom(Math.min((rect.width - pad * 2) / bw, (rect.height - pad * 2) / bh));
+    setView({
+      zoom,
+      pan: {
+        x: (rect.width - bw * zoom) / 2 - target.minX * zoom,
+        y: (rect.height - bh * zoom) / 2 - target.minY * zoom
+      }
+    });
+  }, []);
+
+  const fitSoon = useCallback(() => {
+    requestAnimationFrame(() => zoomToFit());
+  }, [zoomToFit]);
+
+  function viewCentre() {
+    const rect = canvasViewportRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 120, y: 120 };
+    return { x: (rect.width / 2 - view.pan.x) / view.zoom, y: (rect.height / 2 - view.pan.y) / view.zoom };
+  }
+
+  /* ---------- editing actions ---------- */
+
+  function snapPoint(p: { x: number; y: number }) {
+    const g = draft.canvas.gridSize;
+    return { x: Math.round(p.x / g) * g, y: Math.round(p.y / g) * g };
+  }
+
+  function addPreset(presetId: string) {
+    const preset = OBJECT_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    const existing = draftRef.current.objects;
+    let centre = snapPoint(viewCentre());
+    const step = draft.canvas.gridSize;
+    for (let i = 0; i < 40; i += 1) {
+      const clash = existing.some((o) => {
+        const b = objectBox(o);
+        return Math.abs(b.cx - centre.x) < 1 && Math.abs(b.cy - centre.y) < 1;
+      });
+      if (!clash) break;
+      centre = { x: centre.x + step, y: centre.y + step };
+    }
+    const obj = preset.build(centre, existing, unitsPerMetre ?? DEFAULT_UNITS_PER_METRE);
+    commitObjects((list) => (preset.behind ? [obj, ...list] : [...list, obj]));
+    setSelectedIds([obj.id]);
+  }
+
+  function deleteSelection() {
+    if (!validSelected.length) return;
+    const gone = new Set(validSelected);
+    commitObjects((list) => list.filter((o) => !gone.has(o.id)));
     setSelectedIds([]);
   }
 
-  // React registers wheel handlers as passive, so preventDefault() there can't stop the page
-  // scrolling while zooming. Attach a non-passive native listener instead.
-  useEffect(() => {
-    const viewport = canvasViewportRef.current;
-    if (!viewport) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const direction = event.deltaY < 0 ? 1 : -1;
-      setZoom((previous) => Math.max(0.3, Math.min(3, previous + direction * 0.08)));
-    };
-    viewport.addEventListener("wheel", onWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", onWheel);
-  }, []);
-
-  useEffect(() => {
-    void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
-    void Promise.all([refreshVenueLogoLibrary(), refreshClientLogoLibrary()]);
-  }, []);
-
-  async function refreshList() {
-    const response = await fetch("/api/floorplans/saved");
-    if (!response.ok) throw new Error(await readResponseError(response, "Failed to list floorplans."));
-    const payload = await response.json();
-    setItems(Array.isArray(payload.items) ? payload.items : []);
+  function clearCanvas() {
+    if (!objects.length) return;
+    if (!window.confirm("Clear all objects from this canvas? You can undo this.")) return;
+    commitObjects(() => []);
+    setSelectedIds([]);
   }
+
+  function copySelection() {
+    const picked = draftRef.current.objects.filter((o) => validSelected.includes(o.id));
+    if (picked.length) clipboardRef.current = { objects: structuredClone(picked), pastes: 0 };
+  }
+
+  function pasteClipboard(offsetFromSelection = false) {
+    const clip = clipboardRef.current;
+    if (!clip || !clip.objects.length) return;
+    clip.pastes += 1;
+    const shift = draft.canvas.gridSize * (offsetFromSelection ? 1 : clip.pastes);
+    const created: FloorplanCanvasObject[] = [];
+    commitObjects((list) => {
+      const working = [...list];
+      for (const src of clip.objects) {
+        const copy = { ...structuredClone(src), id: crypto.randomUUID(), x: src.x + shift, y: src.y + shift } as FloorplanCanvasObject;
+        if (copy.type === "table") {
+          copy.tableNumber = nextTableNumber(working);
+          if (src.type === "table" && src.label && !/^table\b/i.test(src.label)) copy.label = src.label;
+        }
+        created.push(copy);
+        working.push(copy);
+      }
+      return working;
+    });
+    setSelectedIds(created.map((o) => o.id));
+  }
+
+  function duplicateSelection() {
+    if (!validSelected.length) return;
+    copySelection();
+    if (clipboardRef.current) {
+      clipboardRef.current.pastes = 0;
+      pasteClipboard(true);
+    }
+  }
+
+  function nudge(dx: number, dy: number) {
+    if (!validSelected.length) return;
+    const ids = new Set(validSelected);
+    commitObjects(
+      (list) => list.map((o) => (ids.has(o.id) ? ({ ...o, x: o.x + dx, y: o.y + dy } as FloorplanCanvasObject) : o)),
+      "nudge"
+    );
+  }
+
+  function patchSelected(fn: (obj: FloorplanCanvasObject) => FloorplanCanvasObject, key?: string) {
+    if (!primary) return;
+    const ids = new Set(validSelected.filter((id) => objects.find((o) => o.id === id)?.type === primary.type));
+    commitObjects((list) => list.map((o) => (ids.has(o.id) ? fn(o) : o)), key ? `${key}:${primary.id}` : undefined);
+  }
+
+  function reorderSelected(where: "front" | "back") {
+    if (!validSelected.length) return;
+    const ids = new Set(validSelected);
+    commitObjects((list) => {
+      const picked = list.filter((o) => ids.has(o.id));
+      const rest = list.filter((o) => !ids.has(o.id));
+      return where === "front" ? [...rest, ...picked] : [...picked, ...rest];
+    });
+  }
+
+  function alignSelected(mode: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") {
+    const picked = objects.filter((o) => validSelected.includes(o.id));
+    if (picked.length < 2) return;
+    const bounds = picked.map(objectBodyBounds);
+    const group = {
+      left: Math.min(...bounds.map((b) => b.minX)),
+      right: Math.max(...bounds.map((b) => b.maxX)),
+      top: Math.min(...bounds.map((b) => b.minY)),
+      bottom: Math.max(...bounds.map((b) => b.maxY))
+    };
+    const ids = new Set(picked.map((o) => o.id));
+    commitObjects((list) =>
+      list.map((o) => {
+        if (!ids.has(o.id)) return o;
+        const b = objectBodyBounds(o);
+        const c = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+        let dx = 0;
+        let dy = 0;
+        if (mode === "left") dx = group.left - b.minX;
+        if (mode === "right") dx = group.right - b.maxX;
+        if (mode === "hcenter") dx = (group.left + group.right) / 2 - c.x;
+        if (mode === "top") dy = group.top - b.minY;
+        if (mode === "bottom") dy = group.bottom - b.maxY;
+        if (mode === "vcenter") dy = (group.top + group.bottom) / 2 - c.y;
+        return { ...o, x: o.x + dx, y: o.y + dy } as FloorplanCanvasObject;
+      })
+    );
+  }
+
+  function distributeSelected(axis: "horizontal" | "vertical") {
+    const picked = objects.filter((o) => validSelected.includes(o.id));
+    if (picked.length < 3) return;
+    const centres = picked
+      .map((o) => ({ o, c: objectBox(o) }))
+      .sort((a, b) => (axis === "horizontal" ? a.c.cx - b.c.cx : a.c.cy - b.c.cy));
+    const first = centres[0].c;
+    const last = centres[centres.length - 1].c;
+    const target = new Map<string, number>();
+    centres.forEach((entry, i) => {
+      const t =
+        axis === "horizontal"
+          ? first.cx + (i * (last.cx - first.cx)) / (centres.length - 1)
+          : first.cy + (i * (last.cy - first.cy)) / (centres.length - 1);
+      target.set(entry.o.id, t);
+    });
+    commitObjects((list) =>
+      list.map((o) => {
+        const t = target.get(o.id);
+        if (t == null) return o;
+        const b = objectBox(o);
+        return axis === "horizontal" ? withCentre(o, t, b.cy) : withCentre(o, b.cx, t);
+      })
+    );
+  }
+
+  function renumberByPosition() {
+    const tables = objects.filter((o): o is FloorplanTableObject => o.type === "table" && /^\d+$/.test(o.tableNumber.trim()));
+    if (!tables.length) return;
+    const tolerance = Math.max(12, Math.min(...tables.map((t) => objectBox(t).h)) * 0.6);
+    const byY = [...tables].sort((a, b) => a.y - b.y);
+    const rows: FloorplanTableObject[][] = [];
+    let rowY = -Infinity;
+    for (const t of byY) {
+      if (rows.length === 0 || t.y - rowY > tolerance) {
+        rows.push([t]);
+        rowY = t.y;
+      } else {
+        rows[rows.length - 1].push(t);
+      }
+    }
+    const next = new Map<string, string>();
+    let n = 1;
+    for (const row of rows) {
+      row.sort((a, b) => a.x - b.x);
+      for (const t of row) next.set(t.id, String(n++));
+    }
+    commitObjects((list) =>
+      list.map((o) => (o.type === "table" && next.has(o.id) ? { ...o, tableNumber: next.get(o.id)! } : o))
+    );
+  }
+
+  function closeNumberGaps() {
+    const tables = objects
+      .filter((o): o is FloorplanTableObject => o.type === "table" && /^\d+$/.test(o.tableNumber.trim()))
+      .sort((a, b) => naturalTableCompare(a.tableNumber, b.tableNumber));
+    const next = new Map<string, string>();
+    tables.forEach((t, i) => next.set(t.id, String(i + 1)));
+    commitObjects((list) =>
+      list.map((o) => (o.type === "table" && next.has(o.id) ? { ...o, tableNumber: next.get(o.id)! } : o))
+    );
+  }
+
+  function matchSeatsToGuests() {
+    if (!tableGuests) return;
+    commitObjects((list) =>
+      list.map((o) => {
+        if (o.type !== "table") return o;
+        const count = guestCountFor(o.tableNumber, tableGuests) ?? 0;
+        if (count === 0 || count === tableSeatCount(o)) return o;
+        return { ...o, seats: Math.min(60, count) };
+      })
+    );
+  }
+
+  function generateTables() {
+    const guestTables = tableGuests ? Object.keys(tableGuests).sort(naturalTableCompare) : null;
+    const numbers = useGuestNumbers && guestTables?.length ? guestTables : undefined;
+    const count = numbers ? numbers.length : tableCount;
+    const generated = buildTablesFromAutoLayout(draft.autoLayout, count, {
+      tableNumbers: numbers,
+      seats: seatsPerTable,
+      roundSize,
+      style: tableStyle,
+      topTable: withTopTable,
+      unitsPerMetre
+    });
+    commit((doc) => ({
+      ...doc,
+      metadata: {
+        title: doc.metadata.title || doc.themeSnapshot.eventName,
+        subtitle: doc.metadata.subtitle || doc.themeSnapshot.eventSubtitle || ""
+      },
+      objects: [...doc.objects.filter((o) => o.type !== "table"), ...generated]
+    }));
+    setSelectedIds([]);
+    fitSoon();
+  }
+
+  /* ---------- logos ---------- */
 
   async function refreshVenueLogoLibrary() {
     try {
@@ -165,15 +597,6 @@ export default function FloorplansPage() {
     }
   }
 
-  function blobToDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("Failed to read image."));
-      reader.readAsDataURL(blob);
-    });
-  }
-
   async function applyLogoFromLibrary(
     item: { assetUrl: string; key: string },
     field: "venueLogoDataUrl" | "clientLogoDataUrl"
@@ -182,17 +605,25 @@ export default function FloorplansPage() {
     try {
       const response = await fetch(item.assetUrl);
       if (!response.ok) throw new Error("Could not load that logo from storage.");
-      const blob = await response.blob();
-      const dataUrl = await blobToDataUrl(blob);
-      setDraft((prev) => ({
-        ...prev,
-        themeSnapshot: { ...prev.themeSnapshot, [field]: dataUrl },
-        selectedVenueLogoKey: field === "venueLogoDataUrl" ? item.key : prev.selectedVenueLogoKey ?? null,
-        selectedClientLogoKey: field === "clientLogoDataUrl" ? item.key : prev.selectedClientLogoKey ?? null
+      const dataUrl = await blobToDataUrl(await response.blob());
+      commit((doc) => ({
+        ...doc,
+        themeSnapshot: { ...doc.themeSnapshot, [field]: dataUrl },
+        selectedVenueLogoKey: field === "venueLogoDataUrl" ? item.key : (doc.selectedVenueLogoKey ?? null),
+        selectedClientLogoKey: field === "clientLogoDataUrl" ? item.key : (doc.selectedClientLogoKey ?? null)
       }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply logo.");
     }
+  }
+
+  /* ---------- server I/O ---------- */
+
+  async function refreshList() {
+    const response = await fetch("/api/floorplans/saved");
+    if (!response.ok) throw new Error(await readResponseError(response, "Failed to list floorplans."));
+    const payload = await response.json();
+    setItems(Array.isArray(payload.items) ? payload.items : []);
   }
 
   async function saveCurrent() {
@@ -202,11 +633,14 @@ export default function FloorplansPage() {
       const response = await fetch("/api/floorplans/saved", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft)
+        body: JSON.stringify(draftRef.current)
       });
       if (!response.ok) throw new Error(await readResponseError(response, "Save failed."));
       const payload = await response.json();
-      setDraft((prev) => ({ ...prev, id: payload.id as string, savedAt: payload.savedAt as string }));
+      // The id is the only thing that has to change; keep it out of undo history.
+      setDoc({ ...draftRef.current, id: payload.id as string, savedAt: payload.savedAt as string });
+      setDirty(false);
+      clearAutosave();
       await refreshList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
@@ -216,16 +650,16 @@ export default function FloorplansPage() {
   }
 
   async function loadItem(id: string) {
+    if (dirty && !window.confirm("You have unsaved changes. Open another floorplan anyway?")) return;
     setBusy(true);
     setError("");
     try {
       const response = await fetch(`/api/floorplans/saved/${encodeURIComponent(id)}`);
       if (!response.ok) throw new Error(await readResponseError(response, "Load failed."));
       const payload = await response.json();
-      setDraft(payload.floorplan as FloorplanDocument);
-      setActiveId(null);
-      setSelectedIds([]);
-      setUndoStack([]);
+      loadDocument(payload.floorplan as FloorplanDocument);
+      clearAutosave();
+      fitSoon();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Load failed.");
     } finally {
@@ -233,15 +667,19 @@ export default function FloorplansPage() {
     }
   }
 
+  function startNew() {
+    if (dirty && !window.confirm("You have unsaved changes. Start a new floorplan anyway?")) return;
+    loadDocument(buildEmptyFloorplanDraft());
+    setGuestRecords(null);
+    clearAutosave();
+    setView({ zoom: 1, pan: { x: 0, y: 0 } });
+  }
+
   async function deleteCurrent() {
-    const isSaved = items.some((item) => item.id === draft.id);
     if (!isSaved) {
-      // Never-saved draft: nothing to delete on the server, so treat this as "discard".
       if (!window.confirm("This floorplan has not been saved. Discard it and start a new one?")) return;
-      pushUndoSnapshot();
-      setDraft(buildEmptyFloorplanDraft());
-      setActiveId(null);
-      setSelectedIds([]);
+      loadDocument(buildEmptyFloorplanDraft());
+      clearAutosave();
       return;
     }
     if (!window.confirm("Delete this saved floorplan?")) return;
@@ -250,10 +688,8 @@ export default function FloorplansPage() {
     try {
       const response = await fetch(`/api/floorplans/saved/${encodeURIComponent(draft.id)}`, { method: "DELETE" });
       if (!response.ok) throw new Error(await readResponseError(response, "Delete failed."));
-      setDraft(buildEmptyFloorplanDraft());
-      setActiveId(null);
-      setSelectedIds([]);
-      setUndoStack([]);
+      loadDocument(buildEmptyFloorplanDraft());
+      clearAutosave();
       await refreshList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
@@ -262,22 +698,23 @@ export default function FloorplansPage() {
     }
   }
 
+  async function renderPdfBlob(): Promise<Blob> {
+    const response = await fetch("/api/floorplans/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ floorplan: draftRef.current })
+    });
+    if (!response.ok) throw new Error(await readResponseError(response, "Print failed."));
+    return response.blob();
+  }
+
   async function printFloorplan() {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/floorplans/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ floorplan: draft })
-      });
-      if (!response.ok) throw new Error(await readResponseError(response, "Print failed."));
-      const blob = await response.blob();
-      if (outputFormat === "png") {
-        await downloadPdfBlobAsPngs(blob, "floorplan");
-      } else {
-        downloadBlob(blob, "floorplan.pdf");
-      }
+      const blob = await renderPdfBlob();
+      if (outputFormat === "png") await downloadPdfBlobAsPngs(blob, "floorplan");
+      else downloadBlob(blob, "floorplan.pdf");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Print failed.");
     } finally {
@@ -285,258 +722,191 @@ export default function FloorplansPage() {
     }
   }
 
-  function seedFromAutoLayout() {
-    pushUndoSnapshot();
-    const nextTables = buildTablesFromAutoLayout(draft.autoLayout, tableCount);
-    setDraft((prev) => ({
-      ...prev,
-      metadata: {
-        title: prev.metadata.title || prev.themeSnapshot.eventName,
-        subtitle: prev.metadata.subtitle || prev.themeSnapshot.eventSubtitle || ""
-      },
-      objects: [...nextTables, ...prev.objects.filter((obj) => obj.type !== "table")]
-    }));
+  async function previewFloorplan() {
+    setBusy(true);
+    setError("");
+    try {
+      const blob = await renderPdfBlob();
+      setPreviewUrl(URL.createObjectURL(new Blob([blob], { type: "application/pdf" })));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Preview failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function addObject(kind: FloorplanCanvasObject["type"]) {
-    const id = crypto.randomUUID();
-    if (kind === "table") {
-      setDraft((prev) => ({
-        ...prev,
-        objects: [...prev.objects, { id, type: "table", tableNumber: nextTableNumber(prev.objects), x: 96, y: 96, radius: 18 }]
-      }));
-      return;
-    }
-    if (kind === "rect") {
-      setDraft((prev) => ({ ...prev, objects: [...prev.objects, { id, type: "rect", x: 120, y: 120, width: 90, height: 60 }] }));
-      return;
-    }
-    if (kind === "circle") {
-      setDraft((prev) => ({ ...prev, objects: [...prev.objects, { id, type: "circle", x: 140, y: 140, radius: 30 }] }));
-      return;
-    }
-    setDraft((prev) => ({ ...prev, objects: [...prev.objects, { id, type: "text", x: 160, y: 160, text: "Label", fontSize: 16 }] }));
+  function closePreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
   }
 
-  function clearCanvas() {
-    if (!window.confirm("Clear all objects from this canvas?")) return;
-    pushUndoSnapshot();
-    setDraft((prev) => ({ ...prev, objects: [] }));
-    setActiveId(null);
-    setSelectedIds([]);
-  }
+  /* ---------- effects ---------- */
 
-  function objectBounds(items: FloorplanCanvasObject[]) {
-    if (!items.length) return null;
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    for (const item of items) {
-      if (item.type === "table") {
-        minX = Math.min(minX, item.x - item.radius);
-        minY = Math.min(minY, item.y - item.radius);
-        maxX = Math.max(maxX, item.x + item.radius);
-        maxY = Math.max(maxY, item.y + item.radius);
-        continue;
-      }
-      if (item.type === "rect") {
-        minX = Math.min(minX, item.x);
-        minY = Math.min(minY, item.y);
-        maxX = Math.max(maxX, item.x + item.width);
-        maxY = Math.max(maxY, item.y + item.height);
-        continue;
-      }
-      if (item.type === "circle") {
-        minX = Math.min(minX, item.x - item.radius);
-        minY = Math.min(minY, item.y - item.radius);
-        maxX = Math.max(maxX, item.x + item.radius);
-        maxY = Math.max(maxY, item.y + item.radius);
-        continue;
-      }
-      const textW = Math.max(40, item.text.length * item.fontSize * 0.58);
-      const textH = Math.max(12, item.fontSize * 1.25);
-      minX = Math.min(minX, item.x);
-      minY = Math.min(minY, item.y);
-      maxX = Math.max(maxX, item.x + textW);
-      maxY = Math.max(maxY, item.y + textH);
-    }
-    return { minX, minY, maxX, maxY };
-  }
-
-  function itemBounds(item: FloorplanCanvasObject) {
-    if (item.type === "table") {
-      return { left: item.x - item.radius, top: item.y - item.radius, right: item.x + item.radius, bottom: item.y + item.radius };
-    }
-    if (item.type === "rect") {
-      return { left: item.x, top: item.y, right: item.x + item.width, bottom: item.y + item.height };
-    }
-    if (item.type === "circle") {
-      return { left: item.x - item.radius, top: item.y - item.radius, right: item.x + item.radius, bottom: item.y + item.radius };
-    }
-    const textW = Math.max(40, item.text.length * item.fontSize * 0.58);
-    const textH = Math.max(12, item.fontSize * 1.25);
-    return { left: item.x, top: item.y, right: item.x + textW, bottom: item.y + textH };
-  }
-
-  function itemCenter(item: FloorplanCanvasObject) {
-    const b = itemBounds(item);
-    return { x: (b.left + b.right) / 2, y: (b.top + b.bottom) / 2 };
-  }
-
-  function moveItemToBounds(item: FloorplanCanvasObject, target: { left?: number; right?: number; top?: number; bottom?: number; cx?: number; cy?: number }) {
-    const b = itemBounds(item);
-    const c = itemCenter(item);
-    let dx = 0;
-    let dy = 0;
-    if (target.left != null) dx = target.left - b.left;
-    if (target.right != null) dx = target.right - b.right;
-    if (target.cx != null) dx = target.cx - c.x;
-    if (target.top != null) dy = target.top - b.top;
-    if (target.bottom != null) dy = target.bottom - b.bottom;
-    if (target.cy != null) dy = target.cy - c.y;
-    return { ...item, x: item.x + dx, y: item.y + dy } as FloorplanCanvasObject;
-  }
-
-  function alignSelected(mode: "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom") {
-    if (selectedIds.length < 2) return;
-    const selectedItems = draft.objects.filter((obj) => selectedSet.has(obj.id));
-    if (selectedItems.length < 2) return;
-    pushUndoSnapshot();
-    const bounds = selectedItems.map(itemBounds);
-    const group = {
-      left: Math.min(...bounds.map((b) => b.left)),
-      right: Math.max(...bounds.map((b) => b.right)),
-      top: Math.min(...bounds.map((b) => b.top)),
-      bottom: Math.max(...bounds.map((b) => b.bottom))
-    };
-    const groupCx = (group.left + group.right) / 2;
-    const groupCy = (group.top + group.bottom) / 2;
-    setDraft((prev) => ({
-      ...prev,
-      objects: prev.objects.map((obj) => {
-        if (!selectedSet.has(obj.id)) return obj;
-        if (mode === "left") return moveItemToBounds(obj, { left: group.left });
-        if (mode === "hcenter") return moveItemToBounds(obj, { cx: groupCx });
-        if (mode === "right") return moveItemToBounds(obj, { right: group.right });
-        if (mode === "top") return moveItemToBounds(obj, { top: group.top });
-        if (mode === "vcenter") return moveItemToBounds(obj, { cy: groupCy });
-        return moveItemToBounds(obj, { bottom: group.bottom });
+  useEffect(() => {
+    void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
+    void Promise.all([refreshVenueLogoLibrary(), refreshClientLogoLibrary()]);
+    void fetch("/api/projects")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (payload && Array.isArray(payload.projects)) setProjects(payload.projects);
       })
-    }));
-  }
+      .catch(() => undefined);
+    try {
+      const raw = window.localStorage.getItem(AUTOSAVE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Autosave;
+        if (parsed?.doc?.objects?.length) setRecovered(parsed);
+      }
+    } catch {
+      /* ignore unreadable autosave */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  function distributeSelected(axis: "horizontal" | "vertical") {
-    if (selectedIds.length < 3) return;
-    const selectedItems = draft.objects.filter((obj) => selectedSet.has(obj.id));
-    if (selectedItems.length < 3) return;
-    pushUndoSnapshot();
-    const sorted = selectedItems
-      .map((item) => ({ item, c: itemCenter(item) }))
-      .sort((a, b) => (axis === "horizontal" ? a.c.x - b.c.x : a.c.y - b.c.y));
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    const span = axis === "horizontal" ? last.c.x - first.c.x : last.c.y - first.c.y;
-    const step = span / (sorted.length - 1);
-    const target = new Map<string, number>();
-    sorted.forEach((entry, idx) => {
-      target.set(entry.item.id, (axis === "horizontal" ? first.c.x : first.c.y) + idx * step);
-    });
-    setDraft((prev) => ({
-      ...prev,
-      objects: prev.objects.map((obj) => {
-        if (!selectedSet.has(obj.id)) return obj;
-        const t = target.get(obj.id);
-        if (t == null) return obj;
-        return axis === "horizontal" ? moveItemToBounds(obj, { cx: t }) : moveItemToBounds(obj, { cy: t });
-      })
-    }));
-  }
-
-  function zoomToFit() {
-    const bounds = objectBounds(draft.objects);
-    const viewport = canvasViewportRef.current;
-    if (!bounds || !viewport) {
-      setZoom(1);
-      setPan({ x: 0, y: 0 });
+  // Load the linked project's guest list whenever the link changes.
+  useEffect(() => {
+    const id = draft.projectId;
+    if (!id) {
+      setGuestRecords(null);
       return;
     }
-    const viewportRect = viewport.getBoundingClientRect();
-    const vw = viewportRect.width;
-    const vh = viewportRect.height;
-    const padding = 36;
-    const bw = Math.max(1, bounds.maxX - bounds.minX);
-    const bh = Math.max(1, bounds.maxY - bounds.minY);
-    const nextZoom = Math.max(0.3, Math.min(3, Math.min((vw - padding * 2) / bw, (vh - padding * 2) / bh)));
-    const nextPan = {
-      x: (vw - bw * nextZoom) / 2 - bounds.minX * nextZoom,
-      y: (vh - bh * nextZoom) / 2 - bounds.minY * nextZoom
+    let cancelled = false;
+    setGuestsLoading(true);
+    void fetch(`/api/projects/${encodeURIComponent(id)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await readResponseError(response, "Could not load that guest list."));
+        return response.json();
+      })
+      .then((payload) => {
+        if (!cancelled) setGuestRecords((payload.project?.guests ?? []) as GuestRecord[]);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setGuestRecords(null);
+        setError(err instanceof Error ? err.message : "Could not load that guest list.");
+      })
+      .finally(() => {
+        if (!cancelled) setGuestsLoading(false);
+      });
+    return () => {
+      cancelled = true;
     };
-    setZoom(nextZoom);
-    setPan(nextPan);
-  }
+  }, [draft.projectId]);
 
-  function startObjectDrag(
-    id: string,
-    event: PointerEvent<HTMLButtonElement>
-  ) {
-    const ids = selectedSet.has(id) && selectedIds.length > 1 ? selectedIds : [id];
-    const point = screenToCanvas(
-      event as unknown as PointerEvent<HTMLDivElement>,
-      canvasViewportRef.current as HTMLDivElement,
-      zoom,
-      pan
-    );
-    const positions: Record<string, { x: number; y: number }> = {};
-    draft.objects.forEach((obj) => {
-      if (ids.includes(obj.id)) positions[obj.id] = { x: obj.x, y: obj.y };
-    });
-    pushUndoSnapshot();
-    setDraggingId(id);
-    setDragState({
-      ids,
-      startPoint: point,
-      startPositions: positions
-    });
-  }
-
-  function screenToCanvas(
-    event: PointerEvent<HTMLDivElement>,
-    element: HTMLDivElement,
-    zoomValue: number,
-    panValue: { x: number; y: number }
-  ) {
-    const rect = element.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left - panValue.x) / zoomValue,
-      y: (event.clientY - rect.top - panValue.y) / zoomValue
-    };
-  }
-
-  const isSaved = items.some((item) => item.id === draft.id);
-  const canAlign = selectedIds.length >= 2;
-  const canDistribute = selectedIds.length >= 3;
-
-  function selectObject(id: string, shiftKey: boolean) {
-    setActiveId(id);
-    setSelectedIds((prev) => {
-      if (shiftKey) {
-        return prev.includes(id) ? prev.filter((existing) => existing !== id) : [...prev, id];
+  // Debounced local autosave while there are unsaved changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const timer = window.setTimeout(() => {
+      try {
+        const payload: Autosave = { doc: draftRef.current, at: new Date().toISOString() };
+        window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+      } catch {
+        /* quota or private mode: autosave is best-effort */
       }
-      return [id];
-    });
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [dirty, draft]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  // Keyboard shortcuts. The handler is re-bound each render so it always sees fresh state.
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  keyHandlerRef.current = (event: KeyboardEvent) => {
+    if (listOpen || previewUrl) return;
+    const meta = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (meta && key === "s") {
+      event.preventDefault();
+      if (!busy) void saveCurrent();
+      return;
+    }
+    if (isTypingTarget(event.target)) return;
+    if (meta && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (meta && key === "y") {
+      event.preventDefault();
+      redo();
+      return;
+    }
+    if (meta && key === "a") {
+      event.preventDefault();
+      setSelectedIds(objects.map((o) => o.id));
+      return;
+    }
+    if (meta && key === "c") {
+      copySelection();
+      return;
+    }
+    if (meta && key === "v") {
+      event.preventDefault();
+      pasteClipboard();
+      return;
+    }
+    if (meta && key === "d") {
+      event.preventDefault();
+      duplicateSelection();
+      return;
+    }
+    if (meta) return;
+    if (event.key === "Delete" || event.key === "Backspace") {
+      if (validSelected.length) {
+        event.preventDefault();
+        deleteSelection();
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      setSelectedIds([]);
+      return;
+    }
+    if (event.key.startsWith("Arrow") && validSelected.length) {
+      event.preventDefault();
+      const step = event.shiftKey ? draft.canvas.gridSize : 1;
+      if (event.key === "ArrowLeft") nudge(-step, 0);
+      if (event.key === "ArrowRight") nudge(step, 0);
+      if (event.key === "ArrowUp") nudge(0, -step);
+      if (event.key === "ArrowDown") nudge(0, step);
+      return;
+    }
+    if (event.key === " " && !event.repeat) {
+      event.preventDefault();
+      setSpaceDown(true);
+    }
+  };
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => keyHandlerRef.current(e);
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " ") setSpaceDown(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  /* ---------- small setters ---------- */
+
+  function setPrint(patch: Partial<FloorplanPrintOptions>) {
+    commit((doc) => ({ ...doc, print: { ...resolvePrintOptions(doc.print), ...patch } }));
   }
 
-  function updateSelected(patch: Record<string, unknown>, withUndo = true) {
-    if (!selected) return;
-    if (withUndo) pushUndoSnapshot();
-    setDraft((p) => ({
-      ...p,
-      objects: p.objects.map((o) => (o.id === selected.id ? ({ ...o, ...patch } as FloorplanCanvasObject) : o))
-    }));
-  }
-
-  const objectBorder = (id: string, fallback: string) => (selectedSet.has(id) ? "2px solid #0b5068" : fallback);
+  const guestFeaturesOff = !tableGuests;
+  const metresPerSquare = unitsPerMetre ? draft.canvas.gridSize / unitsPerMetre : null;
+  const linkedProject = projects.find((p) => p.id === draft.projectId);
 
   return (
     <main className="page page--wide">
@@ -545,14 +915,18 @@ export default function FloorplansPage() {
         description="Lay out tables, shapes and labels, then print."
         actions={
           <>
+            {dirty ? <span className="text-muted">Unsaved changes</span> : null}
             <input
               className="header-input"
               value={draft.name}
-              onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))}
+              onChange={(e) => {
+                const name = e.target.value;
+                commit((doc) => ({ ...doc, name }), "name");
+              }}
               aria-label="Floorplan name"
               placeholder="Floorplan name"
             />
-            <button type="button" onClick={() => void saveCurrent()} disabled={busy}>
+            <button type="button" onClick={() => void saveCurrent()} disabled={busy} title="Save (⌘S)">
               <Save size={15} aria-hidden /> Save
             </button>
             <button
@@ -564,13 +938,18 @@ export default function FloorplansPage() {
             >
               <FolderOpen size={15} aria-hidden /> Open
             </button>
+            <button type="button" className="icon-btn icon-btn--bordered" onClick={startNew} disabled={busy} aria-label="New floorplan" title="New">
+              <FilePlus size={16} />
+            </button>
             <button
               type="button"
               className="icon-btn icon-btn--bordered"
-              onClick={() => setDraft(copyForDuplicate(draft))}
+              onClick={() => {
+                loadDocument(copyForDuplicate(draftRef.current), true);
+              }}
               disabled={busy}
               aria-label="Duplicate floorplan"
-              title="Duplicate"
+              title="Duplicate floorplan"
             >
               <Copy size={16} />
             </button>
@@ -587,6 +966,37 @@ export default function FloorplansPage() {
           </>
         }
       />
+
+      {recovered ? (
+        <Callout tone="info" className="fp-recovered">
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <span>
+              Unsaved floorplan “{recovered.doc.name}” from {formatTime(recovered.at)} was recovered.
+            </span>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => {
+                loadDocument(recovered.doc, true);
+                setRecovered(null);
+                fitSoon();
+              }}
+            >
+              Restore
+            </button>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => {
+                clearAutosave();
+                setRecovered(null);
+              }}
+            >
+              Discard
+            </button>
+          </div>
+        </Callout>
+      ) : null}
 
       {listOpen ? (
         <Modal title="Saved floorplans" onClose={() => setListOpen(false)}>
@@ -629,45 +1039,41 @@ export default function FloorplansPage() {
         </Modal>
       ) : null}
 
+      {previewUrl ? (
+        <Modal title="Print preview" size="lg" onClose={closePreview}>
+          <iframe className="fp-preview-frame" src={previewUrl} title="Floorplan print preview" />
+        </Modal>
+      ) : null}
+
       <div className="editor">
         <section className="card editor-canvas-card">
           <div className="toolbar" role="toolbar" aria-label="Canvas tools">
             <div className="btn-group">
-              <button type="button" onClick={() => addObject("table")} title="Add table">
-                <CircleDot size={16} aria-hidden /> Table
-              </button>
-              <button type="button" className="icon-btn" onClick={() => addObject("rect")} title="Add rectangle" aria-label="Add rectangle">
-                <Square size={16} />
-              </button>
-              <button type="button" className="icon-btn" onClick={() => addObject("circle")} title="Add circle" aria-label="Add circle">
-                <Circle size={16} />
-              </button>
-              <button type="button" className="icon-btn" onClick={() => addObject("text")} title="Add text" aria-label="Add text">
-                <Type size={16} />
-              </button>
-            </div>
-            <div className="btn-group">
-              <button type="button" className="icon-btn" disabled={!undoStack.length} onClick={undo} title="Undo" aria-label="Undo">
+              <button type="button" className="icon-btn" disabled={!historySize.undo} onClick={undo} title="Undo (⌘Z)" aria-label="Undo">
                 <Undo2 size={16} />
               </button>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setSelectedIds(draft.objects.map((o) => o.id))}
-                title="Select all"
-                aria-label="Select all"
-              >
-                <SquareDashedMousePointer size={16} />
+              <button type="button" className="icon-btn" disabled={!historySize.redo} onClick={redo} title="Redo (⇧⌘Z)" aria-label="Redo">
+                <Redo2 size={16} />
               </button>
               <button
                 type="button"
                 className="icon-btn"
-                disabled={!selectedIds.length}
-                onClick={() => setSelectedIds([])}
-                title="Clear selection"
-                aria-label="Clear selection"
+                disabled={!validSelected.length}
+                onClick={duplicateSelection}
+                title="Duplicate selection (⌘D)"
+                aria-label="Duplicate selection"
               >
-                <SquareDashed size={16} />
+                <CopyPlus size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn btn-danger"
+                disabled={!validSelected.length}
+                onClick={deleteSelection}
+                title="Delete selection (Delete)"
+                aria-label="Delete selection"
+              >
+                <Trash2 size={16} />
               </button>
             </div>
             <div className="btn-group">
@@ -712,298 +1118,194 @@ export default function FloorplansPage() {
             </div>
             <span className="spacer" />
             <div className="btn-group">
-              <button type="button" className="icon-btn" onClick={() => setZoom((z) => Math.max(0.3, z - 0.1))} title="Zoom out" aria-label="Zoom out">
+              <button
+                type="button"
+                className={`icon-btn${snapToGrid ? " icon-btn--on" : ""}`}
+                aria-pressed={snapToGrid}
+                onClick={() => setSnapToGrid((v) => !v)}
+                title="Snap to grid (hold Shift while dragging to move freely)"
+                aria-label="Snap to grid"
+              >
+                <Grid3x3 size={16} />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn${showFrame ? " icon-btn--on" : ""}`}
+                aria-pressed={showFrame}
+                onClick={() => setShowFrame((v) => !v)}
+                title="Show the area that will be printed"
+                aria-label="Show print area"
+              >
+                <Frame size={16} />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn${panTool ? " icon-btn--on" : ""}`}
+                aria-pressed={panTool}
+                onClick={() => setPanTool((v) => !v)}
+                title="Hand tool: drag to pan (or hold Space)"
+                aria-label="Hand tool"
+              >
+                <Hand size={16} />
+              </button>
+            </div>
+            <div className="btn-group">
+              <button type="button" className="icon-btn" onClick={() => zoomBy(1 / 1.2)} title="Zoom out" aria-label="Zoom out">
                 <ZoomOut size={16} />
               </button>
-              <span className="toolbar-zoom">{(zoom * 100).toFixed(0)}%</span>
-              <button type="button" className="icon-btn" onClick={() => setZoom((z) => Math.min(3, z + 0.1))} title="Zoom in" aria-label="Zoom in">
+              <span className="toolbar-zoom">{Math.round(view.zoom * 100)}%</span>
+              <button type="button" className="icon-btn" onClick={() => zoomBy(1.2)} title="Zoom in" aria-label="Zoom in">
                 <ZoomIn size={16} />
               </button>
               <button type="button" className="icon-btn" onClick={zoomToFit} title="Zoom to fit" aria-label="Zoom to fit">
                 <Maximize size={16} />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => {
-                  setZoom(1);
-                  setPan({ x: 0, y: 0 });
-                }}
-                title="Reset view"
-                aria-label="Reset view"
-              >
-                <RotateCcw size={16} />
               </button>
             </div>
             <button type="button" className="icon-btn btn-danger" onClick={clearCanvas} title="Clear canvas" aria-label="Clear canvas">
               <Eraser size={16} />
             </button>
           </div>
-          <div
-            ref={canvasViewportRef}
-            className="editor-canvas"
-            style={{
-              backgroundSize: `${draft.canvas.gridSize * zoom}px ${draft.canvas.gridSize * zoom}px`,
-              backgroundPosition: `${pan.x}px ${pan.y}px`
+          <FloorplanCanvas
+            objects={objects}
+            selectedIds={validSelected}
+            onSelect={setSelectedIds}
+            gridSize={draft.canvas.gridSize}
+            snapToGrid={snapToGrid}
+            view={view}
+            onViewChange={(updater) => setView(updater)}
+            viewportRef={canvasViewportRef}
+            panActive={panTool || spaceDown}
+            frame={frame}
+            frameLabel={`Print area · ${draft.canvas.paperSize} ${draft.canvas.orientation}`}
+            tableGuests={tableGuests}
+            colorByOccupancy={print.colorByOccupancy}
+            unitsPerMetre={unitsPerMetre}
+            onBeginGesture={pushHistory}
+            onLive={(next) => {
+              setDoc({ ...draftRef.current, objects: next });
+              setDirty(true);
             }}
-            onPointerDown={(event) => {
-              const target = event.target as HTMLElement | null;
-              const hitObjectButton = Boolean(target?.closest("button"));
-              if (hitObjectButton) return;
-              setIsPanning(true);
-              setPanStart({ x: event.clientX - pan.x, y: event.clientY - pan.y });
-            }}
-            onPointerMove={(event) => {
-              if (isPanning && panStart) {
-                setPan({ x: event.clientX - panStart.x, y: event.clientY - panStart.y });
-                return;
-              }
-              if (!draggingId || !dragState) return;
-              const free = event.shiftKey;
-              const point = screenToCanvas(event, event.currentTarget as HTMLDivElement, zoom, pan);
-              const dx = point.x - dragState.startPoint.x;
-              const dy = point.y - dragState.startPoint.y;
-              setDraft((prev) => ({
-                ...prev,
-                objects: prev.objects.map((obj) =>
-                  dragState.ids.includes(obj.id)
-                    ? {
-                        ...obj,
-                        x: snap((dragState.startPositions[obj.id]?.x ?? obj.x) + dx, prev.canvas.gridSize, free),
-                        y: snap((dragState.startPositions[obj.id]?.y ?? obj.y) + dy, prev.canvas.gridSize, free)
-                      }
-                    : obj
-                )
-              }));
-            }}
-            onPointerUp={() => {
-              setDraggingId(null);
-              setDragState(null);
-              setIsPanning(false);
-              setPanStart(null);
-            }}
-            onPointerLeave={() => {
-              setDraggingId(null);
-              setDragState(null);
-              setIsPanning(false);
-              setPanStart(null);
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                transformOrigin: "top left"
-              }}
-            >
-              {draft.objects.map((obj) => {
-                const common = {
-                  type: "button" as const,
-                  className: "fp-obj",
-                  onPointerDown: (event: PointerEvent<HTMLButtonElement>) => startObjectDrag(obj.id, event),
-                  onClick: (event: React.MouseEvent<HTMLButtonElement>) => selectObject(obj.id, event.shiftKey)
-                };
-                if (obj.type === "table") {
-                  return (
-                    <button
-                      key={obj.id}
-                      {...common}
-                      style={{
-                        left: obj.x - obj.radius,
-                        top: obj.y - obj.radius,
-                        width: obj.radius * 2,
-                        height: obj.radius * 2,
-                        borderRadius: "999px",
-                        border: objectBorder(obj.id, "1px solid #667085"),
-                        background: activeId === obj.id ? "#d4e7ee" : "#eef5f8",
-                        fontSize: 11
-                      }}
-                    >
-                      {obj.tableNumber}
-                    </button>
-                  );
-                }
-                if (obj.type === "rect") {
-                  return (
-                    <button
-                      key={obj.id}
-                      {...common}
-                      aria-label="Rectangle"
-                      style={{
-                        left: obj.x,
-                        top: obj.y,
-                        width: obj.width,
-                        height: obj.height,
-                        border: objectBorder(obj.id, "1px solid #667085"),
-                        background: activeId === obj.id ? "#e4e7ec" : "#f2f4f7"
-                      }}
-                    />
-                  );
-                }
-                if (obj.type === "circle") {
-                  return (
-                    <button
-                      key={obj.id}
-                      {...common}
-                      aria-label="Circle"
-                      style={{
-                        left: obj.x - obj.radius,
-                        top: obj.y - obj.radius,
-                        width: obj.radius * 2,
-                        height: obj.radius * 2,
-                        borderRadius: "999px",
-                        border: objectBorder(obj.id, "1px solid #667085"),
-                        background: activeId === obj.id ? "#e4e7ec" : "#f2f4f7"
-                      }}
-                    />
-                  );
-                }
-                return (
-                  <button
-                    key={obj.id}
-                    {...common}
-                    style={{
-                      left: obj.x,
-                      top: obj.y,
-                      border: selectedSet.has(obj.id) ? "1px dashed #0b5068" : "1px solid transparent",
-                      background: "transparent",
-                      color: "#101828",
-                      fontSize: obj.fontSize
-                    }}
-                  >
-                    {obj.text}
-                  </button>
-                );
-              })}
-            </div>
-            {draft.objects.length === 0 ? (
-              <div className="editor-canvas-empty">
-                <span>
-                  Add tables from the toolbar, or generate a grid with <strong>Auto layout</strong>.
-                </span>
-              </div>
-            ) : null}
-          </div>
+            emptyHint={
+              <span>
+                Add tables from the panel on the right, or generate a grid with <strong>Auto layout</strong>.
+              </span>
+            }
+          />
           <div className="editor-hint">
-            Drag to move · Shift-drag for fine movement · Shift-click to multi-select · Drag the background to pan · Scroll to
-            zoom
+            Drag to move · Shift-drag moves freely · Drag the background to select · Space-drag or ⌘/Ctrl-scroll to pan and zoom
+            · Arrow keys nudge · ⌘C / ⌘V / ⌘D copy, paste, duplicate
           </div>
         </section>
 
         <aside className="editor-side">
-          {selected ? (
-            <Section
-              title={
-                selectedIds.length > 1
-                  ? `${selectedIds.length} selected`
-                  : selected.type === "table"
-                    ? `Table ${selected.tableNumber}`
-                    : selected.type === "rect"
-                      ? "Rectangle"
-                      : selected.type === "circle"
-                        ? "Circle"
-                        : "Text"
-              }
-              actions={
-                <button
-                  type="button"
-                  className="icon-btn icon-btn--sm btn-danger"
-                  aria-label="Delete object"
-                  title="Delete"
-                  onClick={() => {
-                    pushUndoSnapshot();
-                    setDraft((p) => ({ ...p, objects: p.objects.filter((o) => o.id !== selected.id) }));
+          {primary ? (
+            <Inspector
+              primary={primary}
+              selectionCount={validSelected.length}
+              tableGuests={tableGuests}
+              totalGuests={totals.guests ?? 0}
+              gridSize={draft.canvas.gridSize}
+              unitsPerMetre={unitsPerMetre}
+              onPatch={patchSelected}
+              onDelete={deleteSelection}
+              onOrder={reorderSelected}
+            />
+          ) : null}
+
+          <Section title="Add to plan" collapsible defaultOpen>
+            <div className="preset-grid">
+              {OBJECT_PRESETS.map((preset) => (
+                <button key={preset.id} type="button" className="btn-sm" onClick={() => addPreset(preset.id)}>
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </Section>
+
+          <Section
+            title="Checks"
+            collapsible
+            defaultOpen
+            summary={issues.length ? `${issues.length} to look at` : "All clear"}
+            description={`${totals.tables} table${totals.tables === 1 ? "" : "s"} · ${totals.seats} seats${
+              totals.guests != null ? ` · ${totals.guests} guests` : ""
+            }`}
+          >
+            {issues.length === 0 ? (
+              <p className="field-hint" style={{ margin: 0 }}>
+                {hasTables ? "No problems found." : "Add some tables to see checks."}
+              </p>
+            ) : (
+              <ul className="issue-list">
+                {issues.map((issue) => (
+                  <li key={issue.id}>
+                    <button
+                      type="button"
+                      className={`issue issue--${issue.severity}`}
+                      disabled={!issue.objectIds.length}
+                      onClick={() => setSelectedIds(issue.objectIds)}
+                    >
+                      {issue.message}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <Section title="Guest list" collapsible defaultOpen={Boolean(draft.projectId)} summary={linkedProject?.name ?? "Not linked"}>
+            <div className="stack">
+              <Field
+                label="Event"
+                hint="Link a saved event to see guest counts per table, spot overfull tables and print a guest list."
+              >
+                <select
+                  value={draft.projectId ?? ""}
+                  onChange={(e) => {
+                    const projectId = e.target.value || null;
+                    commit((doc) => ({ ...doc, projectId }));
                   }}
                 >
-                  <Trash2 size={15} />
-                </button>
-              }
-            >
-              <div className="form-grid">
-                {selected.type === "table" ? (
-                  <>
-                    <Field label="Table number">
-                      <input value={selected.tableNumber} onChange={(e) => updateSelected({ tableNumber: e.target.value }, false)} />
-                    </Field>
-                    <Field label="Radius">
-                      <input
-                        type="number"
-                        min={6}
-                        max={200}
-                        value={selected.radius}
-                        onChange={(e) => updateSelected({ radius: Math.max(6, Number(e.target.value) || 6) })}
-                      />
-                    </Field>
-                  </>
-                ) : null}
-                {selected.type === "rect" ? (
-                  <>
-                    <Field label="Width">
-                      <input
-                        type="number"
-                        min={6}
-                        value={selected.width}
-                        onChange={(e) => updateSelected({ width: Math.max(6, Number(e.target.value) || 6) })}
-                      />
-                    </Field>
-                    <Field label="Height">
-                      <input
-                        type="number"
-                        min={6}
-                        value={selected.height}
-                        onChange={(e) => updateSelected({ height: Math.max(6, Number(e.target.value) || 6) })}
-                      />
-                    </Field>
-                  </>
-                ) : null}
-                {selected.type === "circle" ? (
-                  <Field label="Radius">
-                    <input
-                      type="number"
-                      min={4}
-                      value={selected.radius}
-                      onChange={(e) => updateSelected({ radius: Math.max(4, Number(e.target.value) || 4) })}
-                    />
-                  </Field>
-                ) : null}
-                {selected.type === "text" ? (
-                  <>
-                    <Field label="Text" className="span-all">
-                      <input value={selected.text} onChange={(e) => updateSelected({ text: e.target.value })} />
-                    </Field>
-                    <Field label="Font size">
-                      <input
-                        type="number"
-                        min={6}
-                        max={200}
-                        value={selected.fontSize}
-                        onChange={(e) => updateSelected({ fontSize: Math.max(6, Number(e.target.value) || 6) })}
-                      />
-                    </Field>
-                  </>
-                ) : null}
-              </div>
-              {selectedIds.length > 1 ? (
-                <p className="field-hint" style={{ margin: "10px 0 0" }}>
-                  Editing the last object clicked. Use the toolbar to align or distribute the selection.
+                  <option value="">None</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {guestsLoading ? <p className="field-hint" style={{ margin: 0 }}>Loading guests…</p> : null}
+              {tableGuests ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  {guestRecords?.length ?? 0} guests across {Object.keys(tableGuests).length} tables.
                 </p>
               ) : null}
-            </Section>
-          ) : null}
+              {tableGuests && hasTables ? (
+                <button type="button" className="btn-sm" onClick={matchSeatsToGuests}>
+                  Match seats to guest counts
+                </button>
+              ) : null}
+            </div>
+          </Section>
 
           <Section title="Print">
             <div className="stack">
               <Field label="Title">
                 <input
                   value={draft.metadata.title}
-                  onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, title: e.target.value } }))}
+                  onChange={(e) => {
+                    const title = e.target.value;
+                    commit((doc) => ({ ...doc, metadata: { ...doc.metadata, title } }), "title");
+                  }}
                 />
               </Field>
               <Field label="Subtitle">
                 <input
                   value={draft.metadata.subtitle}
-                  onChange={(e) => setDraft((p) => ({ ...p, metadata: { ...p.metadata, subtitle: e.target.value } }))}
+                  onChange={(e) => {
+                    const subtitle = e.target.value;
+                    commit((doc) => ({ ...doc, metadata: { ...doc.metadata, subtitle } }), "subtitle");
+                  }}
                 />
               </Field>
               <Field label="Paper" as="div">
@@ -1011,10 +1313,10 @@ export default function FloorplansPage() {
                   value={draft.canvas.paperSize}
                   options={PAPER_OPTIONS}
                   onChange={(value) =>
-                    setDraft((p) => ({
-                      ...p,
-                      canvas: { ...p.canvas, paperSize: value as FloorplanDocument["canvas"]["paperSize"] },
-                      autoLayout: { ...p.autoLayout, paperSize: value as FloorplanDocument["autoLayout"]["paperSize"] }
+                    commit((doc) => ({
+                      ...doc,
+                      canvas: { ...doc.canvas, paperSize: value as FloorplanDocument["canvas"]["paperSize"] },
+                      autoLayout: { ...doc.autoLayout, paperSize: value as FloorplanDocument["autoLayout"]["paperSize"] }
                     }))
                   }
                 />
@@ -1024,14 +1326,98 @@ export default function FloorplansPage() {
                   value={draft.canvas.orientation}
                   options={ORIENTATION_OPTIONS}
                   onChange={(value) =>
-                    setDraft((p) => ({
-                      ...p,
-                      canvas: { ...p.canvas, orientation: value },
-                      autoLayout: { ...p.autoLayout, orientation: value }
+                    commit((doc) => ({
+                      ...doc,
+                      canvas: { ...doc.canvas, orientation: value },
+                      autoLayout: { ...doc.autoLayout, orientation: value }
                     }))
                   }
                 />
               </Field>
+              <Switch
+                label="Legend and totals"
+                hint="Footer with table, seat and guest totals."
+                checked={print.legend}
+                onChange={(legend) => setPrint({ legend })}
+              />
+              <Switch
+                label="Guest counts on tables"
+                hint={guestFeaturesOff ? "Link a guest list first." : "Shows guests/seats under each table."}
+                checked={print.guestCounts}
+                disabled={guestFeaturesOff}
+                onChange={(guestCounts) => setPrint({ guestCounts })}
+              />
+              <Switch
+                label="Colour tables by occupancy"
+                hint={guestFeaturesOff ? "Link a guest list first." : "Full, spare seats, over capacity, empty."}
+                checked={print.colorByOccupancy}
+                disabled={guestFeaturesOff}
+                onChange={(colorByOccupancy) => setPrint({ colorByOccupancy })}
+              />
+              <Switch
+                label="Guest list pages"
+                hint={guestFeaturesOff ? "Link a guest list first." : "Adds pages listing each table's guests and dietaries."}
+                checked={print.guestListPage}
+                disabled={guestFeaturesOff}
+                onChange={(guestListPage) => setPrint({ guestListPage })}
+              />
+              <Field
+                label="Scale: one grid square is"
+                hint={
+                  metresPerSquare
+                    ? "Sets what a metre means on the plan: sizes show in metres and the scale bar is drawn."
+                    : "Leave blank for an unscaled plan. 1 m per square makes the default 6 ft round table 1.8 m."
+                }
+              >
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={metresPerSquare ? Math.round(metresPerSquare * 100) / 100 : ""}
+                    placeholder="—"
+                    onChange={(e) => {
+                      const m = Number(e.target.value);
+                      commit(
+                        (doc) => ({
+                          ...doc,
+                          canvas: {
+                            ...doc.canvas,
+                            unitsPerMetre: m > 0 ? doc.canvas.gridSize / m : null
+                          }
+                        }),
+                        "scale"
+                      );
+                    }}
+                  />
+                  <span className="text-muted">m</span>
+                </div>
+              </Field>
+              {unitsPerMetre ? (
+                <>
+                  <Field
+                    label="Print at"
+                    hint={
+                      print.fixedScale
+                        ? `True scale on ${draft.canvas.paperSize}: measure a 1 m bar on paper = ${(1000 / print.fixedScale).toFixed(1)} mm.`
+                        : "Fit to page scales the plan to fill the sheet."
+                    }
+                  >
+                    <select
+                      value={print.fixedScale ?? ""}
+                      onChange={(e) => setPrint({ fixedScale: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">Fit to page</option>
+                      {FIXED_SCALE_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          1:{n}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Switch label="Scale bar" checked={print.scaleBar} onChange={(scaleBar) => setPrint({ scaleBar })} />
+                </>
+              ) : null}
               {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured ? (
                 <>
                   <LogoPicker
@@ -1040,10 +1426,10 @@ export default function FloorplansPage() {
                     value={draft.selectedClientLogoKey ?? ""}
                     onChange={(key) => {
                       if (!key) {
-                        setDraft((prev) => ({
-                          ...prev,
+                        commit((doc) => ({
+                          ...doc,
                           selectedClientLogoKey: null,
-                          themeSnapshot: { ...prev.themeSnapshot, clientLogoDataUrl: undefined }
+                          themeSnapshot: { ...doc.themeSnapshot, clientLogoDataUrl: undefined }
                         }));
                         return;
                       }
@@ -1058,10 +1444,10 @@ export default function FloorplansPage() {
                     value={draft.selectedVenueLogoKey ?? ""}
                     onChange={(key) => {
                       if (!key) {
-                        setDraft((prev) => ({
-                          ...prev,
+                        commit((doc) => ({
+                          ...doc,
                           selectedVenueLogoKey: null,
-                          themeSnapshot: { ...prev.themeSnapshot, venueLogoDataUrl: undefined }
+                          themeSnapshot: { ...doc.themeSnapshot, venueLogoDataUrl: undefined }
                         }));
                         return;
                       }
@@ -1084,6 +1470,9 @@ export default function FloorplansPage() {
                 onChange={setOutputFormat}
                 aria-label="Output format"
               />
+              <button type="button" onClick={() => void previewFloorplan()} disabled={busy}>
+                <Eye size={16} aria-hidden /> Preview
+              </button>
               <button type="button" className="btn-primary" onClick={() => void printFloorplan()} disabled={busy}>
                 <Download size={16} aria-hidden />
                 {outputFormat === "png" ? "Export PNG" : "Print PDF"}
@@ -1091,8 +1480,51 @@ export default function FloorplansPage() {
             </div>
           </Section>
 
-          <Section title="Auto layout" collapsible defaultOpen={draft.objects.length === 0} summary="Generate a numbered grid of tables">
+          <Section
+            title="Numbering"
+            collapsible
+            defaultOpen={false}
+            summary="Renumber tables by position or close gaps"
+          >
             <div className="stack">
+              <button type="button" onClick={renumberByPosition} disabled={!hasTables}>
+                Renumber by position
+              </button>
+              <button type="button" onClick={closeNumberGaps} disabled={!hasTables}>
+                Close gaps in numbering
+              </button>
+              <p className="field-hint" style={{ margin: 0 }}>
+                Position numbering runs left to right, top to bottom. Non-numeric tables (like “Top”) are left alone. Both are undoable.
+              </p>
+            </div>
+          </Section>
+
+          <Section
+            title="Auto layout"
+            collapsible
+            defaultOpen={objects.length === 0}
+            summary="Generate a numbered grid of tables"
+          >
+            <div className="stack">
+              <Field label="Table type" as="div">
+                <Segmented value={tableStyle} options={STYLE_OPTIONS} onChange={setTableStyle} />
+              </Field>
+              {tableStyle !== "long" ? (
+                <Field label="Round table size" as="div">
+                  <Segmented
+                    value={roundSize}
+                    options={(Object.keys(ROUND_TABLE_SIZES) as RoundTableSize[]).map((key) => ({
+                      value: key,
+                      label: ROUND_TABLE_SIZES[key].label,
+                      title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
+                    }))}
+                    onChange={(value) => {
+                      setRoundSize(value);
+                      setSeatsPerTable(ROUND_TABLE_SIZES[value].seats);
+                    }}
+                  />
+                </Field>
+              ) : null}
               <div className="form-grid">
                 <Field label="Tables">
                   <input
@@ -1100,18 +1532,17 @@ export default function FloorplansPage() {
                     min={1}
                     max={400}
                     value={tableCount}
+                    disabled={useGuestNumbers && Boolean(tableGuests)}
                     onChange={(e) => setTableCount(Math.max(1, Number(e.target.value) || 1))}
                   />
                 </Field>
-                <Field label="Grid snap">
+                <Field label="Seats each">
                   <input
                     type="number"
-                    min={4}
-                    max={200}
-                    value={draft.canvas.gridSize}
-                    onChange={(e) =>
-                      setDraft((p) => ({ ...p, canvas: { ...p.canvas, gridSize: Math.max(4, Number(e.target.value) || 24) } }))
-                    }
+                    min={1}
+                    max={30}
+                    value={seatsPerTable}
+                    onChange={(e) => setSeatsPerTable(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
                   />
                 </Field>
                 <Field label="Rows">
@@ -1120,12 +1551,10 @@ export default function FloorplansPage() {
                     min={1}
                     max={24}
                     value={draft.autoLayout.rows}
-                    onChange={(e) =>
-                      setDraft((p) => ({
-                        ...p,
-                        autoLayout: { ...p.autoLayout, rows: Math.max(1, Math.min(24, Number(e.target.value) || 1)) }
-                      }))
-                    }
+                    onChange={(e) => {
+                      const rows = Math.max(1, Math.min(24, Number(e.target.value) || 1));
+                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, rows } }), "rows");
+                    }}
                   />
                 </Field>
                 <Field label="Columns">
@@ -1134,20 +1563,19 @@ export default function FloorplansPage() {
                     min={1}
                     max={24}
                     value={draft.autoLayout.columns}
-                    onChange={(e) =>
-                      setDraft((p) => ({
-                        ...p,
-                        autoLayout: { ...p.autoLayout, columns: Math.max(1, Math.min(24, Number(e.target.value) || 1)) }
-                      }))
-                    }
+                    onChange={(e) => {
+                      const columns = Math.max(1, Math.min(24, Number(e.target.value) || 1));
+                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, columns } }), "columns");
+                    }}
                   />
                 </Field>
                 <Field label="Numbering">
                   <select
                     value={draft.autoLayout.numbering}
-                    onChange={(e) =>
-                      setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, numbering: e.target.value as "straight" | "snaked" } }))
-                    }
+                    onChange={(e) => {
+                      const numbering = e.target.value as "straight" | "snaked";
+                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, numbering } }));
+                    }}
                   >
                     <option value="straight">Straight</option>
                     <option value="snaked">Snaked</option>
@@ -1156,21 +1584,38 @@ export default function FloorplansPage() {
                 <Field label="Start corner">
                   <select
                     value={draft.autoLayout.startCorner}
-                    onChange={(e) =>
-                      setDraft((p) => ({
-                        ...p,
-                        autoLayout: {
-                          ...p.autoLayout,
-                          startCorner: e.target.value as FloorplanDocument["autoLayout"]["startCorner"]
-                        }
-                      }))
-                    }
+                    onChange={(e) => {
+                      const startCorner = e.target.value as FloorplanDocument["autoLayout"]["startCorner"];
+                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, startCorner } }));
+                    }}
                   >
                     <option value="topLeft">Top left</option>
                     <option value="topRight">Top right</option>
                     <option value="bottomLeft">Bottom left</option>
                     <option value="bottomRight">Bottom right</option>
                   </select>
+                </Field>
+                <Field label="Grid snap">
+                  <input
+                    type="number"
+                    min={4}
+                    max={200}
+                    value={draft.canvas.gridSize}
+                    onChange={(e) => {
+                      const gridSize = Math.max(4, Number(e.target.value) || 24);
+                      commit(
+                        (doc) => {
+                          const m = doc.canvas.unitsPerMetre && doc.canvas.unitsPerMetre > 0 ? doc.canvas.gridSize / doc.canvas.unitsPerMetre : null;
+                          return {
+                            ...doc,
+                            // Keep "one square = N metres" true when the grid size changes.
+                            canvas: { ...doc.canvas, gridSize, unitsPerMetre: m ? gridSize / m : doc.canvas.unitsPerMetre }
+                          };
+                        },
+                        "grid"
+                      );
+                    }}
+                  />
                 </Field>
                 <Field
                   label="Arrangement"
@@ -1185,12 +1630,12 @@ export default function FloorplansPage() {
                       { value: "staggered", label: "Staggered" }
                     ]}
                     onChange={(value) =>
-                      setDraft((p) => ({
-                        ...p,
+                      commit((doc) => ({
+                        ...doc,
                         autoLayout: {
-                          ...p.autoLayout,
+                          ...doc.autoLayout,
                           tableLayout: value,
-                          staggerAxis: value === "staggered" ? (p.autoLayout.staggerAxis ?? "horizontal") : undefined
+                          staggerAxis: value === "staggered" ? (doc.autoLayout.staggerAxis ?? "horizontal") : undefined
                         }
                       }))
                     }
@@ -1205,16 +1650,25 @@ export default function FloorplansPage() {
                         { value: "vertical", label: "Odd columns", title: "Vertical: odd columns offset downward" }
                       ]}
                       onChange={(value) =>
-                        setDraft((p) => ({ ...p, autoLayout: { ...p.autoLayout, staggerAxis: value } }))
+                        commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, staggerAxis: value } }))
                       }
                     />
                   </Field>
                 ) : null}
               </div>
-              <button type="button" onClick={seedFromAutoLayout}>
+              <Switch label="Add a top table" checked={withTopTable} onChange={setWithTopTable} />
+              {tableGuests ? (
+                <Switch
+                  label="Use table numbers from guest list"
+                  hint={`${Object.keys(tableGuests).length} tables in the linked event.`}
+                  checked={useGuestNumbers}
+                  onChange={setUseGuestNumbers}
+                />
+              ) : null}
+              <button type="button" onClick={generateTables}>
                 Generate tables
               </button>
-              {draft.objects.some((obj) => obj.type === "table") ? (
+              {hasTables ? (
                 <p className="field-hint" style={{ margin: 0 }}>
                   Replaces the existing tables. Shapes and labels are kept. Undo is available.
                 </p>

@@ -8,6 +8,7 @@ import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConf
 import { buildEventModel } from "@/lib/event/model";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { logoDataUrlFromKey } from "@/lib/logos/logoDataUrl";
+import { getAppSettings } from "@/lib/appSettings/store";
 import { renderDocumentPdf } from "@/lib/pdf/render";
 import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
 import {
@@ -205,6 +206,7 @@ export async function POST(request: Request) {
     const warnings: string[] = [];
     const eventBase = sanitizeFilename(parsed.request.theme.eventName || "") || "event-docs";
 
+    const { contactPhone, contactWebsites } = await getAppSettings();
     const rendered = await Promise.all(
       docs.map(async (docType) => {
         const pdfBytes = await renderDocumentPdf(docType, model, {
@@ -216,6 +218,7 @@ export async function POST(request: Request) {
           theme,
           menuLongNames,
           dishMenuDuplicateGroups,
+          menuCardContact: { phone: contactPhone, websites: contactWebsites },
           warnings
         });
         return { docType, pdfBytes };

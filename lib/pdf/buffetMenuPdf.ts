@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { embedRasterBytes } from "@/lib/pdf/imageFormat";
 import path from "node:path";
-import { degrees, PDFDocument, type PDFFont, type PDFImage, type PDFPage, rgb } from "pdf-lib";
+import { PDFDocument, type PDFFont, type PDFImage, type PDFPage, radians, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import { allItemsInOrderForLabels, flattenForDisplayMenu, type DisplayLine } from "@/lib/buffetMenu/flattenMenu";
@@ -20,7 +20,6 @@ const PDF_FONT_SOURCES = {
   bodyItalic: path.join(LIB_FONTS, "NotoSans-Italic.ttf")
 };
 
-const WATER_BG_PATH = path.join(process.cwd(), "lib", "assets", "buffet", "water-menu-bg.png");
 
 const A4_PORTRAIT_W = mmToPt(210);
 const A4_PORTRAIT_H = mmToPt(297);
@@ -180,23 +179,24 @@ function packDisplayColumns(blocks: DisplayBlock[], maxColumns: number, columnH:
 }
 
 /**
- * A4 portrait display menu: full-bleed water background, Noto Sans Light (or Regular if Light is missing), centred in band.
+ * A4 portrait display menu: full-bleed background (an "Empty Belly poster", stretched to the page), Noto Sans Light
+ * (or Regular if Light is missing), centred in the poster's clear band.
  */
-export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState): Promise<Uint8Array> {
+export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState, backgroundBytes: Uint8Array): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const { body, bodyBold } = await loadEmbeddedFonts(doc);
   const displayFont = await loadNotoForDisplayMenu(doc, body);
   const fonts: DisplayFonts = { item: displayFont, category: bodyBold };
-  const bgBytes = new Uint8Array(await readFile(WATER_BG_PATH));
-  const bgImage = await embedImageFromBytes(doc, bgBytes);
+  const bgImage = await embedRasterBytes(doc, backgroundBytes);
+  if (!bgImage) throw new Error("The display menu background is not a PNG or JPEG image.");
 
   const page = doc.addPage([A4_PORTRAIT_W, A4_PORTRAIT_H]);
   const ph = A4_PORTRAIT_H;
   const pw = A4_PORTRAIT_W;
   page.drawImage(bgImage, { x: 0, y: 0, width: pw, height: ph });
 
-  /* White band of the water background runs ~18%–82%; keep text clear of its edges. */
+  /* Posters keep a clear band from 18% to 82% of the height (see the guide on the Settings page); keep text clear of its edges. */
   const bandInset = mmToPt(6);
   const contentBottom = 0.18 * ph + bandInset;
   const contentTop = 0.82 * ph - bandInset;
@@ -323,18 +323,28 @@ export async function renderBuffetAllergenMatrixPdf(
     logoW = logoImg.width * r;
     logoH = logoImg.height * r;
   }
-  /* Table starts a clear gap below whichever is taller: the title or the logo. */
-  const tableTop = H - margin - Math.max(titleSize * 0.75, logoH) - mmToPt(8);
+  /* "Date prepared" / "Prepared by" write-in lines, top left: whoever fills them in signs off the sheet. */
+  const signOffSize = 10;
+  const signOffLabels = ["Date prepared:", "Prepared by:"];
+  const signOffLabelW = Math.max(...signOffLabels.map((l) => bodyBold.widthOfTextAtSize(l, signOffSize)));
+  const signOffRuleW = mmToPt(55);
+  /* Room above each rule for handwriting. */
+  const signOffStep = mmToPt(10);
+  const signOffFirstBaseline = H - margin - mmToPt(6);
+  const signOffH = H - margin - (signOffFirstBaseline - (signOffLabels.length - 1) * signOffStep) + signOffSize * 0.25;
 
-  /* Optional small-print statement at the foot of every page; long statements drop from 9pt to 8pt. */
+  /* Table starts a clear gap below whichever is tallest: the title, the logo or the sign-off lines. */
+  const tableTop = H - margin - Math.max(titleSize * 0.75, logoH, signOffH) - mmToPt(8);
+
+  /* Optional small-print statement at the foot of every page; long statements drop from 11pt to 10pt. */
   const statementParas = allergenStatement
     .split(/\r?\n/)
     .map((p) => p.trim())
     .filter(Boolean);
-  let statementSize = 9;
+  let statementSize = 11;
   let statementLines: string[] = [];
   if (statementParas.length) {
-    for (const size of [9, 8]) {
+    for (const size of [11, 10]) {
       statementSize = size;
       statementLines = statementParas.flatMap((p) => wrapWords(p, body, size, tableW));
       if (statementLines.length <= 4) break;
@@ -346,17 +356,29 @@ export async function renderBuffetAllergenMatrixPdf(
 
   let fontSize = 10.5;
   let headerSize = 8.5;
-  const HEADER_ROT_DEG = 45;
-  const headerRad = (Math.PI * HEADER_ROT_DEG) / 180;
-  const headerCos = Math.cos(headerRad);
-  const headerSin = Math.sin(headerRad);
+  /** Clear space kept between a tilted allergen label and its column's grid lines. */
+  const headerLabelPadX = 3;
 
   const maxAllergyLabelWidth = (hs: number) =>
     Math.max(...ALLERGENS.map((a) => bodyBold.widthOfTextAtSize(a.shortLabel, hs)));
-  /** Vertical room for one-line labels tilted 45° (span along y ≈ w·sin(45) plus padding). */
+  /**
+   * Shallowest tilt (45° up to vertical) at which the longest label (e.g. "Crustacean") fits inside its column:
+   * a label of width w and cap height c tilted by θ spans w·cos θ + c·sin θ across.
+   */
+  const headerAngleFor = (hs: number) => {
+    const w = maxAllergyLabelWidth(hs);
+    const cap = hs * 0.7;
+    for (let deg = 45; deg < 90; deg += 5) {
+      const rad = (Math.PI * deg) / 180;
+      if (w * Math.cos(rad) + cap * Math.sin(rad) <= colW - headerLabelPadX * 2) return rad;
+    }
+    return Math.PI / 2;
+  };
+  /** Vertical room for one-line tilted labels (span along y = w·sin θ + c·cos θ, plus padding). */
   const headerHForTilted = (hs: number) => {
     const w = maxAllergyLabelWidth(hs);
-    return Math.min(90, Math.max(40, w * headerSin + hs * 0.85 + 18));
+    const rad = headerAngleFor(hs);
+    return Math.max(40, w * Math.sin(rad) + hs * 0.7 * Math.cos(rad) + 18);
   };
 
   /** Distance from top grid line to first text baseline: cap height + small gap (keeps glyphs below the line). */
@@ -393,6 +415,9 @@ export async function renderBuffetAllergenMatrixPdf(
   maxLines = maxLinesForItems(items, fontSize);
   rowH = rowHFor(fontSize, maxLines);
   const lineStep = fontSize * 1.12;
+  const headerRad = headerAngleFor(headerSize);
+  const headerCos = Math.cos(headerRad);
+  const headerSin = Math.sin(headerRad);
 
   const bodyAvail = tableTop - tableBottom - headerH;
   const rowsPerPage = Math.max(1, Math.floor(bodyAvail / rowH));
@@ -421,6 +446,18 @@ export async function renderBuffetAllergenMatrixPdf(
     if (logoImg) {
       page.drawImage(logoImg, { x: W - margin - logoW, y: H - margin - logoH, width: logoW, height: logoH });
     }
+
+    signOffLabels.forEach((label, i) => {
+      const baseline = signOffFirstBaseline - i * signOffStep;
+      page.drawText(label, { x: tableLeft, y: baseline, size: signOffSize, font: bodyBold, color: ink });
+      const ruleX = tableLeft + signOffLabelW + 6;
+      page.drawLine({
+        start: { x: ruleX, y: baseline - 2 },
+        end: { x: ruleX + signOffRuleW, y: baseline - 2 },
+        thickness: 0.6,
+        color: lineGray
+      });
+    });
 
     const dataTop = tableTop - headerH;
     const bottomY = dataTop - n * rowH;
@@ -464,15 +501,17 @@ export async function renderBuffetAllergenMatrixPdf(
       const cap = headerSize * 0.7;
       const cx = colLeft + colW / 2;
       const cy = headerBandMidY;
-      const x = cx - (w / 2) * headerCos - cap * 0.35 * headerSin;
-      const y = cy - (w / 2) * headerSin - cap * 0.35 * headerCos;
+      /* Centre the label's box on the cell: back off half its length along the baseline, then half the cap
+         height along the glyphs' "up" direction (−sin θ, cos θ). */
+      const x = cx - (w / 2) * headerCos + (cap / 2) * headerSin;
+      const y = cy - (w / 2) * headerSin - (cap / 2) * headerCos;
       page.drawText(label, {
         x,
         y,
         size: headerSize,
         font: bodyBold,
         color: ink,
-        rotate: degrees(HEADER_ROT_DEG)
+        rotate: radians(headerRad)
       });
     }
 
@@ -660,10 +699,10 @@ export async function renderBuffetLabelSheetsPdf(
 export async function renderAllBuffetPdfs(
   menu: BuffetMenuState,
   logo: { bytes: Uint8Array; contentType?: string } | null,
-  options: { allergenStatement?: string } = {}
+  options: { allergenStatement?: string; displayBackground: Uint8Array }
 ): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
   const [display, matrix, labelsA6, labelsA7] = await Promise.all([
-    renderBuffetDisplayMenuPdf(menu),
+    renderBuffetDisplayMenuPdf(menu, options.displayBackground),
     renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, options.allergenStatement ?? ""),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
     renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")

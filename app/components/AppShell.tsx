@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Settings } from "lucide-react";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { NAV_TOOLS } from "./navTools";
@@ -33,6 +34,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             );
           })}
+        </nav>
+        <nav className="sidebar-nav sidebar-foot" aria-label="Settings">
+          <Link
+            href="/settings"
+            className={pathname?.startsWith("/settings") ? "sidebar-link sidebar-link--active" : "sidebar-link"}
+            aria-current={pathname?.startsWith("/settings") ? "page" : undefined}
+          >
+            <Settings size={18} className="sidebar-link-icon" aria-hidden />
+            <span>Settings</span>
+          </Link>
         </nav>
       </aside>
       <div className="shell-main">{children}</div>
