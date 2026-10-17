@@ -14,10 +14,10 @@ function mmToPt(mm: number): number {
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
-  body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
-  bodyLight: path.join(LIB_FONTS, "NotoSans-Light.ttf"),
-  bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
-  bodyItalic: path.join(LIB_FONTS, "NotoSans-Italic.ttf")
+  body: path.join(LIB_FONTS, "OpenSans-Regular.ttf"),
+  bodyLight: path.join(LIB_FONTS, "OpenSans-Light.ttf"),
+  bodyBold: path.join(LIB_FONTS, "OpenSans-Bold.ttf"),
+  bodyItalic: path.join(LIB_FONTS, "OpenSans-Italic.ttf")
 };
 
 
@@ -63,8 +63,8 @@ const DISPLAY_COLUMN_GAP_MM = 8;
 
 type EmbeddedFonts = { body: PDFFont; bodyBold: PDFFont; bodyItalic: PDFFont };
 
-/** Noto Sans Light for the display menu; falls back to Regular if the file is missing. */
-async function loadNotoForDisplayMenu(doc: PDFDocument, regular: PDFFont): Promise<PDFFont> {
+/** Open Sans Light for the display menu; falls back to Regular if the file is missing. */
+async function loadLightForDisplayMenu(doc: PDFDocument, regular: PDFFont): Promise<PDFFont> {
   try {
     const bytes = await readFile(PDF_FONT_SOURCES.bodyLight);
     return await doc.embedFont(bytes, { subset: true });
@@ -179,14 +179,14 @@ function packDisplayColumns(blocks: DisplayBlock[], maxColumns: number, columnH:
 }
 
 /**
- * A4 portrait display menu: full-bleed background (an "Empty Belly poster", stretched to the page), Noto Sans Light
+ * A4 portrait display menu: full-bleed background (an "Empty Belly poster", stretched to the page), Open Sans Light
  * (or Regular if Light is missing), centred in the poster's clear band.
  */
 export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState, backgroundBytes: Uint8Array): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const { body, bodyBold } = await loadEmbeddedFonts(doc);
-  const displayFont = await loadNotoForDisplayMenu(doc, body);
+  const displayFont = await loadLightForDisplayMenu(doc, body);
   const fonts: DisplayFonts = { item: displayFont, category: bodyBold };
   const bgImage = await embedRasterBytes(doc, backgroundBytes);
   if (!bgImage) throw new Error("The display menu background is not a PNG or JPEG image.");

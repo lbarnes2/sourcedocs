@@ -51,9 +51,9 @@ export interface VenueSignageProfile {
   name: string;
   slots: VenueSignageSlot[];
   theme: SignageThemeColors;
-  /** Shown below the event name on signs (Noto bold); optional default for pack generation. */
+  /** Shown below the event name on signs (Open Sans bold); optional default for pack generation. */
   defaultVenueLabel?: string;
-  /** Optional line under the venue (Noto regular, same size as venue); pack default. */
+  /** Optional line under the venue (Open Sans regular, same size as venue); pack default. */
   defaultSubVenueLabel?: string;
   /** R2 object key under logos/venue/ — optional default for pack generation. */
   defaultVenueLogoKey?: string;
