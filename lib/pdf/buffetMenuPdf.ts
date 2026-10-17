@@ -13,6 +13,8 @@ function mmToPt(mm: number): number {
 }
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
+/** FSA allergen icons (Open Government Licence v3.0), one `<allergen id>.png` per allergen. */
+const ALLERGEN_ICON_DIR = path.join(process.cwd(), "lib", "assets", "allergens");
 const PDF_FONT_SOURCES = {
   body: path.join(LIB_FONTS, "OpenSans-Regular.ttf"),
   bodyLight: path.join(LIB_FONTS, "OpenSans-Light.ttf"),
@@ -276,11 +278,26 @@ export async function renderBuffetDisplayMenuPdf(menu: BuffetMenuState, backgrou
   return doc.save();
 }
 
+/** Embeds the FSA icon for each allergen; a missing or unreadable file just leaves that header without one. */
+async function embedAllergenIcons(doc: PDFDocument): Promise<Partial<Record<AllergenId, PDFImage>>> {
+  const icons: Partial<Record<AllergenId, PDFImage>> = {};
+  await Promise.all(
+    ALLERGENS.map(async (a) => {
+      try {
+        icons[a.id] = await doc.embedPng(await readFile(path.join(ALLERGEN_ICON_DIR, `${a.id}.png`)));
+      } catch {
+        /* skip */
+      }
+    })
+  );
+  return icons;
+}
+
 const ink = rgb(0, 0, 0);
 const lineGray = rgb(0.35, 0.35, 0.35);
 
 /**
- * A4 landscape allergen matrix with grid lines and Lucide "check" marks in cells.
+ * A4 landscape allergen matrix with FSA allergen icons over the column labels, grid lines and Lucide "check" marks in cells.
  * Paginates when items do not fit on a single page (up to MAX_BUFFET_MENU_ITEMS).
  */
 export async function renderBuffetAllergenMatrixPdf(
@@ -295,6 +312,7 @@ export async function renderBuffetAllergenMatrixPdf(
   const W = A4_LAND_W;
   const H = A4_LAND_H;
   const items = allItemsInOrderForLabels(menu);
+  const allergenIcons = await embedAllergenIcons(doc);
 
   const margin = mmToPt(12);
   const titleSize = 18;
@@ -358,6 +376,10 @@ export async function renderBuffetAllergenMatrixPdf(
   let headerSize = 8.5;
   /** Clear space kept between a tilted allergen label and its column's grid lines. */
   const headerLabelPadX = 3;
+  /* FSA icons sit above the labels; the FSA asks for at least 6 mm. */
+  const iconPadTop = 4;
+  const iconSize = Object.keys(allergenIcons).length ? Math.max(mmToPt(6), Math.min(mmToPt(10), colW - 8)) : 0;
+  const iconBandH = iconSize ? iconSize + iconPadTop : 0;
 
   const maxAllergyLabelWidth = (hs: number) =>
     Math.max(...ALLERGENS.map((a) => bodyBold.widthOfTextAtSize(a.shortLabel, hs)));
@@ -378,7 +400,7 @@ export async function renderBuffetAllergenMatrixPdf(
   const headerHForTilted = (hs: number) => {
     const w = maxAllergyLabelWidth(hs);
     const rad = headerAngleFor(hs);
-    return Math.max(40, w * Math.sin(rad) + hs * 0.7 * Math.cos(rad) + 18);
+    return Math.max(40, w * Math.sin(rad) + hs * 0.7 * Math.cos(rad) + 18) + iconBandH;
   };
 
   /** Distance from top grid line to first text baseline: cap height + small gap (keeps glyphs below the line). */
@@ -493,14 +515,25 @@ export async function renderBuffetAllergenMatrixPdf(
       page.drawText(ln, { x: tableLeft + (nameColW - lw) / 2, y: hy, size: headerSize, font: bodyBold, color: ink });
       hy -= headerSize * 0.88;
     }
+    /* Labels centre in what's left of the header band below the icons. */
+    const labelBandMidY = (tableTop - iconBandH + dataTop) / 2;
     for (let c = 0; c < ALLERGENS.length; c++) {
       const a = ALLERGENS[c]!;
       const colLeft = tableLeft + nameColW + c * colW;
+      const icon = allergenIcons[a.id];
+      if (icon) {
+        page.drawImage(icon, {
+          x: colLeft + (colW - iconSize) / 2,
+          y: tableTop - iconPadTop - iconSize,
+          width: iconSize,
+          height: iconSize
+        });
+      }
       const label = a.shortLabel;
       const w = bodyBold.widthOfTextAtSize(label, headerSize);
       const cap = headerSize * 0.7;
       const cx = colLeft + colW / 2;
-      const cy = headerBandMidY;
+      const cy = labelBandMidY;
       /* Centre the label's box on the cell: back off half its length along the baseline, then half the cap
          height along the glyphs' "up" direction (−sin θ, cos θ). */
       const x = cx - (w / 2) * headerCos + (cap / 2) * headerSin;
