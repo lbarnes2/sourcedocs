@@ -22,7 +22,7 @@ import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
-import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
+import { fitTextToFont, titleFontFor } from "@/lib/pdf/fontText";
 import type { PDFFont } from "pdf-lib";
 
 function mmToPt(mm: number): number {
@@ -52,13 +52,13 @@ const PLACE_CARD_STOCK = {
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 
 /**
- * Body: Noto Sans (hinted TTF) — broad Latin / Greek / Cyrillic; use for all “must render” copy.
- * Titles: Cormorant Garamond VF (single stable source to avoid tofu from split webfont subsets).
+ * Body: Open Sans (static TTF) — Latin / Greek / Cyrillic; use for all “must render” copy.
+ * Titles: Sora SemiBold (static TTF, Latin only — run titles through {@link fitTextToFont}).
  */
 const PDF_FONT_SOURCES = {
-  body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
-  bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
-  title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf")
+  body: path.join(LIB_FONTS, "OpenSans-Regular.ttf"),
+  bodyBold: path.join(LIB_FONTS, "OpenSans-Bold.ttf"),
+  title: path.join(LIB_FONTS, "Sora-SemiBold.ttf")
 } as const;
 
 export type EmbeddedPdfFonts = {
@@ -78,12 +78,12 @@ let cachedPdfFontBytes: PdfFontBytesCache | null = null;
 
 async function loadPdfFontBytes(): Promise<PdfFontBytesCache> {
   if (cachedPdfFontBytes) return cachedPdfFontBytes;
-  const [body, bodyBold, cormorant] = await Promise.all([
+  const [body, bodyBold, title] = await Promise.all([
     readFile(PDF_FONT_SOURCES.body),
     readFile(PDF_FONT_SOURCES.bodyBold),
     readFile(PDF_FONT_SOURCES.title)
   ]);
-  cachedPdfFontBytes = { body, bodyBold, title: cormorant };
+  cachedPdfFontBytes = { body, bodyBold, title };
   return cachedPdfFontBytes;
 }
 
@@ -95,8 +95,8 @@ async function createDocWithFonts(): Promise<{ doc: PDFDocument } & EmbeddedPdfF
     doc.embedFont(bytes.body, { subset: true }),
     doc.embedFont(bytes.bodyBold, { subset: true })
   ]);
-  const cormorant = await doc.embedFont(bytes.title, { subset: false });
-  return { doc, body, bodyBold, title: cormorant, titleBold: cormorant };
+  const title = await doc.embedFont(bytes.title, { subset: false });
+  return { doc, body, bodyBold, title, titleBold: title };
 }
 
 function pageDimensions(settings: Pick<TablePlanSettings, "paperSize" | "orientation">): [number, number] {
@@ -217,22 +217,6 @@ function truncateToWidth(text: string, font: PDFFont, fontSize: number, maxWidth
 function wrapTextToWidthClamped(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
   const wrapped = wrapTextToWidth(text, font, fontSize, maxWidth);
   return wrapped.map((line) => truncateToWidth(line, font, fontSize, maxWidth));
-}
-
-function drawPseudoBoldText(
-  page: import("pdf-lib").PDFPage,
-  text: string,
-  options: {
-    x: number;
-    y: number;
-    font: PDFFont;
-    size: number;
-    color?: ReturnType<typeof rgb>;
-    maxWidth?: number;
-  }
-) {
-  page.drawText(text, options);
-  page.drawText(text, { ...options, x: options.x + 0.22 });
 }
 
 type PlaceCardLineKind = "name" | "subtitle" | "table" | "course" | "dietary";
@@ -402,13 +386,14 @@ export async function renderTablePlanByTablePdf(
       color: rgb(1, 1, 1)
     });
 
-    const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
+    const eventTitleFont = titleFontFor([theme.eventName || "Event"], title, bold);
+    const eventTitle = fitTextToFont(theme.eventName || "Event", eventTitleFont);
     const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
     let titleSize = 30;
-    let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+    let titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
     while (titleLines.length > 2 && titleSize > 18) {
       titleSize -= 1;
-      titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+      titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
     }
     const titleLineHeight = titleSize + 3;
     const titleBlockHeight = titleLines.length * titleLineHeight;
@@ -418,11 +403,11 @@ export async function renderTablePlanByTablePdf(
     }
     const titleCenterY = titleY - ((Math.min(2, titleLines.length) - 1) * titleLineHeight) / 2 + titleSize * 0.35;
     titleLines.slice(0, 2).forEach((line, lineIndex) => {
-      const lineWidth = title.widthOfTextAtSize(line, titleSize);
+      const lineWidth = eventTitleFont.widthOfTextAtSize(line, titleSize);
       page.drawText(line, {
         x: (width - lineWidth) / 2,
         y: titleY - lineIndex * titleLineHeight,
-        font: title,
+        font: eventTitleFont,
         size: titleSize,
         color: titleColor
       });
@@ -560,13 +545,14 @@ export async function renderTablePlanByPersonPdf(
       color: rgb(1, 1, 1)
     });
 
-    const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
+    const eventTitleFont = titleFontFor([theme.eventName || "Event"], title, bold);
+    const eventTitle = fitTextToFont(theme.eventName || "Event", eventTitleFont);
     const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
     let titleSize = 30;
-    let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+    let titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
     while (titleLines.length > 2 && titleSize > 18) {
       titleSize -= 1;
-      titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+      titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
     }
     const titleLineHeight = titleSize + 3;
     const titleBlockHeight = titleLines.length * titleLineHeight;
@@ -576,11 +562,11 @@ export async function renderTablePlanByPersonPdf(
     }
     const titleCenterY = titleY - ((Math.min(2, titleLines.length) - 1) * titleLineHeight) / 2 + titleSize * 0.35;
     titleLines.slice(0, 2).forEach((line, lineIndex) => {
-      const lineWidth = title.widthOfTextAtSize(line, titleSize);
+      const lineWidth = eventTitleFont.widthOfTextAtSize(line, titleSize);
       page.drawText(line, {
         x: (width - lineWidth) / 2,
         y: titleY - lineIndex * titleLineHeight,
-        font: title,
+        font: eventTitleFont,
         size: titleSize,
         color: titleColor
       });
@@ -1072,21 +1058,10 @@ export async function renderMenuBookletPdf(
     color: ReturnType<typeof rgb>,
     panelLeft: number,
     panelWidth: number,
-    opacity = 1,
-    pseudoBold = false
+    opacity = 1
   ) => {
     const textWidth = fontRef.widthOfTextAtSize(text, size);
     const x = panelLeft + (panelWidth - textWidth) / 2;
-    if (pseudoBold) {
-      drawPseudoBoldText(page, text, {
-        x,
-        y,
-        font: fontRef,
-        size,
-        color
-      });
-      return;
-    }
     page.drawText(text, { x, y, font: fontRef, size, color, opacity });
   };
 
@@ -1168,14 +1143,15 @@ export async function renderMenuBookletPdf(
   const panelCenterY = panelY + panelH / 2;
   const minTextBottomY = panelY + 32;
   let titleFontSize = 26;
-  const coverTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
-  let titleLines = wrapTextToWidth(coverTitle, title, titleFontSize, titleMaxW);
+  const coverTitleFont = titleFontFor([theme.eventName || "Event"], title, bold);
+  const coverTitle = fitTextToFont(theme.eventName || "Event", coverTitleFont);
+  let titleLines = wrapTextToWidth(coverTitle, coverTitleFont, titleFontSize, titleMaxW);
   let titleLineHeight = titleFontSize + 5;
   const minTitleFont = 16;
   const hasEventDate = Boolean(theme.eventDate?.trim());
   const fitTitleBlock = (): { firstTitleBaseline: number; dateBaseline: number } => {
     while (titleFontSize >= minTitleFont) {
-      titleLines = wrapTextToWidth(coverTitle, title, titleFontSize, titleMaxW);
+      titleLines = wrapTextToWidth(coverTitle, coverTitleFont, titleFontSize, titleMaxW);
       titleLineHeight = titleFontSize + 5;
       const n = Math.max(1, titleLines.length);
       let dateBaseline: number;
@@ -1195,7 +1171,7 @@ export async function renderMenuBookletPdf(
       if (fitsLogo && fitsBottom) return { firstTitleBaseline, dateBaseline };
       titleFontSize -= 1;
     }
-    titleLines = wrapTextToWidth(coverTitle, title, titleFontSize, titleMaxW);
+    titleLines = wrapTextToWidth(coverTitle, coverTitleFont, titleFontSize, titleMaxW);
     titleLineHeight = titleFontSize + 5;
     const n = Math.max(1, titleLines.length);
     let dateBaseline: number;
@@ -1218,7 +1194,7 @@ export async function renderMenuBookletPdf(
       sheet1,
       line,
       firstTitleBaseline - index * titleLineHeight,
-      title,
+      coverTitleFont,
       titleFontSize,
       white,
       rightCoverOuter.x,
@@ -1226,11 +1202,12 @@ export async function renderMenuBookletPdf(
     );
   });
   if (theme.eventDate?.trim()) {
+    const dateFont = titleFontFor([theme.eventDate.trim()], title, bold);
     drawCenteredInPanel(
       sheet1,
-      normalizeForCormorantLigatureSafe(theme.eventDate.trim()),
+      fitTextToFont(theme.eventDate.trim(), dateFont),
       dateBaseline,
-      title,
+      dateFont,
       14,
       white,
       rightCoverOuter.x,
@@ -1346,17 +1323,16 @@ export async function renderMenuBookletPdf(
   }
 
   sections.forEach((section, sectionIndex) => {
+    const headingFont = titleFontFor([section.heading], titleBold, bold);
     drawCenteredInPanel(
       sheet2,
-      normalizeForCormorantLigatureSafe(section.heading),
+      fitTextToFont(section.heading, headingFont),
       cursorY,
-      titleBold,
+      headingFont,
       headingSize,
       primary,
       innerLeft,
-      innerW,
-      1,
-      true
+      innerW
     );
     cursorY -= headingSize + sectionGapAfterHeading;
     section.lines.forEach((line) => {
@@ -1426,11 +1402,15 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   let page = doc.addPage([width, height]);
   let y = height - 28;
 
-  drawPseudoBoldText(page, normalizeForCormorantLigatureSafe(`${theme.eventName} - Service Plan`), {
+  const planTitleFont = titleFontFor([theme.eventName], titleBold, bold);
+  const planTitle = fitTextToFont(`${theme.eventName} - Service Plan`, planTitleFont);
+  let planTitleSize = 17;
+  while (planTitleSize > 10 && planTitleFont.widthOfTextAtSize(planTitle, planTitleSize) > width - 44) planTitleSize -= 0.5;
+  page.drawText(planTitle, {
     x: 22,
     y,
-    font: titleBold,
-    size: 17,
+    font: planTitleFont,
+    size: planTitleSize,
     color: hexToRgb(theme.primaryColor, "#012f43")
   });
   y -= 21;
@@ -1733,7 +1713,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
 
   page = doc.addPage([width, height]);
   y = height - 28;
-  drawPseudoBoldText(page, normalizeForCormorantLigatureSafe("Service Summary"), {
+  page.drawText(fitTextToFont("Service Summary", titleBold), {
     x: 24,
     y,
     font: titleBold,
@@ -1899,13 +1879,14 @@ export async function renderFloorplanPdf(
     color: rgb(1, 1, 1)
   });
 
-  const eventTitle = normalizeForCormorantLigatureSafe(theme.eventName || "Event");
+  const eventTitleFont = titleFontFor([theme.eventName || "Event"], title, bold);
+  const eventTitle = fitTextToFont(theme.eventName || "Event", eventTitleFont);
   const maxTitleWidth = Math.max(100, width - safeSideWidth * 2 - 20);
   let titleSize = 30;
-  let titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+  let titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
   while (titleLines.length > 2 && titleSize > 18) {
     titleSize -= 1;
-    titleLines = wrapTextToWidth(eventTitle, title, titleSize, maxTitleWidth);
+    titleLines = wrapTextToWidth(eventTitle, eventTitleFont, titleSize, maxTitleWidth);
   }
   const titleLineHeight = titleSize + 3;
   const titleBlockHeight = titleLines.length * titleLineHeight;
@@ -1915,11 +1896,11 @@ export async function renderFloorplanPdf(
   }
   const titleCenterY = titleY - ((Math.min(2, titleLines.length) - 1) * titleLineHeight) / 2 + titleSize * 0.35;
   titleLines.slice(0, 2).forEach((line, lineIndex) => {
-    const lineWidth = title.widthOfTextAtSize(line, titleSize);
+    const lineWidth = eventTitleFont.widthOfTextAtSize(line, titleSize);
     page.drawText(line, {
       x: (width - lineWidth) / 2,
       y: titleY - lineIndex * titleLineHeight,
-      font: title,
+      font: eventTitleFont,
       size: titleSize,
       color: titleColor
     });

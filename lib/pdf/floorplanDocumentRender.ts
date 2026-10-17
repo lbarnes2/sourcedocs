@@ -5,7 +5,7 @@ import { PDFDocument, degrees, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import type { FloorplanCanvasObject, FloorplanDocument } from "@/types";
 import { pdfPageDimensions } from "@/lib/paperSizes";
-import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
+import { fitTextToFont, titleFontFor } from "@/lib/pdf/fontText";
 import { hexToRgb } from "@/lib/pdf/color";
 import type { PDFFont, PDFPage } from "pdf-lib";
 import {
@@ -35,9 +35,9 @@ import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
-  body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
-  bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf"),
-  title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf")
+  body: path.join(LIB_FONTS, "OpenSans-Regular.ttf"),
+  bodyBold: path.join(LIB_FONTS, "OpenSans-Bold.ttf"),
+  title: path.join(LIB_FONTS, "Sora-SemiBold.ttf")
 } as const;
 
 let cachedFontBytes: { body: Uint8Array; bodyBold: Uint8Array; title: Uint8Array } | null = null;
@@ -241,7 +241,8 @@ function drawGuestListPages(
 
   const keys = Object.keys(guests).sort(naturalTableCompare);
   const heading = `${doc.metadata.title || doc.themeSnapshot.eventName || "Floorplan"} — guest list`;
-  const title = normalizeForCormorantLigatureSafe(heading);
+  const headingFont = titleFontFor([heading], fonts.title, fonts.bold);
+  const title = fitTextToFont(heading, headingFont);
 
   let page: PDFPage | null = null;
   let column = 0;
@@ -249,8 +250,8 @@ function drawGuestListPages(
 
   const newPage = () => {
     page = pdf.addPage([width, height]);
-    const fit = fitTextSingleLine(fonts.title, title, width - margin * 2, 22, 11);
-    page.drawText(fit.line, { x: margin, y: height - margin - 14, size: fit.size, font: fonts.title, color: rgb(0.04, 0.18, 0.26) });
+    const fit = fitTextSingleLine(headingFont, title, width - margin * 2, 22, 11);
+    page.drawText(fit.line, { x: margin, y: height - margin - 14, size: fit.size, font: headingFont, color: rgb(0.04, 0.18, 0.26) });
     page.drawLine({
       start: { x: margin, y: height - margin - 24 },
       end: { x: width - margin, y: height - margin - 24 },
@@ -309,7 +310,7 @@ export async function renderFloorplanDocumentPdf(
   const fontBytes = await loadFontBytes();
   const bodyFont = await pdf.embedFont(fontBytes.body, { subset: true });
   const bodyBold = await pdf.embedFont(fontBytes.bodyBold, { subset: true });
-  const titleFont = await pdf.embedFont(fontBytes.title, { subset: false });
+  const soraTitleFont = await pdf.embedFont(fontBytes.title, { subset: false });
 
   const print = resolvePrintOptions(docInput.print);
   const guests = renderOptions.tableGuests ?? null;
@@ -323,11 +324,12 @@ export async function renderFloorplanDocumentPdf(
   const headerH = layout.headerH;
 
   page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: rgb(1, 1, 1) });
-  const titleText = normalizeForCormorantLigatureSafe(
-    docInput.metadata.title || docInput.themeSnapshot.eventName || "Floorplan"
-  );
+  const titleRaw = docInput.metadata.title || docInput.themeSnapshot.eventName || "Floorplan";
+  const titleFont = titleFontFor([titleRaw], soraTitleFont, bodyBold);
+  const titleText = fitTextToFont(titleRaw, titleFont);
   const titleFit = fitTextSingleLine(titleFont, titleText, titleBandMaxW, 30, 12);
-  const titleBaselineY = height - 22;
+  /** Sora caps stand ~0.73em tall (accents a little more); keep a 12pt margin above them. */
+  const titleBaselineY = height - 12 - titleFit.size * 0.76;
   const titleWidth = titleFont.widthOfTextAtSize(titleFit.line, titleFit.size);
   page.drawText(titleFit.line, {
     x: (width - titleWidth) / 2,
@@ -522,7 +524,7 @@ export async function renderFloorplanDocumentPdf(
   }
 
   if (print.guestListPage && guests && Object.keys(guests).length) {
-    drawGuestListPages(pdf, { body: bodyFont, bold: bodyBold, title: titleFont }, docInput, guests, seatsByTable);
+    drawGuestListPages(pdf, { body: bodyFont, bold: bodyBold, title: soraTitleFont }, docInput, guests, seatsByTable);
   }
 
   return pdf.save();

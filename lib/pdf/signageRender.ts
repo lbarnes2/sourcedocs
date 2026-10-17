@@ -30,7 +30,7 @@ import {
   rgb
 } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { normalizeForCormorantLigatureSafe } from "@/lib/buffetMenu/cormorantNormalize";
+import { titleFontFor, fitTextToFont } from "@/lib/pdf/fontText";
 import { pdfPageDimensions } from "@/lib/paperSizes";
 import { hexToRgb } from "@/lib/pdf/color";
 import { lucideIconPathDs, type LucideIconNode } from "@/lib/pdf/lucideIconPath";
@@ -59,18 +59,18 @@ export interface SignagePageInput {
    * (portrait: divider between sections, arrows below each title; landscape: arrow beside each block).
    */
   dualEventArrangement?: SignageDualEventArrangement;
-  /** Shown below the event name (Noto Sans Bold); optional. */
+  /** Shown below the event name (Open Sans Bold); optional. */
   venueLine?: string;
-  /** Optional line under the venue (Noto Sans Regular, same size as venue). */
+  /** Optional line under the venue (Open Sans Regular, same size as venue). */
   subVenueLine?: string;
-  /** Shown below venue / sub-venue (Noto Sans Regular); optional. */
+  /** Shown below venue / sub-venue (Open Sans Regular); optional. */
   dateLine?: string;
   /** Event 2 venue lines (dual signs); API usually fills from slot/pack/ad-hoc with fallback to event 1 lines. */
   secondaryVenueLine?: string;
   secondarySubVenueLine?: string;
   secondaryDateLine?: string;
   /**
-   * Fixed free-text message from the venue profile slot (single-event signs only), drawn in Noto Sans Bold
+   * Fixed free-text message from the venue profile slot (single-event signs only), drawn in Open Sans Bold
    * in the primary colour below the venue / date lines and above the arrow. Line breaks are kept.
    */
   messageLine?: string;
@@ -186,9 +186,9 @@ function fitSignageTitle(
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
 const PDF_FONT_SOURCES = {
-  title: path.join(LIB_FONTS, "CormorantGaramond-wght.ttf"),
-  body: path.join(LIB_FONTS, "NotoSans-Regular.ttf"),
-  bodyBold: path.join(LIB_FONTS, "NotoSans-Bold.ttf")
+  title: path.join(LIB_FONTS, "Sora-SemiBold.ttf"),
+  body: path.join(LIB_FONTS, "OpenSans-Regular.ttf"),
+  bodyBold: path.join(LIB_FONTS, "OpenSans-Bold.ttf")
 } as const;
 
 type PdfFontBytesCache = {
@@ -394,17 +394,17 @@ function computeLogoPlacement(
   return { dw, dh, bottomY, x };
 }
 
-/** Approximate cap-height / descender for Cormorant embedded at size s (PDF baseline metrics). */
+/** Approximate cap-height / descender for Sora SemiBold embedded at size s (PDF baseline metrics). */
 function titleMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
   return {
-    capH: s * 0.72,
-    desc: s * 0.24,
+    capH: s * 0.73,
+    desc: s * 0.22,
     /** Baseline-to-baseline step = 100% of font size (tight multi-line titles). */
     lineHeight: s * 1.05
   };
 }
 
-/** Noto Sans metrics for venue (bold) and date (regular) lines. */
+/** Open Sans metrics for venue (bold) and date (regular) lines. */
 function bodyMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
   return {
     capH: s * 0.72,
@@ -650,7 +650,7 @@ function layoutSignageContent(
   const innerSpan = innerTop - innerBottom;
   const cyTarget = hasArrow ? innerBottom + innerSpan * 0.25 : 0;
 
-  const name = normalizeForCormorantLigatureSafe(eventName.trim() || "Event");
+  const name = fitTextToFont(eventName.trim() || "Event", titleFont);
   const vRaw = venueLine.trim();
   const sRaw = subVenueLine.trim();
   const dRaw = dateLine.trim();
@@ -936,8 +936,8 @@ function layoutDualSideBySide(
   const arrowSize = hasArrow ? minDim * 0.22 : 0;
   const arrowHalf = arrowSize * 0.52;
 
-  const nameL = normalizeForCormorantLigatureSafe(eventNameLeft.trim() || "Event");
-  const nameR = normalizeForCormorantLigatureSafe(eventNameRight.trim() || "Event");
+  const nameL = fitTextToFont(eventNameLeft.trim() || "Event", titleFont);
+  const nameR = fitTextToFont(eventNameRight.trim() || "Event", titleFont);
   const vRawL = venueLine.trim();
   const sRawL = subVenueLine.trim();
   const dRawL = dateLine.trim();
@@ -1217,8 +1217,8 @@ function layoutDualStackedPortrait(
   const arrowSize = hasArrow ? minDim * 0.2 : 0;
   const arrowHalf = arrowSize * 0.52;
 
-  const nameL = normalizeForCormorantLigatureSafe(eventNameLeft.trim() || "Event");
-  const nameR = normalizeForCormorantLigatureSafe(eventNameRight.trim() || "Event");
+  const nameL = fitTextToFont(eventNameLeft.trim() || "Event", titleFont);
+  const nameR = fitTextToFont(eventNameRight.trim() || "Event", titleFont);
   const vRawL = venueLine.trim();
   const sRawL = subVenueLine.trim();
   const dRawL = dateLine.trim();
@@ -1426,8 +1426,8 @@ function layoutDualStackedLandscape(
   /** Arrow top limit for event 1: inside the border and not up into the logo row. */
   const arrow1TopLimit = Math.min(innerTop - arrowEdgePad, logoRowBottomY);
 
-  const nameL = normalizeForCormorantLigatureSafe(eventNameLeft.trim() || "Event");
-  const nameR = normalizeForCormorantLigatureSafe(eventNameRight.trim() || "Event");
+  const nameL = fitTextToFont(eventNameLeft.trim() || "Event", titleFont);
+  const nameR = fitTextToFont(eventNameRight.trim() || "Event", titleFont);
   const vRawL = venueLine.trim();
   const sRawL = subVenueLine.trim();
   const dRawL = dateLine.trim();
@@ -1743,7 +1743,7 @@ export async function renderSignagePdf(
     clientBytes?: { bytes: Uint8Array; contentType?: string } | null;
   }
 ): Promise<Uint8Array> {
-  const { doc, title, body, bodyBold } = await createDocWithFonts();
+  const { doc, title: soraTitle, body, bodyBold } = await createDocWithFonts();
   let venueImg: PDFImage | null = null;
   let clientImg: PDFImage | null = null;
   if (options.venueBytes) {
@@ -1761,6 +1761,12 @@ export async function renderSignagePdf(
     const primary = hexToRgb(theme.primaryColor, "#012f43");
     const accent = hexToRgb(theme.accentColor, "#acc1cb");
     const textColor = hexToRgb(theme.textColor, "#0d1f28");
+    /** One title font per page so both event names on a two-event sign match. */
+    const title = titleFontFor(
+      isDualSignagePage(spec) ? [spec.eventName, spec.secondaryEventName ?? ""] : [spec.eventName],
+      soraTitle,
+      bodyBold
+    );
 
     page.drawRectangle({ x: 0, y: 0, width: pageWidth, height: pageHeight, color: rgb(1, 1, 1) });
 
