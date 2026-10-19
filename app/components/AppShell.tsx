@@ -1,13 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { Settings } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { CurrentUser } from "@/types/auth";
 import { NAV_TOOLS } from "./navTools";
+
+async function signOut() {
+  await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+  window.location.assign("/login");
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const isLogin = pathname === "/login";
+  const [user, setUser] = useState<CurrentUser | null>(null);
+
+  useEffect(() => {
+    if (isLogin) return;
+    let cancelled = false;
+    void fetch("/api/auth/me")
+      .then((r) => (r.ok ? (r.json() as Promise<{ user: CurrentUser }>) : null))
+      .then((data) => {
+        if (!cancelled && data) setUser(data.user);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isLogin]);
+
+  if (isLogin) return <>{children}</>;
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -44,6 +69,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Settings size={18} className="sidebar-link-icon" aria-hidden />
             <span>Settings</span>
           </Link>
+          {user ? (
+            <div className="sidebar-user" title={user.email}>
+              <span className="sidebar-user-name">{user.name}</span>
+              <span className="sidebar-user-role">{user.role}</span>
+            </div>
+          ) : null}
+          <button type="button" className="sidebar-link" onClick={() => void signOut()}>
+            <LogOut size={18} className="sidebar-link-icon" aria-hidden />
+            <span>Sign out</span>
+          </button>
         </nav>
       </aside>
       <div className="shell-main">{children}</div>

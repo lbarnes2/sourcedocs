@@ -17,6 +17,29 @@ Hosted Next.js tool for generating event collateral from one client CSV:
 - Profile library (JSON-backed) for reusable branding and print settings
 - Export selected outputs as either a single file or ZIP bundle
 
+## Sign-in
+
+Every page and API route needs a signed-in account. Accounts live in R2 at `auth/users.json` (or `data/users.json` when R2 is not configured), with passwords hashed using scrypt.
+
+Roles:
+
+- **Viewer**: view everything, load saved items and generate PDFs
+- **Editor**: everything a viewer can do, plus save and delete projects, menus, floorplans, logos, venues, profiles and sign templates
+- **Admin**: everything, including Settings, buffet settings and user management
+
+Setup:
+
+1. Set `AUTH_SECRET` (at least 32 random characters, e.g. `openssl rand -base64 48`) in `.env.local` and in the Vercel project settings. Changing it signs everyone out.
+2. Create the first admin from your machine:
+
+   ```bash
+   npm run create-admin -- you@example.com "Your Name"
+   ```
+
+   Running it again for an existing email resets that account's password and makes it an admin, which is the way back in if every admin is locked out. With R2 configured in `.env.local`, this writes to the same bucket the live site uses.
+
+Sessions last 12 hours. Five wrong passwords lock an account for 15 minutes.
+
 ## Run locally
 
 ```bash
