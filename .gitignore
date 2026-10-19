@@ -14,3 +14,4 @@ data/buffet-settings.json
 *.tsbuildinfo
 data/app-settings.json
 data/backgrounds/
+data/general-sign-templates.json

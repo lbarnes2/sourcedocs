@@ -1535,6 +1535,150 @@ button.arrow-cell--selected:hover:not(:disabled) {
 }
 
 /* ==========================================================================
+   General signs
+   ========================================================================== */
+.general-sign-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+.general-sign-preview {
+  position: sticky;
+  top: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.general-sign-preview-frame {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.general-sign-preview-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.general-sign-preview-status {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 6px;
+}
+
+.preset-grid button.arrow-cell {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.preset-grid .arrow-cell-label {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.preset-glyphs {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 1px;
+  align-items: center;
+  height: 22px;
+}
+
+.template-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.template-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.template-row .preset-glyphs {
+  width: 52px;
+  justify-content: center;
+}
+
+.template-bar {
+  display: grid;
+  gap: 8px;
+}
+
+.template-bar p {
+  margin: 0;
+}
+
+.symbol-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.symbol-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-weight: 500;
+}
+
+button.symbol-chip-remove {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+}
+
+@media (max-width: 1100px) {
+  .general-sign-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .general-sign-preview {
+    position: static;
+    max-width: 360px;
+  }
+}
+
+/* ==========================================================================
    Tables
    ========================================================================== */
 table {

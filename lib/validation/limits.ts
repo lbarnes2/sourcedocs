@@ -31,3 +31,13 @@ export const MAX_BUFFET_ITEM_TITLE_CHARS = 500;
 export const MAX_BUFFET_SAVED_NAME_CHARS = 200;
 export const MAX_BUFFET_CATEGORIES = 50;
 export const MAX_BUFFET_ALLERGEN_STATEMENT_CHARS = 1500;
+
+/** General (non-event) signs. */
+export const MAX_GENERAL_SIGN_HEADING_CHARS = 120;
+export const MAX_GENERAL_SIGN_SYMBOLS = 3;
+/** Room for a full disclaimer paragraph (e.g. a photography notice). */
+export const MAX_GENERAL_SIGN_BODY_CHARS = 800;
+export const MAX_GENERAL_SIGN_TEMPLATES = 100;
+export const MAX_GENERAL_SIGN_TEMPLATE_LABEL_CHARS = 60;
+/** Wi-Fi SSIDs are at most 32 bytes and WPA passphrases 63 characters; leave headroom for odd encodings. */
+export const MAX_WIFI_FIELD_CHARS = 128;

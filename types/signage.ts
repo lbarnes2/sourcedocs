@@ -1,3 +1,4 @@
+import type { SignSymbolId } from "@/lib/signage/symbols";
 import type { PaperOrientation, PaperSize } from "./paper";
 
 /** Cardinal + intercardinal, plus none for welcome-style signs. */
@@ -59,4 +60,40 @@ export interface VenueSignageProfile {
   defaultVenueLogoKey?: string;
   /** R2 key if you store client logos; optional. */
   defaultClientLogoKey?: string;
+}
+
+/**
+ * Colour treatment for general (non-event) signs.
+ * `plain` / `info` follow the sign's theme colours; `caution` and `prohibition` use fixed safety colours
+ * (yellow-and-black triangle, red ring-and-slash) so they read as warnings whatever the event branding.
+ */
+export type GeneralSignTone = "plain" | "info" | "caution" | "prohibition";
+
+export type WifiSecurity = "WPA" | "WEP" | "nopass";
+
+export interface GeneralSignWifi {
+  network: string;
+  password?: string;
+  security: WifiSecurity;
+  /** Print a QR code that joins the network when scanned with a phone camera. */
+  showQr: boolean;
+}
+
+/**
+ * Saved starting point for a general sign: everything on the sign except branding (colours, logos),
+ * which belongs to the event. Stored as one ordered, team-wide list.
+ */
+export interface GeneralSignTemplate {
+  id: string;
+  label: string;
+  tone: GeneralSignTone;
+  symbols: SignSymbolId[];
+  heading: string;
+  body?: string;
+  arrow: SignageArrowDirection;
+  footer?: string;
+  /** Wi-Fi details; `network` may be blank in a template that is filled in per event. */
+  wifi?: GeneralSignWifi;
+  paperSize?: PaperSize;
+  orientation?: PaperOrientation;
 }
