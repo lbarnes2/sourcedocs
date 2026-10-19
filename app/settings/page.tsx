@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ImagePlus, Star, Trash2 } from "lucide-react";
+import { useCurrentUser } from "@/app/components/CurrentUser";
 import { Callout, Disclosure, Field, PageHeader, Section, Switch, Toasts } from "@/app/components/ui";
 import { readResponseError } from "@/lib/http/readError";
 import { LOGO_UPLOAD_ACCEPT } from "@/lib/logos/logoUpload";
 import { MAX_BUFFET_ALLERGEN_STATEMENT_CHARS } from "@/lib/validation/limits";
 import type { AppSettings } from "@/types/appSettings";
 import type { BuffetMenuSettings } from "@/types/buffetMenu";
+import { UsersSection } from "./UsersSection";
 
 type BackgroundItem = { key: string; label: string; assetUrl: string; builtin: boolean };
 
@@ -35,6 +37,7 @@ function SaveRow({
 }
 
 export default function SettingsPage() {
+  const user = useCurrentUser();
   const [app, setApp] = useState<AppSettings | null>(null);
   const [savedApp, setSavedApp] = useState<AppSettings | null>(null);
   const [buffet, setBuffet] = useState<BuffetMenuSettings>({ allergenStatement: "", showAllergenStatement: false });
@@ -366,6 +369,8 @@ export default function SettingsPage() {
           />
         </div>
       </Section>
+
+      {user?.role === "admin" ? <UsersSection currentUserId={user.id} onError={setError} /> : null}
 
       <Toasts>
         {error ? (

@@ -2,14 +2,12 @@
  * scrypt password hashes, stored as `scrypt$N$r$p$saltB64$hashB64`.
  * scripts/create-admin.mjs writes the same format; keep the two in step.
  */
-import { randomBytes, scrypt as scryptCb, timingSafeEqual, type ScryptOptions } from "node:crypto";
+import { randomBytes, randomInt, scrypt as scryptCb, timingSafeEqual, type ScryptOptions } from "node:crypto";
 
 const N = 16384;
 const R = 8;
 const P = 1;
 const KEY_LEN = 64;
-
-export const MIN_PASSWORD_LENGTH = 12;
 
 function scrypt(password: string, salt: Buffer, keyLen: number, options: ScryptOptions): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -39,4 +37,15 @@ let dummyHash: Promise<string> | null = null;
 export function getDummyHash(): Promise<string> {
   dummyHash ??= hashPassword(randomBytes(16).toString("hex"));
   return dummyHash;
+}
+
+/** No 0/O, 1/l/I: these get read aloud or copied by hand. */
+const TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/** e.g. "k7Qm-x2Pa-Rt9c-H4we": about 90 bits, to be replaced at first sign-in. */
+export function generateTemporaryPassword(): string {
+  const groups = Array.from({ length: 4 }, () =>
+    Array.from({ length: 4 }, () => TEMP_ALPHABET[randomInt(TEMP_ALPHABET.length)]).join("")
+  );
+  return groups.join("-");
 }

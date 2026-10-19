@@ -3,6 +3,7 @@ import { errorMessage } from "@/lib/http/errorMessage";
 import { listGeneralSignTemplates, saveGeneralSignTemplates } from "@/lib/signage/generalTemplateStore";
 import * as limits from "@/lib/validation/limits";
 import { generalSignTemplateListSchema, generalSignTemplateSchema } from "@/lib/validation/signageSchemas";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   return NextResponse.json({ templates: await listGeneralSignTemplates() });
@@ -10,6 +11,8 @@ export async function GET() {
 
 /** Create or update one template (matched by id); new templates go to the end of the list. */
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const template = generalSignTemplateSchema.parse(await request.json());
     const templates = await listGeneralSignTemplates();
@@ -31,6 +34,8 @@ export async function POST(request: Request) {
 
 /** Replace the whole list — used for reordering, renaming, and restoring built-ins. */
 export async function PUT(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const body = (await request.json()) as { templates?: unknown };
     const templates = generalSignTemplateListSchema.parse(body.templates);
@@ -42,6 +47,8 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
   try {

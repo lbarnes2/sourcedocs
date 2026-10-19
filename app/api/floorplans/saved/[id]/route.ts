@@ -3,6 +3,7 @@ import { errorMessage } from "@/lib/http/errorMessage";
 import { deleteFloorplan, getFloorplan } from "@/lib/floorplans/store";
 import { assertValidFloorplanId } from "@/lib/floorplans/floorplanKeys";
 import { floorplanDocumentSchema } from "@/lib/validation/floorplanSchemas";
+import { authorize } from "@/lib/auth/currentUser";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -20,7 +21,9 @@ export async function GET(_request: Request, context: Ctx) {
   }
 }
 
-export async function DELETE(_request: Request, context: Ctx) {
+export async function DELETE(request: Request, context: Ctx) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const { id } = await context.params;
     assertValidFloorplanId(id);

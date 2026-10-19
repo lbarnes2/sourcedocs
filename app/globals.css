@@ -3163,8 +3163,16 @@ button.list-item-title {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 6px 10px 2px;
+  padding: 6px 10px;
   min-width: 0;
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: background 0.12s ease;
+}
+
+.sidebar-user:hover,
+.sidebar-user--active {
+  background: var(--surface-3);
 }
 
 .sidebar-user-name {
@@ -3193,6 +3201,74 @@ button.sidebar-link {
 
 @media (max-width: 860px) {
   .sidebar-user {
+    max-width: 140px;
+  }
+
+  .sidebar-user-role {
     display: none;
   }
+}
+
+.account-form {
+  max-width: 380px;
+}
+
+.account-role {
+  text-transform: capitalize;
+}
+
+.users-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.users-table td {
+  vertical-align: middle;
+  padding: 8px 10px;
+}
+
+.users-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.users-table select {
+  width: auto;
+  min-width: 110px;
+}
+
+.users-name {
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.users-actions {
+  flex-wrap: nowrap;
+}
+
+.users-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 140px) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+@media (max-width: 720px) {
+  .users-add {
+    grid-template-columns: 1fr;
+  }
+}
+
+.users-temp {
+  flex-wrap: nowrap;
+}
+
+.users-temp-password {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  user-select: all;
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDummyHash, verifyPassword } from "@/lib/auth/password";
-import { SESSION_COOKIE, sessionCookieOptions, signSession } from "@/lib/auth/session";
+import { setSessionCookie, toCurrentUser } from "@/lib/auth/currentUser";
 import { findUserByEmail, updateUser } from "@/lib/auth/userStore";
 import { loginBodySchema } from "@/lib/validation/userSchemas";
 
@@ -42,9 +42,8 @@ export async function POST(request: Request) {
       await updateUser(user.id, (u) => ({ ...u, failedLogins: 0, lockedUntil: null }));
     }
 
-    const token = await signSession({ uid: user.id, name: user.name, role: user.role });
     const response = NextResponse.json({ ok: true, mustChangePassword: user.mustChangePassword });
-    response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
+    await setSessionCookie(response, toCurrentUser(user));
     return response;
   } catch (error) {
     console.error(error);

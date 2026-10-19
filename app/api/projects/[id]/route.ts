@@ -3,6 +3,7 @@ import { errorMessage } from "@/lib/http/errorMessage";
 import { parseStoredEventProjectFile } from "@/lib/projects/parseProjectPayload";
 import { assertValidProjectId } from "@/lib/projects/projectKeys";
 import { deleteProject, getProject } from "@/lib/projects/store";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -20,7 +21,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   }
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const { id } = await context.params;
     assertValidProjectId(id);

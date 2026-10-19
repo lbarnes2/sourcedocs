@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { BUFFET_MENU_PREFIX, deleteSavedBuffetMenu, getSavedBuffetMenu } from "@/lib/buffetMenu/savedR2";
 import { isR2Configured } from "@/lib/storage/r2";
+import { authorize } from "@/lib/auth/currentUser";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -20,7 +21,9 @@ export async function GET(_request: Request, context: Ctx) {
   return NextResponse.json(doc);
 }
 
-export async function DELETE(_request: Request, context: Ctx) {
+export async function DELETE(request: Request, context: Ctx) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   if (!isR2Configured()) {
     return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
   }

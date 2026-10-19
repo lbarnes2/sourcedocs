@@ -7,6 +7,7 @@ import {
   saveVenueSignageProfile
 } from "@/lib/signageVenues/store";
 import { venueSignageProfileSchema } from "@/lib/validation/signageSchemas";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   const profiles = await listVenueSignageProfiles();
@@ -14,6 +15,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const payload = await request.json();
     const parsed = venueSignageProfileSchema.parse(payload);
@@ -26,6 +29,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
   if (!id) {

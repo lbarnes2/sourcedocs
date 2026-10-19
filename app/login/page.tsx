@@ -31,8 +31,9 @@ export default function LoginPage() {
         setBusy(false);
         return;
       }
+      const { mustChangePassword } = (await response.json()) as { mustChangePassword: boolean };
       /* Full navigation so the app shell reloads with the new session. */
-      window.location.assign(safeNext());
+      window.location.assign(mustChangePassword ? "/account" : safeNext());
     } catch {
       setError("Could not reach the server. Check your connection and try again.");
       setBusy(false);

@@ -3,6 +3,7 @@ import { errorMessage } from "@/lib/http/errorMessage";
 import { isR2Configured } from "@/lib/storage/r2";
 import { buildEventProjectFileFromSavePayload } from "@/lib/projects/parseProjectPayload";
 import { listProjects, saveProject } from "@/lib/projects/store";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   try {
@@ -18,6 +19,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const body = await request.json();
     const file = buildEventProjectFileFromSavePayload(body);

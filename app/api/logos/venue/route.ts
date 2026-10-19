@@ -4,6 +4,7 @@ import { isR2Configured } from "@/lib/storage/r2";
 import { deleteVenueLogo, listVenueLogos, renameVenueLogo, saveVenueLogoUpload } from "@/lib/logos/venueR2";
 import { isPrintableLogoKey, logoContentTypeFromBytes } from "@/lib/logos/logoUpload";
 import { findLogoKeyReferences } from "@/lib/logos/replaceLogoKeyRefs";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   if (!isR2Configured()) {
@@ -19,6 +20,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   if (!isR2Configured()) {
     return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
   }
@@ -46,6 +49,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   if (!isR2Configured()) {
     return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
   }
@@ -69,6 +74,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   if (!isR2Configured()) {
     return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
   }

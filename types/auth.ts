@@ -29,3 +29,16 @@ export interface CurrentUser {
   role: Role;
   mustChangePassword: boolean;
 }
+
+/** An account as shown to admins on the Users screen. */
+export interface ManagedUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  active: boolean;
+  mustChangePassword: boolean;
+  locked: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

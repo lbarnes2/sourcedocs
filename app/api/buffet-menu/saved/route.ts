@@ -5,6 +5,7 @@ import { listSavedBuffetMenus, putSavedBuffetMenu } from "@/lib/buffetMenu/saved
 import { isR2Configured } from "@/lib/storage/r2";
 import { BUFFET_MENU_JSON_SCHEMA_VERSION, type BuffetMenuSavedFile } from "@/types/buffetMenu";
 import { buffetMenuSavePutBodySchema } from "@/lib/validation/buffetMenuSchemas";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   if (!isR2Configured()) {
@@ -20,6 +21,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   if (!isR2Configured()) {
     return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
   }

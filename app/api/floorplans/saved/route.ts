@@ -6,6 +6,7 @@ import { listFloorplans, saveFloorplan } from "@/lib/floorplans/store";
 import { floorplanSavePayloadSchema, withFloorplanSaveDefaults } from "@/lib/validation/floorplanSchemas";
 import { isR2Configured } from "@/lib/storage/r2";
 import type { FloorplanDocument } from "@/types";
+import { authorize } from "@/lib/auth/currentUser";
 
 export async function GET() {
   try {
@@ -18,6 +19,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   let body: unknown;
   try {
     body = await request.json();

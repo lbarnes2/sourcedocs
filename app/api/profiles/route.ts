@@ -1,3 +1,4 @@
+import { authorize } from "@/lib/auth/currentUser";
 import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { z } from "zod";
@@ -33,6 +34,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const payload = await request.json();
     const parsed = profileSchema.parse(payload);
@@ -45,6 +48,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
   if (!id) {

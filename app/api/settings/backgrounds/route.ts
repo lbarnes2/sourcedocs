@@ -1,3 +1,4 @@
+import { authorize } from "@/lib/auth/currentUser";
 import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { getAppSettings, saveAppSettings } from "@/lib/appSettings/store";
@@ -17,6 +18,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   try {
     const form = await request.formData();
     const file = form.get("file");
@@ -31,6 +34,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const auth = await authorize(request);
+  if (auth instanceof Response) return auth;
   const key = new URL(request.url).searchParams.get("key");
   if (!key) {
     return NextResponse.json({ error: "Missing key query parameter." }, { status: 400 });

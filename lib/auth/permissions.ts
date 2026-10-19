@@ -7,6 +7,9 @@ import type { Role } from "@/lib/auth/roles";
 /** Routes reachable without a session. */
 export const PUBLIC_PATHS = new Set(["/login", "/api/auth/login", "/api/auth/logout"]);
 
+/** All a user may reach while they still have to replace a temporary password. */
+export const PASSWORD_CHANGE_PATHS = new Set(["/account", "/api/auth/me", "/api/auth/password", "/api/auth/logout"]);
+
 /** POST routes that only render a PDF and store nothing, so viewers may use them. */
 const RENDER_ONLY_POSTS = new Set([
   "/api/generate",

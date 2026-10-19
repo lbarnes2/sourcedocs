@@ -38,7 +38,9 @@ Setup:
 
    Running it again for an existing email resets that account's password and makes it an admin, which is the way back in if every admin is locked out. With R2 configured in `.env.local`, this writes to the same bucket the live site uses.
 
-Sessions last 12 hours. Five wrong passwords lock an account for 15 minutes.
+Admins add and manage everyone else under **Settings → Users**. A new account, or a password reset, gets a temporary password that's shown once; the user must replace it when they first sign in. Admins can change roles, deactivate, reactivate or delete accounts, but not their own, and there is always at least one active admin. Anyone can change their own password from the account link in the sidebar.
+
+Sessions last 12 hours. Five wrong passwords lock an account for 15 minutes (a password reset clears it). Every save and delete re-checks the live account, so a role change or deactivation takes effect within about 30 seconds.
 
 ## Run locally
 

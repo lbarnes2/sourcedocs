@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { PUBLIC_PATHS, requiredRole } from "@/lib/auth/permissions";
+import { PASSWORD_CHANGE_PATHS, PUBLIC_PATHS, requiredRole } from "@/lib/auth/permissions";
 import { hasRole } from "@/lib/auth/roles";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 
@@ -53,6 +53,10 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!session) return deny(request, 401, "Please sign in.");
+  if (session.mcp && !PASSWORD_CHANGE_PATHS.has(pathname)) {
+    if (isApi(pathname)) return NextResponse.json({ error: "Please change your password first." }, { status: 403 });
+    return NextResponse.redirect(new URL("/account", request.url));
+  }
   if (!hasRole(session.role, requiredRole(pathname, request.method))) {
     return deny(request, 403, "Your account does not have permission to do this.");
   }

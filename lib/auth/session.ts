@@ -11,6 +11,8 @@ export interface SessionPayload {
   uid: string;
   name: string;
   role: Role;
+  /** Must change password before doing anything else. */
+  mcp: boolean;
   /** Expiry, seconds since epoch. */
   exp: number;
 }
@@ -80,6 +82,7 @@ export async function verifySession(token: string | undefined | null): Promise<S
     if (!ok) return null;
     const parsed = JSON.parse(decoder.decode(fromBase64Url(body))) as Partial<SessionPayload>;
     if (typeof parsed.uid !== "string" || typeof parsed.name !== "string" || !isRole(parsed.role)) return null;
+    if (typeof parsed.mcp !== "boolean") return null;
     if (typeof parsed.exp !== "number" || parsed.exp * 1000 <= Date.now()) return null;
     return parsed as SessionPayload;
   } catch {

@@ -97,6 +97,49 @@ export async function r2GetObjectUtf8(key: string): Promise<string | null> {
   return got.body.toString("utf8");
 }
 
+/** Text plus ETag, for read-modify-write with r2PutObjectUtf8IfUnchanged. */
+export async function r2GetObjectUtf8WithEtag(key: string): Promise<{ body: string; etag: string } | null> {
+  const c = getR2Client();
+  const bucket = requireBucket();
+  try {
+    const out = await c.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const body = await streamToBuffer(out.Body);
+    return { body: body.toString("utf8"), etag: out.ETag ?? "" };
+  } catch (error: unknown) {
+    const name = error && typeof error === "object" && "name" in error ? (error as { name: string }).name : "";
+    if (name === "NoSuchKey") return null;
+    throw error;
+  }
+}
+
+/**
+ * Writes only if the object still has `etag` (or, for null, does not exist yet).
+ * Returns false when someone else changed it first.
+ */
+export async function r2PutObjectUtf8IfUnchanged(key: string, body: string, etag: string | null): Promise<boolean> {
+  const c = getR2Client();
+  const bucket = requireBucket();
+  try {
+    await c.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: Buffer.from(body, "utf8"),
+        ContentType: "application/json; charset=utf-8",
+        ...(etag ? { IfMatch: etag } : { IfNoneMatch: "*" })
+      })
+    );
+    return true;
+  } catch (error: unknown) {
+    const status =
+      error && typeof error === "object" && "$metadata" in error
+        ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+        : undefined;
+    if (status === 412) return false;
+    throw error;
+  }
+}
+
 export async function r2DeleteObject(key: string): Promise<void> {
   const c = getR2Client();
   const bucket = requireBucket();
