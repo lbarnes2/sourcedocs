@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download, Plus, Signpost, Trash2, X } from "lucide-react";
 import { ArrowGlyph, ArrowSymbolPicker } from "./ArrowSymbolPicker";
+import { GeneralSignTab } from "./GeneralSignTab";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import {
   Callout,
@@ -70,7 +71,7 @@ function stableStringify(value: unknown): string {
 type LogoItem = { key: string; label: string; assetUrl: string };
 type Orientation = "portrait" | "landscape";
 type OutputFormat = "pdf" | "png";
-type SignageTab = "pack" | "single" | "profiles";
+type SignageTab = "pack" | "single" | "general" | "profiles";
 
 const PAPER_OPTIONS = PAPER_SIZE_OPTIONS.map((o) => ({ value: o.value, label: o.value }));
 const ORIENTATION_OPTIONS = [
@@ -1192,6 +1193,7 @@ export default function SignagePage() {
         tabs={[
           { value: "pack", label: "Sign pack" },
           { value: "single", label: "Single sign" },
+          { value: "general", label: "General sign" },
           { value: "profiles", label: "Venue profiles", badge: loading ? undefined : profiles.length }
         ]}
       />
@@ -1202,6 +1204,8 @@ export default function SignagePage() {
         packTab
       ) : tab === "single" ? (
         singleTab
+      ) : tab === "general" ? (
+        <GeneralSignTab venueLogos={venueLogos} clientLogos={clientLogos} logosConfigured={logosConfigured} />
       ) : (
         profilesTab
       )}

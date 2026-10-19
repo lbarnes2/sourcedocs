@@ -32,16 +32,44 @@ function rectAttrsToPathD(attrs: Record<string, string | number | undefined>): s
   ].join("");
 }
 
-/** One `d` string per drawable segment (`path` or converted `rect`). */
+/** Ellipse (or circle when rx = ry) as two half-arcs, so it closes cleanly. */
+function ellipseToPathD(cx: number, cy: number, rx: number, ry: number): string {
+  if (!Number.isFinite(cx + cy + rx + ry) || rx <= 0 || ry <= 0) return "";
+  return `M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`;
+}
+
+function pointsToPathD(points: string | number | undefined, close: boolean): string {
+  const nums = String(points ?? "")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number)
+    .filter(Number.isFinite);
+  if (nums.length < 4) return "";
+  let d = `M${nums[0]} ${nums[1]}`;
+  for (let i = 2; i + 1 < nums.length; i += 2) d += `L${nums[i]} ${nums[i + 1]}`;
+  return close ? `${d}Z` : d;
+}
+
+/** One `d` string per drawable segment (`path`, or `rect` / `circle` / `ellipse` / `line` / `poly*` converted). */
 export function lucideIconPathDs(node: LucideIconNode): string[] {
   const ds: string[] = [];
   for (const [tag, attrs] of node) {
+    let d = "";
     if (tag === "path" && typeof attrs.d === "string") {
-      ds.push(attrs.d);
+      d = attrs.d;
     } else if (tag === "rect" && typeof attrs.x !== "undefined" && typeof attrs.y !== "undefined") {
-      const d = rectAttrsToPathD(attrs);
-      if (d) ds.push(d);
+      d = rectAttrsToPathD(attrs);
+    } else if (tag === "circle") {
+      const r = Number(attrs.r);
+      d = ellipseToPathD(Number(attrs.cx), Number(attrs.cy), r, r);
+    } else if (tag === "ellipse") {
+      d = ellipseToPathD(Number(attrs.cx), Number(attrs.cy), Number(attrs.rx), Number(attrs.ry));
+    } else if (tag === "line") {
+      d = `M${attrs.x1} ${attrs.y1}L${attrs.x2} ${attrs.y2}`;
+    } else if (tag === "polyline" || tag === "polygon") {
+      d = pointsToPathD(attrs.points, tag === "polygon");
     }
+    if (d) ds.push(d);
   }
   return ds;
 }

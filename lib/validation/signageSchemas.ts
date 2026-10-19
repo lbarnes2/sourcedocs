@@ -2,6 +2,7 @@ import { z } from "zod";
 import { PAPER_SIZE_VALUES } from "@/lib/paperSizes";
 import * as limits from "@/lib/validation/limits";
 import { hexColorStringSchema, profileIdSchema } from "@/lib/validation/layoutSchemas";
+import { SIGN_SYMBOL_IDS } from "@/lib/signage/symbols";
 
 export const optionalSignageVenueLabelField = z
   .string()
@@ -82,3 +83,48 @@ export const venueSignageProfileSchema = z.object({
     path: ["slots"]
   }
 );
+
+export const generalSignToneSchema = z.enum(["plain", "info", "caution", "prohibition"]);
+
+export const generalSignWifiSchema = z.object({
+  network: z.string().trim().min(1, "Enter the Wi-Fi network name.").max(limits.MAX_WIFI_FIELD_CHARS),
+  password: z
+    .string()
+    .max(limits.MAX_WIFI_FIELD_CHARS)
+    .optional()
+    .transform((s) => (s ? s : undefined)),
+  security: z.enum(["WPA", "WEP", "nopass"]),
+  showQr: z.boolean()
+});
+
+export const generalSignBodyField = z
+  .string()
+  .max(limits.MAX_GENERAL_SIGN_BODY_CHARS)
+  .optional()
+  .transform((s) => (s && s.trim() ? s.trim() : undefined));
+
+export const generalSignSymbolsSchema = z.array(z.enum(SIGN_SYMBOL_IDS)).max(limits.MAX_GENERAL_SIGN_SYMBOLS);
+
+/** Like `generalSignWifiSchema`, but a template may leave the network blank to fill in per event. */
+const generalSignTemplateWifiSchema = generalSignWifiSchema.extend({
+  network: z.string().trim().max(limits.MAX_WIFI_FIELD_CHARS)
+});
+
+export const generalSignTemplateSchema = z.object({
+  id: profileIdSchema,
+  label: z.string().trim().min(1, "Give the template a name.").max(limits.MAX_GENERAL_SIGN_TEMPLATE_LABEL_CHARS),
+  tone: generalSignToneSchema,
+  symbols: generalSignSymbolsSchema,
+  heading: z.string().trim().max(limits.MAX_GENERAL_SIGN_HEADING_CHARS),
+  body: generalSignBodyField,
+  arrow: signageArrowSchema,
+  footer: optionalSignageVenueLabelField,
+  wifi: generalSignTemplateWifiSchema.optional(),
+  paperSize: z.enum(PAPER_SIZE_VALUES).optional(),
+  orientation: z.enum(["portrait", "landscape"]).optional()
+});
+
+export const generalSignTemplateListSchema = z
+  .array(generalSignTemplateSchema)
+  .max(limits.MAX_GENERAL_SIGN_TEMPLATES)
+  .refine((list) => new Set(list.map((t) => t.id)).size === list.length, { message: "Template ids must be unique." });

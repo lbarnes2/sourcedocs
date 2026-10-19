@@ -77,14 +77,14 @@ export interface SignagePageInput {
   theme: SignageThemeColors;
 }
 
-function mmToPt(mm: number): number {
+export function mmToPt(mm: number): number {
   return (mm * 72) / 25.4;
 }
 
-const INNER_BORDER_INSET = mmToPt(2.5);
+export const INNER_BORDER_INSET = mmToPt(2.5);
 
 /** Greedy word wrap to maxWidth; long words split by character (reported through `onWordSplit`). */
-function breakSignageTitleIntoLines(
+export function breakSignageTitleIntoLines(
   text: string,
   measure: (t: string) => number,
   maxWidth: number,
@@ -125,7 +125,7 @@ function breakSignageTitleIntoLines(
 }
 
 /** Like `breakSignageTitleIntoLines`, but keeps the author's explicit line breaks (blank lines dropped). */
-function breakMultilineText(
+export function breakMultilineText(
   text: string,
   measure: (t: string) => number,
   maxWidth: number,
@@ -210,14 +210,14 @@ async function loadSignageFontBytes(): Promise<PdfFontBytesCache> {
   return cachedPdfFontBytes;
 }
 
-type SignagePdfFonts = {
+export type SignagePdfFonts = {
   doc: PDFDocument;
   title: PDFFont;
   body: PDFFont;
   bodyBold: PDFFont;
 };
 
-async function createDocWithFonts(): Promise<SignagePdfFonts> {
+export async function createDocWithFonts(): Promise<SignagePdfFonts> {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
   const bytes = await loadSignageFontBytes();
@@ -233,7 +233,7 @@ export function signagePageDimensions(paperSize: PaperSize, orientation: PaperOr
   return pdfPageDimensions(paperSize, orientation);
 }
 
-function drawSignageBorder(
+export function drawSignageBorder(
   page: PDFPage,
   options: {
     x: number;
@@ -332,7 +332,7 @@ function svgPathTranslateForCenteredLucideIcon(
 }
 
 /** Stroke-only Lucide icon, centred on (cx, cy) in PDF coordinates. */
-function drawSignageLucideArrow(
+export function drawSignageLucideArrow(
   page: PDFPage,
   cx: number,
   cy: number,
@@ -371,7 +371,7 @@ type LogoPlaceResult = {
   bottomY: number;
 };
 
-function computeLogoPlacement(
+export function computeLogoPlacement(
   pageWidth: number,
   pageHeight: number,
   margin: number,
@@ -395,7 +395,7 @@ function computeLogoPlacement(
 }
 
 /** Approximate cap-height / descender for Sora SemiBold embedded at size s (PDF baseline metrics). */
-function titleMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
+export function titleMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
   return {
     capH: s * 0.73,
     desc: s * 0.22,
@@ -405,7 +405,7 @@ function titleMetricsAtSize(s: number): { capH: number; desc: number; lineHeight
 }
 
 /** Open Sans metrics for venue (bold) and date (regular) lines. */
-function bodyMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
+export function bodyMetricsAtSize(s: number): { capH: number; desc: number; lineHeight: number } {
   return {
     capH: s * 0.72,
     desc: s * 0.23,
