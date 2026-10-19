@@ -1,5 +1,6 @@
 import { r2DeleteObject, r2GetObjectUtf8, r2ListObjectKeys, r2PutObjectUtf8 } from "@/lib/storage/r2";
 import { buffetMenuSavedFileSchema } from "@/lib/validation/buffetMenuSchemas";
+import type { SavedBy } from "@/types/auth";
 import type { BuffetMenuSavedFile } from "@/types/buffetMenu";
 
 export const BUFFET_MENU_PREFIX = "buffet-menus/";
@@ -20,6 +21,7 @@ export interface BuffetMenuListItem {
   key: string;
   name: string;
   savedAt: string;
+  savedBy?: SavedBy;
 }
 
 export async function listSavedBuffetMenus(): Promise<BuffetMenuListItem[]> {
@@ -36,7 +38,8 @@ export async function listSavedBuffetMenus(): Promise<BuffetMenuListItem[]> {
         id: idFromKey(key),
         key,
         name: doc.data.name,
-        savedAt: doc.data.savedAt
+        savedAt: doc.data.savedAt,
+        ...(doc.data.savedBy ? { savedBy: doc.data.savedBy } : {})
       });
     } catch {
       continue;

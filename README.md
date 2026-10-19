@@ -40,6 +40,8 @@ Setup:
 
 Admins add and manage everyone else under **Settings → Users**. A new account, or a password reset, gets a temporary password that's shown once; the user must replace it when they first sign in. Admins can change roles, deactivate, reactivate or delete accounts, but not their own, and there is always at least one active admin. Anyone can change their own password from the account link in the sidebar.
 
+Saved projects, buffet menus and floorplans record who saved them ("19 Oct 2026, 14:02 by Jane Smith" in each Open list). Viewers see the same screens with saving, deleting and uploading removed, and the buffet menu's dishes and allergen tick boxes are locked so they can only print what was saved; Settings is read-only for everyone except admins.
+
 Sessions last 12 hours. Five wrong passwords lock an account for 15 minutes (a password reset clears it). Every save and delete re-checks the live account, so a role change or deactivation takes effect within about 30 seconds.
 
 ## Run locally

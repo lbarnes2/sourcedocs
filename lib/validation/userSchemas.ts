@@ -21,6 +21,11 @@ export const usersFileSchema = z.object({
   users: z.array(storedUserSchema)
 });
 
+export const savedBySchema = z.object({
+  id: z.string().min(1).max(200),
+  name: z.string().min(1).max(120)
+});
+
 export const loginBodySchema = z.object({
   email: z.string().trim().min(1).max(320),
   password: z.string().min(1).max(1000)

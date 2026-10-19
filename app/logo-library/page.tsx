@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ImagePlus, Pencil, Trash2, TriangleAlert } from "lucide-react";
+import { useAccess } from "@/app/components/CurrentUser";
 import { Callout, Field, Modal, PageHeader, Section, Toasts } from "@/app/components/ui";
 import { LOGO_UPLOAD_ACCEPT } from "@/lib/logos/logoUpload";
 
@@ -15,6 +16,7 @@ async function parseApiResponse(
 }
 
 export default function LogoLibraryPage() {
+  const { canEdit } = useAccess();
   const [venueItems, setVenueItems] = useState<LogoItem[]>([]);
   const [clientItems, setClientItems] = useState<LogoItem[]>([]);
   const [configured, setConfigured] = useState(false);
@@ -117,20 +119,22 @@ export default function LogoLibraryPage() {
         }
         description={description}
         actions={
-          <label className={`upload-button${busy || !configured ? " upload-button--disabled" : ""}`}>
-            <input
-              type="file"
-              accept={LOGO_UPLOAD_ACCEPT}
-              disabled={busy || !configured}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) void uploadLogo(kind, file);
-              }}
-            />
-            <ImagePlus size={15} aria-hidden />
-            {busy ? "Uploading…" : "Upload"}
-          </label>
+          canEdit ? (
+            <label className={`upload-button${busy || !configured ? " upload-button--disabled" : ""}`}>
+              <input
+                type="file"
+                accept={LOGO_UPLOAD_ACCEPT}
+                disabled={busy || !configured}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadLogo(kind, file);
+                }}
+              />
+              <ImagePlus size={15} aria-hidden />
+              {busy ? "Uploading…" : "Upload"}
+            </label>
+          ) : null
         }
       >
         {items.length === 0 ? (
@@ -152,28 +156,30 @@ export default function LogoLibraryPage() {
                     <TriangleAlert size={12} aria-hidden /> Can&apos;t print
                   </span>
                 ) : null}
-                <div className="library-tile-actions">
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn--sm"
-                    disabled={workingKey === item.key}
-                    onClick={() => startRename(kind, item)}
-                    aria-label={`Rename ${item.label}`}
-                    title="Rename"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn--sm btn-danger"
-                    disabled={workingKey === item.key}
-                    onClick={() => void deleteLogo(kind, item.key)}
-                    aria-label={`Delete ${item.label}`}
-                    title="Delete"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+                {canEdit ? (
+                  <div className="library-tile-actions">
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn--sm"
+                      disabled={workingKey === item.key}
+                      onClick={() => startRename(kind, item)}
+                      aria-label={`Rename ${item.label}`}
+                      title="Rename"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn--sm btn-danger"
+                      disabled={workingKey === item.key}
+                      onClick={() => void deleteLogo(kind, item.key)}
+                      aria-label={`Delete ${item.label}`}
+                      title="Delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

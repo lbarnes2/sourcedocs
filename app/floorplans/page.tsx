@@ -28,6 +28,7 @@ import {
   ZoomIn,
   ZoomOut
 } from "lucide-react";
+import { useAccess } from "@/app/components/CurrentUser";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts } from "@/app/components/ui";
 import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
@@ -62,6 +63,7 @@ import {
   type TableStyle
 } from "@/lib/floorplans/model";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
+import { savedLabel } from "@/lib/format/savedLabel";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob, downloadPdfBlobAsPngs } from "@/lib/pdf/pdfToPngExport";
 import type {
@@ -114,6 +116,7 @@ function formatTime(iso: string): string {
 }
 
 export default function FloorplansPage() {
+  const { canEdit } = useAccess();
   const [draft, setDraft] = useState<FloorplanDocument>(() => buildEmptyFloorplanDraft());
   const draftRef = useRef(draft);
   const pastRef = useRef<FloorplanDocument[]>([]);
@@ -825,7 +828,7 @@ export default function FloorplansPage() {
     const key = event.key.toLowerCase();
     if (meta && key === "s") {
       event.preventDefault();
-      if (!busy) void saveCurrent();
+      if (!busy && canEdit) void saveCurrent();
       return;
     }
     if (isTypingTarget(event.target)) return;
@@ -915,7 +918,7 @@ export default function FloorplansPage() {
         description="Lay out tables, shapes and labels, then print."
         actions={
           <>
-            {dirty ? <span className="text-muted">Unsaved changes</span> : null}
+            {dirty && canEdit ? <span className="text-muted">Unsaved changes</span> : null}
             <input
               className="header-input"
               value={draft.name}
@@ -926,9 +929,11 @@ export default function FloorplansPage() {
               aria-label="Floorplan name"
               placeholder="Floorplan name"
             />
-            <button type="button" onClick={() => void saveCurrent()} disabled={busy} title="Save (⌘S)">
-              <Save size={15} aria-hidden /> Save
-            </button>
+            {canEdit ? (
+              <button type="button" onClick={() => void saveCurrent()} disabled={busy} title="Save (⌘S)">
+                <Save size={15} aria-hidden /> Save
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {
@@ -953,16 +958,18 @@ export default function FloorplansPage() {
             >
               <Copy size={16} />
             </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn--bordered btn-danger"
-              onClick={() => void deleteCurrent()}
-              disabled={busy}
-              aria-label={isSaved ? "Delete floorplan" : "Discard floorplan"}
-              title={isSaved ? "Delete" : "Discard"}
-            >
-              <Trash2 size={16} />
-            </button>
+            {canEdit || !isSaved ? (
+              <button
+                type="button"
+                className="icon-btn icon-btn--bordered btn-danger"
+                onClick={() => void deleteCurrent()}
+                disabled={busy}
+                aria-label={isSaved ? "Delete floorplan" : "Discard floorplan"}
+                title={isSaved ? "Delete" : "Discard"}
+              >
+                <Trash2 size={16} />
+              </button>
+            ) : null}
           </>
         }
       />
@@ -1020,6 +1027,10 @@ export default function FloorplansPage() {
                     >
                       {item.name}
                     </button>
+                    <span className="list-item-meta">
+                      {item.title ? `${item.title} · ` : ""}
+                      {savedLabel(item.savedAt, item.savedBy)}
+                    </span>
                   </div>
                   <button
                     type="button"

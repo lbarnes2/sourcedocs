@@ -1,3 +1,4 @@
+import type { SavedBy } from "./auth";
 import type { AllergenId } from "@/lib/buffetMenu/allergens";
 
 export type BuffetMenuCategory = {
@@ -27,6 +28,8 @@ export const BUFFET_MENU_JSON_SCHEMA_VERSION = 1 as const;
 export type BuffetMenuSavedFile = {
   schemaVersion: typeof BUFFET_MENU_JSON_SCHEMA_VERSION;
   savedAt: string;
+  /** Absent on menus saved before accounts existed. */
+  savedBy?: SavedBy;
   name: string;
   venueLogoKey: string | null;
   /** Display menu background; null or absent = the Settings page default. */

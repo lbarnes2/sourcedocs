@@ -1,3 +1,4 @@
+import type { SavedBy } from "./auth";
 import type { PaperOrientation, PaperSize } from "./paper";
 
 export type CanonicalColumn =
@@ -153,6 +154,8 @@ export interface EventProjectFile {
   /** Library label for this project (not necessarily the same as event name). */
   name: string;
   savedAt: string;
+  /** Absent on projects saved before accounts existed. */
+  savedBy?: SavedBy;
   csvText: string;
   headers: string[];
   mapping: ColumnMapping;
@@ -178,6 +181,7 @@ export interface ProjectListItem {
   id: string;
   name: string;
   savedAt: string;
+  savedBy?: SavedBy;
   eventName: string;
 }
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowDown, ArrowUp, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { SymbolGlyph } from "./SymbolPicker";
+import { useAccess } from "@/app/components/CurrentUser";
 import { Section } from "@/app/components/ui";
 import { DEFAULT_GENERAL_SIGN_TEMPLATES } from "@/lib/signage/generalTemplateDefaults";
 import * as limits from "@/lib/validation/limits";
@@ -19,6 +20,7 @@ type Props = {
 
 /** "Start from" grid of saved templates, with an edit mode for renaming, reordering and deleting. */
 export function GeneralSignTemplates({ templates, selectedId, onSelect, onSaveList, busy }: Props) {
+  const { canEdit } = useAccess();
   const [editing, setEditing] = useState(false);
   const missingDefaults = DEFAULT_GENERAL_SIGN_TEMPLATES.filter((d) => !templates.some((t) => t.id === d.id));
 
@@ -50,16 +52,18 @@ export function GeneralSignTemplates({ templates, selectedId, onSelect, onSaveLi
           : "Pick a template, then change anything you like."
       }
       actions={
-        <button type="button" className="btn-ghost" onClick={() => setEditing((e) => !e)} disabled={busy}>
-          {editing ? "Done" : (
-            <>
-              <Pencil size={14} aria-hidden /> Edit templates
-            </>
-          )}
-        </button>
+        canEdit ? (
+          <button type="button" className="btn-ghost" onClick={() => setEditing((e) => !e)} disabled={busy}>
+            {editing ? "Done" : (
+              <>
+                <Pencil size={14} aria-hidden /> Edit templates
+              </>
+            )}
+          </button>
+        ) : null
       }
     >
-      {editing ? (
+      {editing && canEdit ? (
         <div className="stack stack--sm">
           <ul className="template-list">
             {templates.map((t, i) => (

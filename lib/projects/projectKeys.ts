@@ -36,6 +36,7 @@ export function listItemFromProjectFile(file: EventProjectFile): ProjectListItem
     id: file.id,
     name: file.name,
     savedAt: file.savedAt,
+    ...(file.savedBy ? { savedBy: file.savedBy } : {}),
     eventName: file.theme?.eventName?.trim() ?? ""
   };
 }

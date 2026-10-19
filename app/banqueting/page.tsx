@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { Download, FileSpreadsheet, FolderOpen, Save, Trash2, X } from "lucide-react";
+import { useAccess } from "@/app/components/CurrentUser";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import {
   Callout,
@@ -30,6 +31,7 @@ import {
   defaultThemeSettings
 } from "@/lib/defaults";
 import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { savedLabel } from "@/lib/format/savedLabel";
 import { readResponseError } from "@/lib/http/readError";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
@@ -201,6 +203,7 @@ async function estimateLogoLuminance(dataUrl: string): Promise<number | null> {
 }
 
 export default function HomePage() {
+  const { canEdit } = useAccess();
   const [csvText, setCsvText] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<ColumnMapping>({});
@@ -856,17 +859,21 @@ export default function HomePage() {
         description="Upload a guest list, check it, then print table plans, place cards, menus and service plans."
         actions={
           <>
-            <input
-              className="header-input"
-              value={projectLibraryName}
-              onChange={(event) => setProjectLibraryName(event.target.value)}
-              placeholder="Project name"
-              aria-label="Project name"
-            />
-            <button type="button" disabled={projectBusy} onClick={() => void saveProjectToLibrary()}>
-              <Save size={15} aria-hidden />
-              {projectBusy ? "Saving…" : "Save"}
-            </button>
+            {canEdit ? (
+              <>
+                <input
+                  className="header-input"
+                  value={projectLibraryName}
+                  onChange={(event) => setProjectLibraryName(event.target.value)}
+                  placeholder="Project name"
+                  aria-label="Project name"
+                />
+                <button type="button" disabled={projectBusy} onClick={() => void saveProjectToLibrary()}>
+                  <Save size={15} aria-hidden />
+                  {projectBusy ? "Saving…" : "Save"}
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               onClick={() => {
@@ -924,21 +931,23 @@ export default function HomePage() {
                     </button>
                     <span className="list-item-meta">
                       {item.eventName ? `${item.eventName} · ` : ""}
-                      {new Date(item.savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                      {savedLabel(item.savedAt, item.savedBy)}
                     </span>
                   </div>
                   <button type="button" className="btn-sm" disabled={projectBusy} onClick={() => void loadSelectedProject(item.id)}>
                     Open
                   </button>
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn--sm btn-danger"
-                    aria-label={`Delete ${item.name}`}
-                    disabled={projectBusy}
-                    onClick={() => void deleteSelectedProject(item.id)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn--sm btn-danger"
+                      aria-label={`Delete ${item.name}`}
+                      disabled={projectBusy}
+                      onClick={() => void deleteSelectedProject(item.id)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -1188,9 +1197,11 @@ export default function HomePage() {
                 </option>
               ))}
             </select>
-            <button type="button" className="btn-sm" onClick={() => setProfileSaveOpen(true)}>
-              Save as profile
-            </button>
+            {canEdit ? (
+              <button type="button" className="btn-sm" onClick={() => setProfileSaveOpen(true)}>
+                Save as profile
+              </button>
+            ) : null}
           </>
         }
       >

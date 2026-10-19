@@ -3272,3 +3272,27 @@ button.sidebar-link {
   letter-spacing: 0.04em;
   user-select: all;
 }
+
+/* ==========================================================================
+   View-only access
+   ========================================================================== */
+.fieldset-plain {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.readonly-note {
+  margin-bottom: 16px;
+}
+
+.header-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+fieldset:disabled .upload-button {
+  opacity: 0.5;
+  pointer-events: none;
+}

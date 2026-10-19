@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { savedBySchema } from "@/lib/validation/userSchemas";
 import { defaultFloorplanCanvasSettings, defaultFloorplanMetadata, defaultFloorplanSettings } from "@/lib/defaults";
 import { floorplanSchema, themeSchema } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
@@ -84,6 +85,7 @@ export const floorplanDocumentSchema = z.object({
   id: floorplanIdSchema,
   name: z.string().min(1).max(500),
   savedAt: z.string().min(1),
+  savedBy: savedBySchema.optional(),
   metadata: z.object({
     title: z.string().max(limits.MAX_EVENT_NAME_CHARS),
     subtitle: z.string().max(2000)

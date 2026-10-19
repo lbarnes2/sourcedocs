@@ -17,6 +17,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, FilePlus, FolderOpen, GripVertical, Plus, Save, Trash2, X } from "lucide-react";
 import { catSortableId, parseSortableId } from "@/app/buffet-menu/dndTypes";
+import { useAccess } from "@/app/components/CurrentUser";
+import type { BuffetMenuListItem } from "@/lib/buffetMenu/savedR2";
+import { savedLabel } from "@/lib/format/savedLabel";
 import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob } from "@/lib/pdf/pdfToPngExport";
 import { LogoPicker } from "@/app/components/LogoPicker";
@@ -132,6 +135,7 @@ function SortableCategoryBlock({
   itemCount,
   onTitle,
   onRemove,
+  readOnly,
   children
 }: {
   id: string;
@@ -139,33 +143,42 @@ function SortableCategoryBlock({
   itemCount: number;
   onTitle: (v: string) => void;
   onRemove: () => void;
+  readOnly: boolean;
   children: React.ReactNode;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: catSortableId(id) });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: catSortableId(id),
+    disabled: readOnly
+  });
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
   return (
     <div ref={setNodeRef} style={style} className="menu-cat">
       <div className="menu-cat-head">
-        <button type="button" className="drag-handle" aria-label="Drag to reorder category" {...attributes} {...listeners}>
-          <GripVertical size={16} />
-        </button>
+        {readOnly ? null : (
+          <button type="button" className="drag-handle" aria-label="Drag to reorder category" {...attributes} {...listeners}>
+            <GripVertical size={16} />
+          </button>
+        )}
         <input
           className="menu-cat-title"
           value={title}
           onChange={(e) => onTitle(e.target.value)}
           placeholder="Category name"
           aria-label="Category name"
+          readOnly={readOnly}
         />
         <span className="badge">{itemCount}</span>
-        <button
-          type="button"
-          className="icon-btn icon-btn--sm btn-danger"
-          onClick={onRemove}
-          aria-label="Remove category"
-          title="Remove category (its items move to Uncategorised)"
-        >
-          <Trash2 size={15} />
-        </button>
+        {readOnly ? null : (
+          <button
+            type="button"
+            className="icon-btn icon-btn--sm btn-danger"
+            onClick={onRemove}
+            aria-label="Remove category"
+            title="Remove category (its items move to Uncategorised)"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
       </div>
       {children}
     </div>
@@ -176,20 +189,27 @@ function SortableItemRow({
   itemId,
   item,
   onChange,
-  onRemove
+  onRemove,
+  readOnly
 }: {
   itemId: string;
   item: BuffetMenuItem;
   onChange: (next: BuffetMenuItem) => void;
   onRemove: () => void;
+  readOnly: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: itemId });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: itemId,
+    disabled: readOnly
+  });
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
   return (
     <div ref={setNodeRef} style={style} className="menu-item">
-      <button type="button" className="drag-handle" aria-label="Drag to reorder item" {...attributes} {...listeners}>
-        <GripVertical size={16} />
-      </button>
+      {readOnly ? null : (
+        <button type="button" className="drag-handle" aria-label="Drag to reorder item" {...attributes} {...listeners}>
+          <GripVertical size={16} />
+        </button>
+      )}
       <div className="menu-item-fields">
         <div className="menu-item-top">
           <input
@@ -198,6 +218,7 @@ function SortableItemRow({
             onChange={(e) => onChange({ ...item, title: e.target.value })}
             placeholder="Dish name"
             aria-label="Dish name"
+            readOnly={readOnly}
           />
           <label className="chip chip--diet" title="Vegetarian">
             <input
@@ -240,9 +261,11 @@ function SortableItemRow({
           ))}
         </div>
       </div>
-      <button type="button" className="icon-btn icon-btn--sm btn-danger" onClick={onRemove} aria-label="Remove item">
-        <X size={16} />
-      </button>
+      {readOnly ? null : (
+        <button type="button" className="icon-btn icon-btn--sm btn-danger" onClick={onRemove} aria-label="Remove item">
+          <X size={16} />
+        </button>
+      )}
     </div>
   );
 }
@@ -268,6 +291,10 @@ function ItemColumnDrop({
 }
 
 export default function BuffetMenuPage() {
+  const { user, canEdit } = useAccess();
+  /* Locked until the account has loaded; the view-only notice only once we know it's a viewer. */
+  const readOnly = !canEdit;
+  const viewOnly = user !== null && !canEdit;
   const [store, setStore] = useState<BuffetMenuStore>(() => createEmptyMenuStore());
   const [savedName, setSavedName] = useState("Untitled menu");
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -276,7 +303,7 @@ export default function BuffetMenuPage() {
   const [venueLogoKey, setVenueLogoKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [savedList, setSavedList] = useState<{ id: string; name: string; savedAt: string }[]>([]);
+  const [savedList, setSavedList] = useState<BuffetMenuListItem[]>([]);
   const [r2SaveEnabled, setR2SaveEnabled] = useState(false);
   /** Edited on the Settings page; read here so downloads include it. */
   const [settings, setSettings] = useState<BuffetMenuSettings | null>(null);
@@ -294,7 +321,7 @@ export default function BuffetMenuPage() {
   const refreshSaved = useCallback(async () => {
     try {
       const res = await fetch("/api/buffet-menu/saved");
-      const data = (await res.json()) as { configured?: boolean; items?: { id: string; name: string; savedAt: string }[] };
+      const data = (await res.json()) as { configured?: boolean; items?: BuffetMenuListItem[] };
       setR2SaveEnabled(Boolean(data.configured));
       if (data.configured && data.items) setSavedList(data.items);
       else setSavedList([]);
@@ -511,7 +538,16 @@ export default function BuffetMenuPage() {
     ids.map((id) => {
       const it = store.items[id];
       if (!it) return null;
-      return <SortableItemRow key={id} itemId={id} item={it} onChange={updateItem} onRemove={() => removeItem(id)} />;
+      return (
+        <SortableItemRow
+          key={id}
+          itemId={id}
+          item={it}
+          onChange={updateItem}
+          onRemove={() => removeItem(id)}
+          readOnly={readOnly}
+        />
+      );
     });
 
   return (
@@ -520,30 +556,39 @@ export default function BuffetMenuPage() {
         title="Buffet menus"
         description="Build the menu once with allergens, then print the display menu, allergen matrix and buffet labels."
         actions={
-          <>
-            <input
-              className="header-input"
-              value={savedName}
-              onChange={(e) => setSavedName(e.target.value)}
-              maxLength={200}
-              aria-label="Menu name"
-              placeholder="Menu name"
-            />
-            <button
-              type="button"
-              onClick={saveToCloud}
-              disabled={busy || !r2SaveEnabled}
-              title={!r2SaveEnabled ? "R2 is not configured" : undefined}
-            >
-              <Save size={15} aria-hidden /> Save
-            </button>
-            <button type="button" onClick={() => setSavedOpen(true)}>
-              <FolderOpen size={15} aria-hidden /> Open
-            </button>
-            <button type="button" className="icon-btn icon-btn--bordered" onClick={newMenu} disabled={busy} aria-label="New menu" title="New menu">
-              <FilePlus size={16} />
-            </button>
-          </>
+          user === null ? null : canEdit ? (
+            <>
+              <input
+                className="header-input"
+                value={savedName}
+                onChange={(e) => setSavedName(e.target.value)}
+                maxLength={200}
+                aria-label="Menu name"
+                placeholder="Menu name"
+              />
+              <button
+                type="button"
+                onClick={saveToCloud}
+                disabled={busy || !r2SaveEnabled}
+                title={!r2SaveEnabled ? "R2 is not configured" : undefined}
+              >
+                <Save size={15} aria-hidden /> Save
+              </button>
+              <button type="button" onClick={() => setSavedOpen(true)}>
+                <FolderOpen size={15} aria-hidden /> Open
+              </button>
+              <button type="button" className="icon-btn icon-btn--bordered" onClick={newMenu} disabled={busy} aria-label="New menu" title="New menu">
+                <FilePlus size={16} />
+              </button>
+            </>
+          ) : (
+            <>
+              {savedId ? <span className="header-name">{savedName}</span> : null}
+              <button type="button" className="btn-primary" onClick={() => setSavedOpen(true)}>
+                <FolderOpen size={15} aria-hidden /> Open a saved menu
+              </button>
+            </>
+          )
         }
       />
 
@@ -571,7 +616,7 @@ export default function BuffetMenuPage() {
                     >
                       {s.name}
                     </button>
-                    <span className="list-item-meta">{new Date(s.savedAt).toLocaleString()}</span>
+                    <span className="list-item-meta">{savedLabel(s.savedAt, s.savedBy)}</span>
                   </div>
                   <button
                     type="button"
@@ -584,14 +629,16 @@ export default function BuffetMenuPage() {
                   >
                     Open
                   </button>
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn--sm btn-danger"
-                    aria-label={`Delete ${s.name}`}
-                    onClick={() => void deleteSaved(s.id)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn--sm btn-danger"
+                      aria-label={`Delete ${s.name}`}
+                      onClick={() => void deleteSaved(s.id)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -599,12 +646,24 @@ export default function BuffetMenuPage() {
         </Modal>
       ) : null}
 
+      {viewOnly ? (
+        <Callout tone="info" className="readonly-note">
+          You have view-only access: open a saved menu to print it. Dishes and allergens can only be changed by an
+          editor.
+        </Callout>
+      ) : null}
+
       <Section
         title="Menu"
-        description="Drag the handles to reorder categories and dishes, or to move a dish between categories. Tick the allergens each dish contains."
+        description={
+          viewOnly
+            ? "Dishes and allergens as saved. View only."
+            : "Drag the handles to reorder categories and dishes, or to move a dish between categories. Tick the allergens each dish contains."
+        }
       >
         <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={onDragEnd}>
-          <div className="stack">
+          {/* A disabled fieldset locks every tick box and field inside, including the allergens. */}
+          <fieldset className="fieldset-plain stack" disabled={readOnly}>
             <div className="menu-cat menu-cat--uncat">
               <div className="menu-cat-head">
                 <span className="menu-cat-label">Uncategorised</span>
@@ -613,15 +672,23 @@ export default function BuffetMenuPage() {
               <ItemColumnDrop
                 id={BUFFET_UNCAT_CONTAINER}
                 isEmpty={uncatIds.length === 0}
-                emptyLabel={store.categories.length ? "Drop dishes here to remove them from a category." : "No dishes yet."}
+                emptyLabel={
+                  readOnly
+                    ? "No dishes."
+                    : store.categories.length
+                      ? "Drop dishes here to remove them from a category."
+                      : "No dishes yet."
+                }
               >
                 <SortableContext items={uncatIds} strategy={verticalListSortingStrategy}>
                   {renderItems(uncatIds)}
                 </SortableContext>
               </ItemColumnDrop>
-              <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(BUFFET_UNCAT_CONTAINER)}>
-                <Plus size={14} aria-hidden /> Add dish
-              </button>
+              {readOnly ? null : (
+                <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(BUFFET_UNCAT_CONTAINER)}>
+                  <Plus size={14} aria-hidden /> Add dish
+                </button>
+              )}
             </div>
 
             <SortableContext items={categoryIds} strategy={verticalListSortingStrategy}>
@@ -637,24 +704,29 @@ export default function BuffetMenuPage() {
                       setStore((s) => ({ ...s, categories: s.categories.map((x) => (x.id === c.id ? { ...x, title: t } : x)) }))
                     }
                     onRemove={() => removeCategory(c.id)}
+                    readOnly={readOnly}
                   >
                     <ItemColumnDrop id={c.id} isEmpty={ids.length === 0} emptyLabel="Drop dishes here or add one.">
                       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
                         {renderItems(ids)}
                       </SortableContext>
                     </ItemColumnDrop>
-                    <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(c.id)}>
-                      <Plus size={14} aria-hidden /> Add dish
-                    </button>
+                    {readOnly ? null : (
+                      <button type="button" className="btn-ghost btn-sm menu-add-item" onClick={() => addItemTo(c.id)}>
+                        <Plus size={14} aria-hidden /> Add dish
+                      </button>
+                    )}
                   </SortableCategoryBlock>
                 );
               })}
             </SortableContext>
 
-            <button type="button" className="btn-dashed" onClick={addCategory}>
-              <Plus size={15} aria-hidden /> Add category
-            </button>
-          </div>
+            {readOnly ? null : (
+              <button type="button" className="btn-dashed" onClick={addCategory}>
+                <Plus size={15} aria-hidden /> Add category
+              </button>
+            )}
+          </fieldset>
         </DndContext>
       </Section>
 

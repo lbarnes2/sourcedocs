@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   if (auth instanceof Response) return auth;
   try {
     const body = await request.json();
-    const file = buildEventProjectFileFromSavePayload(body);
+    const file = buildEventProjectFileFromSavePayload(body, { id: auth.id, name: auth.name });
     await saveProject(file);
     return NextResponse.json({ ok: true, id: file.id, savedAt: file.savedAt });
   } catch (error) {

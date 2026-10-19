@@ -45,6 +45,7 @@ export async function PUT(request: Request) {
   const doc: BuffetMenuSavedFile = {
     schemaVersion: BUFFET_MENU_JSON_SCHEMA_VERSION,
     savedAt,
+    savedBy: { id: auth.id, name: auth.name },
     name: name.trim(),
     venueLogoKey: venueLogoKey !== undefined && venueLogoKey !== null ? venueLogoKey : null,
     displayBackgroundKey: displayBackgroundKey ?? null,

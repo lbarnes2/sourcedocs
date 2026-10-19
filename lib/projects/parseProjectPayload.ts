@@ -12,6 +12,8 @@ import {
 } from "@/lib/validation/layoutSchemas";
 import * as limits from "@/lib/validation/limits";
 import { isValidProjectUuid } from "@/lib/projects/projectKeys";
+import { savedBySchema } from "@/lib/validation/userSchemas";
+import type { SavedBy } from "@/types/auth";
 
 /** Same rule the storage layer enforces, so bad ids fail validation with a clear message. */
 const projectIdSchema = z.string().refine(isValidProjectUuid, "Invalid project id (expected a v1–v5 UUID).");
@@ -87,7 +89,7 @@ const savePayloadSchema = savePayloadBaseSchema.superRefine(refineDishOverrideUn
 
 export type ProjectSavePayload = z.infer<typeof savePayloadSchema>;
 
-export function buildEventProjectFileFromSavePayload(payload: unknown): EventProjectFile {
+export function buildEventProjectFileFromSavePayload(payload: unknown, savedBy: SavedBy): EventProjectFile {
   const parsed = savePayloadSchema.parse(payload);
   const id = parsed.id && parsed.id.length ? parsed.id : randomUUID();
   const savedAt = new Date().toISOString();
@@ -96,6 +98,7 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
     id,
     name: parsed.name.trim(),
     savedAt,
+    savedBy,
     csvText: parsed.csvText,
     headers: parsed.headers,
     mapping: parsed.mapping,
@@ -123,7 +126,8 @@ const loadedFileSchema = savePayloadBaseSchema
     version: z.literal(1),
     id: projectIdSchema,
     name: z.string().min(1).max(500),
-    savedAt: z.string().min(1)
+    savedAt: z.string().min(1),
+    savedBy: savedBySchema.optional()
   })
   .superRefine(refineDishOverrideUniqueness);
 
@@ -151,6 +155,7 @@ export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
     id: parsed.id,
     name: parsed.name,
     savedAt: parsed.savedAt,
+    ...(parsed.savedBy ? { savedBy: parsed.savedBy } : {}),
     csvText: parsed.csvText,
     headers: parsed.headers,
     mapping: parsed.mapping,

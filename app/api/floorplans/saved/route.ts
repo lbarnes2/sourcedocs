@@ -43,6 +43,7 @@ export async function PUT(request: Request) {
       id,
       name: data.name.trim(),
       savedAt,
+      savedBy: { id: auth.id, name: auth.name },
       metadata: data.metadata,
       canvas: data.canvas,
       objects: data.objects,

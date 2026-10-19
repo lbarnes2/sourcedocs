@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { savedBySchema } from "@/lib/validation/userSchemas";
 import { ALLERGEN_IDS, type AllergenId } from "@/lib/buffetMenu/allergens";
 import { BUFFET_MENU_JSON_SCHEMA_VERSION } from "@/types/buffetMenu";
 import * as limits from "@/lib/validation/limits";
@@ -68,6 +69,7 @@ export const buffetMenuGenerateBodySchema = z.object({
 export const buffetMenuSavedFileSchema = z.object({
   schemaVersion: z.literal(BUFFET_MENU_JSON_SCHEMA_VERSION),
   savedAt: z.string().min(1).max(80),
+  savedBy: savedBySchema.optional(),
   name: z.string().min(1).max(limits.MAX_BUFFET_SAVED_NAME_CHARS),
   venueLogoKey: z.string().min(1).max(512).nullable(),
   /** Absent in menus saved before backgrounds could be chosen; null = use the default. */

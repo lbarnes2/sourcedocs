@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ImagePlus, Star, Trash2 } from "lucide-react";
-import { useCurrentUser } from "@/app/components/CurrentUser";
+import { useAccess } from "@/app/components/CurrentUser";
 import { Callout, Disclosure, Field, PageHeader, Section, Switch, Toasts } from "@/app/components/ui";
 import { readResponseError } from "@/lib/http/readError";
 import { LOGO_UPLOAD_ACCEPT } from "@/lib/logos/logoUpload";
@@ -37,7 +37,7 @@ function SaveRow({
 }
 
 export default function SettingsPage() {
-  const user = useCurrentUser();
+  const { user, isAdmin } = useAccess();
   const [app, setApp] = useState<AppSettings | null>(null);
   const [savedApp, setSavedApp] = useState<AppSettings | null>(null);
   const [buffet, setBuffet] = useState<BuffetMenuSettings>({ allergenStatement: "", showAllergenStatement: false });
@@ -193,184 +193,195 @@ export default function SettingsPage() {
     <main className="page">
       <PageHeader title="Settings" description="Shared settings used by every tool. Changes apply to everything printed from now on." />
 
-      <Section
-        title="Menu card contact details"
-        description="Printed on the back cover of banqueting menu cards. Leave a line blank to leave it off."
-      >
-        <div className="stack">
-          <div className="form-grid">
-            <Field label="Phone number">
-              <input
-                value={app?.contactPhone ?? ""}
-                disabled={!app}
-                maxLength={100}
-                onChange={(e) => setApp((a) => (a ? { ...a, contactPhone: e.target.value } : a))}
-                placeholder="e.g. 0117 428 4000"
-              />
-            </Field>
-            <Field label="Web addresses" hint="Separate several with a vertical bar ( | ).">
-              <input
-                value={app?.contactWebsites ?? ""}
-                disabled={!app}
-                maxLength={300}
-                onChange={(e) => setApp((a) => (a ? { ...a, contactWebsites: e.target.value } : a))}
-                placeholder="e.g. bristol.ac.uk/venues | bristol.ac.uk/catering"
-              />
-            </Field>
-          </div>
-          <SaveRow
-            dirty={contactDirty}
-            saved={savedApp !== null}
-            busy={busy === "contact"}
-            onSave={() => void saveContact()}
-            label="Save contact details"
-          />
-        </div>
-      </Section>
+      {user && !isAdmin ? (
+        <Callout tone="info" className="readonly-note">
+          Only admins can change these settings.
+        </Callout>
+      ) : null}
 
-      <Section
-        title={
-          <>
-            Display menu backgrounds <span className="badge">{backgrounds.length}</span>
-          </>
-        }
-        description="Full-page “Empty Belly” posters printed behind the A4 buffet display menu. Menus use the default unless they pick another on the Buffet menus page."
-        actions={
-          <label className={`upload-button${busy === "upload" ? " upload-button--disabled" : ""}`}>
-            <input
-              type="file"
-              accept={LOGO_UPLOAD_ACCEPT}
-              disabled={busy === "upload"}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) void uploadBackground(file);
-              }}
+      {/* Locked (until the account loads, and for non-admins) so nobody edits what they can't save. */}
+      <fieldset className="fieldset-plain" disabled={!isAdmin}>
+
+        <Section
+          title="Menu card contact details"
+          description="Printed on the back cover of banqueting menu cards. Leave a line blank to leave it off."
+        >
+          <div className="stack">
+            <div className="form-grid">
+              <Field label="Phone number">
+                <input
+                  value={app?.contactPhone ?? ""}
+                  disabled={!app}
+                  maxLength={100}
+                  onChange={(e) => setApp((a) => (a ? { ...a, contactPhone: e.target.value } : a))}
+                  placeholder="e.g. 0117 428 4000"
+                />
+              </Field>
+              <Field label="Web addresses" hint="Separate several with a vertical bar ( | ).">
+                <input
+                  value={app?.contactWebsites ?? ""}
+                  disabled={!app}
+                  maxLength={300}
+                  onChange={(e) => setApp((a) => (a ? { ...a, contactWebsites: e.target.value } : a))}
+                  placeholder="e.g. bristol.ac.uk/venues | bristol.ac.uk/catering"
+                />
+              </Field>
+            </div>
+            <SaveRow
+              dirty={contactDirty}
+              saved={savedApp !== null}
+              busy={busy === "contact"}
+              onSave={() => void saveContact()}
+              label="Save contact details"
             />
-            <ImagePlus size={15} aria-hidden />
-            {busy === "upload" ? "Uploading…" : "Upload"}
-          </label>
-        }
-      >
-        <div className="stack">
-          {uploadWarning ? (
-            <Callout tone="warning" onDismiss={() => setUploadWarning("")}>
-              {uploadWarning}
-            </Callout>
-          ) : null}
-          <div className="bg-grid">
-            {backgrounds.map((item) => {
-              const isDefault = savedApp?.defaultDisplayBackgroundKey === item.key;
-              return (
-                <div key={item.key} className="library-tile">
-                  <span className="bg-tile-img">
-                    <img src={item.assetUrl} alt="" />
-                    <span className="bg-tile-band" aria-hidden />
-                  </span>
-                  <span className="bg-tile-label" title={item.label}>
-                    {item.label}
-                  </span>
-                  <div className="bg-tile-foot">
-                    {isDefault ? (
-                      <span className="badge badge--accent">
-                        <Star size={12} aria-hidden /> Default
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn-sm"
-                        disabled={workingKey !== null || !savedApp}
-                        onClick={() => void makeDefault(item.key)}
-                      >
-                        Make default
-                      </button>
-                    )}
-                    {item.builtin ? null : (
-                      <button
-                        type="button"
-                        className="icon-btn icon-btn--sm btn-danger"
-                        disabled={workingKey !== null}
-                        onClick={() => void deleteBackground(item)}
-                        aria-label={`Delete ${item.label}`}
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
+          </div>
+        </Section>
+
+        <Section
+          title={
+            <>
+              Display menu backgrounds <span className="badge">{backgrounds.length}</span>
+            </>
+          }
+          description="Full-page “Empty Belly” posters printed behind the A4 buffet display menu. Menus use the default unless they pick another on the Buffet menus page."
+          actions={
+            <label className={`upload-button${busy === "upload" ? " upload-button--disabled" : ""}`}>
+              <input
+                type="file"
+                accept={LOGO_UPLOAD_ACCEPT}
+                disabled={busy === "upload"}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadBackground(file);
+                }}
+              />
+              <ImagePlus size={15} aria-hidden />
+              {busy === "upload" ? "Uploading…" : "Upload"}
+            </label>
+          }
+        >
+          <div className="stack">
+            {uploadWarning ? (
+              <Callout tone="warning" onDismiss={() => setUploadWarning("")}>
+                {uploadWarning}
+              </Callout>
+            ) : null}
+            <div className="bg-grid">
+              {backgrounds.map((item) => {
+                const isDefault = savedApp?.defaultDisplayBackgroundKey === item.key;
+                return (
+                  <div key={item.key} className="library-tile">
+                    <span className="bg-tile-img">
+                      <img src={item.assetUrl} alt="" />
+                      <span className="bg-tile-band" aria-hidden />
+                    </span>
+                    <span className="bg-tile-label" title={item.label}>
+                      {item.label}
+                    </span>
+                    <div className="bg-tile-foot">
+                      {isDefault ? (
+                        <span className="badge badge--accent">
+                          <Star size={12} aria-hidden /> Default
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          disabled={workingKey !== null || !savedApp}
+                          onClick={() => void makeDefault(item.key)}
+                        >
+                          Make default
+                        </button>
+                      )}
+                      {item.builtin ? null : (
+                        <button
+                          type="button"
+                          className="icon-btn icon-btn--sm btn-danger"
+                          disabled={workingKey !== null}
+                          onClick={() => void deleteBackground(item)}
+                          aria-label={`Delete ${item.label}`}
+                          title="Delete"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-          <p className="text-muted text-sm" style={{ margin: 0 }}>
-            The dashed box on each preview shows where the menu text is printed.
-          </p>
-          <Disclosure label="Making a new Empty Belly poster">
-            <ul className="spec-list">
-              <li>
-                <strong>Size:</strong> A4 portrait (210 × 297 mm). Export at 2480 × 3508 px (300 dpi), or at least
-                1240 × 1754 px. Other proportions get stretched to fill the page.
-              </li>
-              <li>
-                <strong>Clear area for the menu:</strong> keep a plain white or very pale band across the middle of the
-                page, from 18% to 82% of the height (about 54 mm in from the top and from the bottom). The menu is
-                printed there in black, with a 12 mm margin each side.
-              </li>
-              <li>
-                <strong>Artwork:</strong> put the decoration above and below that band. Run it right to the edges, with
-                no crop marks or bleed, but keep logos and words at least 5 mm from the edges because most printers
-                can&apos;t print right up to them.
-              </li>
-              <li>
-                <strong>File:</strong> JPEG (best) or PNG, RGB colour, under 4 MB.
-              </li>
-              {builtin ? (
+                );
+              })}
+            </div>
+            <p className="text-muted text-sm" style={{ margin: 0 }}>
+              The dashed box on each preview shows where the menu text is printed.
+            </p>
+            <Disclosure label="Making a new Empty Belly poster">
+              <ul className="spec-list">
                 <li>
-                  For a template, start from the{" "}
-                  <a className="text-link" href={builtin.assetUrl} download="water-menu-background.jpg">
-                    built-in water background
-                  </a>
-                  .
+                  <strong>Size:</strong> A4 portrait (210 × 297 mm). Export at 2480 × 3508 px (300 dpi), or at least
+                  1240 × 1754 px. Other proportions get stretched to fill the page.
                 </li>
-              ) : null}
-            </ul>
-          </Disclosure>
-        </div>
-      </Section>
+                <li>
+                  <strong>Clear area for the menu:</strong> keep a plain white or very pale band across the middle of the
+                  page, from 18% to 82% of the height (about 54 mm in from the top and from the bottom). The menu is
+                  printed there in black, with a 12 mm margin each side.
+                </li>
+                <li>
+                  <strong>Artwork:</strong> put the decoration above and below that band. Run it right to the edges, with
+                  no crop marks or bleed, but keep logos and words at least 5 mm from the edges because most printers
+                  can&apos;t print right up to them.
+                </li>
+                <li>
+                  <strong>File:</strong> JPEG (best) or PNG, RGB colour, under 4 MB.
+                </li>
+                {builtin ? (
+                  <li>
+                    For a template, start from the{" "}
+                    <a className="text-link" href={builtin.assetUrl} download="water-menu-background.jpg">
+                      built-in water background
+                    </a>
+                    .
+                  </li>
+                ) : null}
+              </ul>
+            </Disclosure>
+          </div>
+        </Section>
 
-      <Section
-        title="Allergen statement"
-        description="Small print at the foot of every allergen matrix page, for all buffet menus."
-      >
-        <div className="stack">
-          <Switch
-            checked={buffet.showAllergenStatement}
-            disabled={savedBuffet === null}
-            onChange={(checked) => setBuffet((s) => ({ ...s, showAllergenStatement: checked }))}
-            label="Print on the allergen matrix"
-          />
-          <Field label="Statement" as="div">
-            <textarea
-              value={buffet.allergenStatement}
+        <Section
+          title="Allergen statement"
+          description="Small print at the foot of every allergen matrix page, for all buffet menus."
+        >
+          <div className="stack">
+            <Switch
+              checked={buffet.showAllergenStatement}
               disabled={savedBuffet === null}
-              onChange={(e) => setBuffet((s) => ({ ...s, allergenStatement: e.target.value }))}
-              maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
-              rows={4}
-              aria-label="Allergen statement"
-              placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
+              onChange={(checked) => setBuffet((s) => ({ ...s, showAllergenStatement: checked }))}
+              label="Print on the allergen matrix"
             />
-          </Field>
-          <SaveRow
-            dirty={statementDirty}
-            saved={savedBuffet !== null}
-            busy={busy === "statement"}
-            onSave={() => void saveStatement()}
-            label="Save statement"
-          />
-        </div>
-      </Section>
+            <Field label="Statement" as="div">
+              <textarea
+                value={buffet.allergenStatement}
+                disabled={savedBuffet === null}
+                onChange={(e) => setBuffet((s) => ({ ...s, allergenStatement: e.target.value }))}
+                maxLength={MAX_BUFFET_ALLERGEN_STATEMENT_CHARS}
+                rows={4}
+                aria-label="Allergen statement"
+                placeholder="e.g. Please speak to a member of staff about allergens before choosing your food. Dishes are prepared in a kitchen that handles all 14 major allergens."
+              />
+            </Field>
+            <SaveRow
+              dirty={statementDirty}
+              saved={savedBuffet !== null}
+              busy={busy === "statement"}
+              onSave={() => void saveStatement()}
+              label="Save statement"
+            />
+          </div>
+        </Section>
 
-      {user?.role === "admin" ? <UsersSection currentUserId={user.id} onError={setError} /> : null}
+      </fieldset>
+
+      {user && isAdmin ? <UsersSection currentUserId={user.id} onError={setError} /> : null}
 
       <Toasts>
         {error ? (

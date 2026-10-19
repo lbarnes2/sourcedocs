@@ -1,3 +1,4 @@
+import type { SavedBy } from "./auth";
 import type { PaperOrientation, PaperSize } from "./paper";
 import type { ThemeSettings } from "./index";
 
@@ -120,6 +121,8 @@ export interface FloorplanDocument {
   id: string;
   name: string;
   savedAt: string;
+  /** Absent on floorplans saved before accounts existed. */
+  savedBy?: SavedBy;
   metadata: FloorplanMetadata;
   canvas: FloorplanCanvasSettings;
   objects: FloorplanCanvasObject[];
@@ -136,6 +139,7 @@ export interface FloorplanListItem {
   id: string;
   name: string;
   savedAt: string;
+  savedBy?: SavedBy;
   title: string;
 }
 

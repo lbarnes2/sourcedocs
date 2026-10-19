@@ -21,6 +21,12 @@ export interface UsersFile {
   users: StoredUser[];
 }
 
+/** Who last saved a document. Set by the server from the session; the name is kept as it was then. */
+export interface SavedBy {
+  id: string;
+  name: string;
+}
+
 /** What the browser is told about the signed-in user. */
 export interface CurrentUser {
   id: string;

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, Download, Plus, Signpost, Trash2, X } from "lucide-react";
 import { ArrowGlyph, ArrowSymbolPicker } from "./ArrowSymbolPicker";
 import { GeneralSignTab } from "./GeneralSignTab";
+import { useAccess } from "@/app/components/CurrentUser";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import {
   Callout,
@@ -358,6 +359,7 @@ function PackSummary({ profile }: { profile: VenueSignageProfile }) {
 /* -------------------------------------------------------------------------- */
 
 export default function SignagePage() {
+  const { canEdit } = useAccess();
   const [tab, setTab] = useState<SignageTab>("pack");
   const [profiles, setProfiles] = useState<VenueSignageProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1027,14 +1029,16 @@ export default function SignagePage() {
         description={selectedId ? undefined : "New profile — not saved yet."}
         actions={
           <>
-            {selectedId ? (
+            {selectedId && canEdit ? (
               <button type="button" className="btn-ghost btn-danger btn-sm" disabled={busy} onClick={() => void deleteSelected()}>
                 <Trash2 size={14} aria-hidden /> Delete
               </button>
             ) : null}
-            <button type="button" className="btn-primary btn-sm" disabled={busy || (Boolean(selectedId) && !draftDirty)} onClick={() => void saveDraft()}>
-              {busy ? "Saving…" : !selectedId || draftDirty ? "Save profile" : "Saved"}
-            </button>
+            {canEdit ? (
+              <button type="button" className="btn-primary btn-sm" disabled={busy || (Boolean(selectedId) && !draftDirty)} onClick={() => void saveDraft()}>
+                {busy ? "Saving…" : !selectedId || draftDirty ? "Save profile" : "Saved"}
+              </button>
+            ) : null}
           </>
         }
       >

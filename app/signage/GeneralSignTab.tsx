@@ -5,6 +5,7 @@ import { Download, Save } from "lucide-react";
 import { ArrowSymbolPicker } from "./ArrowSymbolPicker";
 import { GeneralSignTemplates } from "./GeneralSignTemplates";
 import { SymbolPicker } from "./SymbolPicker";
+import { useAccess } from "@/app/components/CurrentUser";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { Callout, ColorField, Field, Modal, Section, Segmented, Switch } from "@/app/components/ui";
 import { defaultSignageTheme } from "@/lib/defaults";
@@ -80,6 +81,7 @@ export function GeneralSignTab({
   clientLogos: LogoItem[];
   logosConfigured: boolean;
 }) {
+  const { canEdit } = useAccess();
   const [templates, setTemplates] = useState<GeneralSignTemplate[] | null>(null);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [templateBusy, setTemplateBusy] = useState(false);
@@ -484,28 +486,30 @@ export function GeneralSignTab({
               <p className="text-muted">
                 Changed from the <strong>{selectedTemplate.label}</strong> template.
               </p>
-              <div className="row">
-                <button
-                  type="button"
-                  className="btn-primary btn-sm"
-                  disabled={templateBusy}
-                  onClick={() =>
-                    void saveTemplate(
-                      { id: selectedTemplate.id, label: selectedTemplate.label, ...formContent },
-                      `Updated “${selectedTemplate.label}”.`
-                    )
-                  }
-                >
-                  <Save size={14} aria-hidden /> Update template
-                </button>
-                <button type="button" className="btn-ghost btn-sm" disabled={templateBusy} onClick={openSaveAs}>
-                  Save as new…
-                </button>
-              </div>
+              {canEdit ? (
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm"
+                    disabled={templateBusy}
+                    onClick={() =>
+                      void saveTemplate(
+                        { id: selectedTemplate.id, label: selectedTemplate.label, ...formContent },
+                        `Updated “${selectedTemplate.label}”.`
+                      )
+                    }
+                  >
+                    <Save size={14} aria-hidden /> Update template
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm" disabled={templateBusy} onClick={openSaveAs}>
+                    Save as new…
+                  </button>
+                </div>
+              ) : null}
             </>
           ) : selectedTemplate ? (
             <p className="text-muted">{templateNotice || <>Using the <strong>{selectedTemplate.label}</strong> template.</>}</p>
-          ) : templates ? (
+          ) : templates && canEdit ? (
             <button type="button" className="btn-ghost btn-sm" disabled={templateBusy} onClick={openSaveAs}>
               <Save size={14} aria-hidden /> Save as template…
             </button>

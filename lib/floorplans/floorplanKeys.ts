@@ -34,6 +34,7 @@ export function listItemFromFloorplan(doc: FloorplanDocument): FloorplanListItem
     id: doc.id,
     name: doc.name,
     savedAt: doc.savedAt,
+    ...(doc.savedBy ? { savedBy: doc.savedBy } : {}),
     title: doc.metadata?.title?.trim() ?? ""
   };
 }
