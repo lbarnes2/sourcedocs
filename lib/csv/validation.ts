@@ -59,12 +59,23 @@ export function validateGuests(guests: GuestRecord[], options: ValidationOptions
   const issues: ValidationIssue[] = [];
   const seenNames = new Map<string, number>();
 
+  // A course column that's blank for everyone (e.g. a 1-1-1 dinner) gets one note, not one per guest.
+  const emptyCourses = options.requiredCourses.filter((course) => !guests.some((guest) => guest[course].trim()));
+  if (guests.length && emptyCourses.length) {
+    issues.push({
+      code: "missing_choice",
+      severity: "warning",
+      message: `No ${emptyCourses.join(", ")} choices in the guest list. For a set menu, enter the dishes under Set menu.`
+    });
+  }
+  const requiredCourses = options.requiredCourses.filter((course) => !emptyCourses.includes(course));
+
   guests.forEach((guest, index) => {
     if (!guest.tableNumber) {
       issues.push({
         code: "missing_table",
         severity: "error",
-        message: `Missing table number for ${guest.name || `row ${index + 1}`}.`,
+        message: `Missing table for ${guest.name || `row ${index + 1}`} — map a table column, or add a "Table x" row above their table.`,
         rowIndex: index
       });
     }
@@ -78,7 +89,7 @@ export function validateGuests(guests: GuestRecord[], options: ValidationOptions
       });
     }
 
-    const missingCourses = options.requiredCourses.filter((course) => !guest[course]);
+    const missingCourses = requiredCourses.filter((course) => !guest[course]);
     if (missingCourses.length > 0) {
       issues.push({
         code: "missing_choice",

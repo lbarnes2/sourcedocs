@@ -23,6 +23,7 @@ import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
 import { fitTextToFont, titleFontFor } from "@/lib/pdf/fontText";
+import { formatTableLabel } from "@/lib/event/tableLabel";
 import type { PDFFont } from "pdf-lib";
 
 function mmToPt(mm: number): number {
@@ -278,9 +279,11 @@ function buildPlaceCardLines(options: {
     });
   }
 
-  wrapTextToWidthClamped(`Table ${card.tableNumber}`, font, detailSize, maxTextW).forEach((line) => {
-    flatLines.push({ text: line, fontRef: font, size: detailSize, color: mutedGrey, kind: "table", group: "table" });
-  });
+  if (card.tableNumber) {
+    wrapTextToWidthClamped(formatTableLabel(card.tableNumber), font, detailSize, maxTextW).forEach((line) => {
+      flatLines.push({ text: line, fontRef: font, size: detailSize, color: mutedGrey, kind: "table", group: "table" });
+    });
+  }
 
   if (card.courses.starter) {
     wrapTextToWidthClamped(`Starter: ${card.courses.starter}`, font, detailSize, maxTextW).forEach((line) => {
@@ -453,7 +456,7 @@ export async function renderTablePlanByTablePdf(
         borderWidth: 0.8
       });
 
-      const tableLabel = `Table ${table.tableNumber}`;
+      const tableLabel = formatTableLabel(table.tableNumber);
       const tableLabelSize = 12;
       const titleWidth = bold.widthOfTextAtSize(tableLabel, tableLabelSize);
       page.drawText(tableLabel, {
@@ -657,7 +660,7 @@ export async function renderTablePlanByPersonPdf(
           size: 10.5,
           maxWidth: tableColSplit - colX - 16
         });
-        page.drawText(`Table ${person.tableNumber}`, {
+        page.drawText(formatTableLabel(person.tableNumber), {
           x: tableColSplit + 10,
           y: rowBottom + 6,
           font: bold,
@@ -731,7 +734,7 @@ export async function renderPlaceCardsPdf(
   const cardWidth = PLACE_CARD_STOCK.cardWidthPt;
   const calibrationX = mmToPt(settings.textOffsetXmm);
   const calibrationY = mmToPt(settings.textOffsetYmm);
-  const cards = buildPlaceCardDocument(model);
+  const cards = buildPlaceCardDocument(model, settings);
 
   /** Inset from physical stock / cut line so borders print safely inside the panel (tent stock). */
   const placeCardCutLineInsetPt = mmToPt(3);
@@ -915,11 +918,11 @@ export async function renderPlaceCardsPdf(
         if (placeCardLinesHeight(chosenLines, chosenGap) > innerH) {
           // Only dietary text remains too tall: draw it anyway (it may touch the border) rather than hide it.
           options.warnings?.push(
-            `Place card for ${card.name} (table ${card.tableNumber}): dietary text is too long for the card and may overlap the border — check the printed card.`
+            `Place card for ${card.name}${card.tableNumber ? ` (${formatTableLabel(card.tableNumber)})` : ""}: dietary text is too long for the card and may overlap the border — check the printed card.`
           );
         } else if (droppedSomething) {
           options.warnings?.push(
-            `Place card for ${card.name} (table ${card.tableNumber}): some menu lines were left off so the dietary requirements fit.`
+            `Place card for ${card.name}${card.tableNumber ? ` (${formatTableLabel(card.tableNumber)})` : ""}: some menu lines were left off so the dietary requirements fit.`
           );
         }
 
@@ -1630,7 +1633,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
         color: rgb(0.86, 0.88, 0.93)
       });
 
-      page.drawText(part === 0 ? `Table ${table.tableNumber}` : `Table ${table.tableNumber} (cont.)`, {
+      page.drawText(part === 0 ? formatTableLabel(table.tableNumber) : `${formatTableLabel(table.tableNumber)} (cont.)`, {
         x: leftX,
         y: headerY,
         font: bold,
@@ -1957,7 +1960,7 @@ export async function renderFloorplanPdf(
     });
 
     if (filled) {
-      const label = `Table ${cell.tableNumber}`;
+      const label = formatTableLabel(String(cell.tableNumber));
       let tableLabelSize = Math.min(15, Math.max(8, (tableR * 2) / 6.5));
       let labelWidth = bold.widthOfTextAtSize(label, tableLabelSize);
       const maxW = (tableR * 2 - 5) * 0.95;
