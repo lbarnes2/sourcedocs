@@ -30,6 +30,7 @@ import {
   defaultThemeSettings
 } from "@/lib/defaults";
 import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { applySetMenu, emptySetMenu } from "@/lib/event/setMenu";
 import { readResponseError } from "@/lib/http/readError";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
 import { downloadBlob, downloadPdfBlobAsPngs, downloadPdfBlobsAsPngZip } from "@/lib/pdf/pdfToPngExport";
@@ -43,7 +44,8 @@ import type {
   PaperSize,
   ProfileSettings,
   ProjectListItem,
-  RawCsvRow
+  RawCsvRow,
+  SetMenu
 } from "@/types";
 
 const DOCUMENTS: Array<{ id: DocumentType; label: string; description: string }> = [
@@ -205,7 +207,7 @@ export default function HomePage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [guests, setGuests] = useState<GuestRecord[]>([]);
-  const [issues, setIssues] = useState<Array<{ severity: string; message: string }>>([]);
+  const [issues, setIssues] = useState<Array<{ severity: string; message: string; code?: string }>>([]);
   const [error, setError] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingExport, setLoadingExport] = useState(false);
@@ -224,6 +226,7 @@ export default function HomePage() {
   >([]);
   const [menuMergePick, setMenuMergePick] = useState<string[]>([]);
   const [normalizeGuestNamesToTitleCase, setNormalizeGuestNamesToTitleCase] = useState(false);
+  const [setMenu, setSetMenu] = useState<SetMenu>({ ...emptySetMenu });
 
   const [selectedDocuments, setSelectedDocuments] = useState<DocumentType[]>(DOCUMENTS.map((doc) => doc.id));
   const [bundleMode, setBundleMode] = useState<"single" | "zip">("zip");
@@ -270,16 +273,39 @@ export default function HomePage() {
     [guests]
   );
 
+  /** Guests as they will print: blank courses filled from the set menu. */
+  const effectiveGuests = useMemo(() => applySetMenu(guests, setMenu), [guests, setMenu]);
+
+  // Keep the Dishes tab in step with the guest list, the set menu and last-minute edits.
+  // Existing short/long names are kept for any dish that is still present.
+  useEffect(() => {
+    const dishes = Array.from(
+      new Set(
+        effectiveGuests.flatMap((guest) =>
+          [guest.starter, guest.main, guest.dessert].map((value) => value.trim()).filter(Boolean)
+        )
+      )
+    );
+    setDishNameOverrides((previous) => {
+      const next: Record<string, DishNameOverride> = {};
+      dishes.forEach((dish) => {
+        next[dish] = previous[dish] ?? { shortName: dish, longName: dish };
+      });
+      if (JSON.stringify(previous) === JSON.stringify(next)) return previous;
+      return next;
+    });
+  }, [effectiveGuests]);
+
   const uniqueEffectiveDishes = useMemo(() => {
     const set = new Set<string>();
-    guests.forEach((guest) => {
+    effectiveGuests.forEach((guest) => {
       (["starter", "main", "dessert"] as const).forEach((field) => {
         const rewritten = rewriteDishWithShortOverride(guest[field], dishNameOverrides).trim();
         if (rewritten) set.add(rewritten);
       });
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [guests, dishNameOverrides]);
+  }, [effectiveGuests, dishNameOverrides]);
 
   useEffect(() => {
     const valid = new Set(uniqueEffectiveDishes);
@@ -341,6 +367,7 @@ export default function HomePage() {
     setDishMenuDuplicateGroups(file.dishMenuDuplicateGroups ?? []);
     setMenuMergePick([]);
     setNormalizeGuestNamesToTitleCase(file.normalizeGuestNamesToTitleCase ?? false);
+    setSetMenu({ ...emptySetMenu, ...file.setMenu });
     const nextSelected = file.selectedDocuments?.filter((doc) => doc !== "floorplan") ?? [];
     setSelectedDocuments(nextSelected.length ? nextSelected : DOCUMENTS.map((doc) => doc.id));
     setBundleMode(file.bundleMode === "single" ? "single" : "zip");
@@ -400,6 +427,7 @@ export default function HomePage() {
         dishNameOverrides,
         dishMenuDuplicateGroups,
         normalizeGuestNamesToTitleCase,
+        setMenu,
         selectedDocuments,
         bundleMode,
         profileName,
@@ -588,21 +616,6 @@ export default function HomePage() {
       setGuests(nextGuests);
       setIssues(payload.validation?.issues ?? []);
       setExportUnlocked(nextGuests.length > 0);
-      const menuOptions = Array.from(
-        new Set(
-          nextGuests.flatMap((guest) =>
-            [guest.starter, guest.main, guest.dessert].map((value) => value.trim()).filter(Boolean)
-          )
-        )
-      );
-      setDishNameOverrides((previous) => {
-        const next: Record<string, DishNameOverride> = {};
-        menuOptions.forEach((option) => {
-          const prior = previous[option];
-          next[option] = prior ?? { shortName: option, longName: option };
-        });
-        return next;
-      });
     } catch (previewError) {
       setExportUnlocked(false);
       setError(previewError instanceof Error ? previewError.message : "Preview failed.");
@@ -715,10 +728,11 @@ export default function HomePage() {
     // Last-minute edits bypass the original preview validation, so re-check before printing.
     const requiredCourses = (["starter", "main", "dessert"] as const).filter((course) => Boolean(mapping[course]));
     const recheck = validateGuests(
-      guests.map((guest) => ({ ...guest, tableNumber: guest.tableNumber.trim(), name: guest.name.trim() })),
+      effectiveGuests.map((guest) => ({ ...guest, tableNumber: guest.tableNumber.trim(), name: guest.name.trim() })),
       { requiredCourses }
     );
-    setIssues(recheck.issues);
+    // Rows skipped on import aren't in the guest list any more, so carry their warnings over.
+    setIssues((previous) => [...previous.filter((issue) => issue.code === "skipped_row"), ...recheck.issues]);
     setHasAttemptedPreviewValidate(true);
     const blocking = recheck.issues.filter((issue) => issue.severity === "error");
     if (blocking.length) {
@@ -745,7 +759,7 @@ export default function HomePage() {
     }, progressStepMs);
     const buildGenerateBody = (documents: DocumentType[], requestedBundleMode: "single" | "zip") => ({
       mode: "generate",
-      guests,
+      guests: effectiveGuests,
       request: {
         documents,
         bundleMode: requestedBundleMode,
@@ -839,6 +853,7 @@ export default function HomePage() {
     (venueLogoLibrary.loaded && !venueLogoLibrary.configured) || (clientLogoLibrary.loaded && !clientLogoLibrary.configured);
   const dishCount = Object.keys(dishNameOverrides).length;
   const mergedDishes = new Set(dishMenuDuplicateGroups.flatMap((group) => group.match.map((member) => member.trim())));
+  const setMenuCourseCount = (["starter", "main", "dessert"] as const).filter((course) => setMenu[course].trim()).length;
   const singleFileBlocked = outputFormat === "pdf" && bundleMode === "single" && selectedDocuments.length !== 1;
 
   const guestColumns: Array<{ key: "name" | "tableNumber" | "starter" | "main" | "dessert"; label: string }> = [
@@ -1122,6 +1137,39 @@ export default function HomePage() {
               </ul>
             ) : null}
             {guests.length > 0 ? (
+              <Disclosure
+                label={
+                  <>
+                    Set menu{" "}
+                    {setMenuCourseCount ? (
+                      <span className="badge badge--success">
+                        {setMenuCourseCount} course{setMenuCourseCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </>
+                }
+                defaultOpen={!guests.some((guest) => guest.starter.trim() || guest.main.trim() || guest.dessert.trim())}
+              >
+                <div className="stack">
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    For a set menu (e.g. 1-1-1) where choices aren&apos;t in the guest list. Used for any guest with no
+                    choice for that course; a choice in the guest list always wins.
+                  </p>
+                  <div className="form-grid form-grid--3">
+                    {(["starter", "main", "dessert"] as const).map((course) => (
+                      <Field key={course} label={COLUMN_LABELS[course]}>
+                        <input
+                          value={setMenu[course]}
+                          placeholder={course === "starter" ? "Ham hock terrine" : course === "main" ? "Roast sirloin of beef" : "Sticky toffee pudding"}
+                          onChange={(event) => setSetMenu((previous) => ({ ...previous, [course]: event.target.value }))}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+                </div>
+              </Disclosure>
+            ) : null}
+            {guests.length > 0 ? (
               <Disclosure label={`Last-minute edits (${guests.length} guests)`}>
                 <div className="table-wrap">
                   <table>
@@ -1140,6 +1188,11 @@ export default function HomePage() {
                             <td key={column.key}>
                               <input
                                 value={guest[column.key]}
+                                placeholder={
+                                  column.key === "starter" || column.key === "main" || column.key === "dessert"
+                                    ? setMenu[column.key]
+                                    : undefined
+                                }
                                 aria-label={`${column.label} for ${guest.name || `guest ${guestIndex + 1}`}`}
                                 onChange={(event) => updateGuest(guestIndex, { [column.key]: event.target.value })}
                               />
@@ -1321,9 +1374,34 @@ export default function HomePage() {
         {settingsTab === "placeCards" ? (
           <div className="stack">
             <p className="field-hint" style={{ margin: 0 }}>
-              Six guests per sheet: rows 2, 4 and 6 carry name, table, menu and dietary; rows 1, 3 and 5 are tent backs
-              with the client logo.
+              Six guests per sheet: rows 2, 4 and 6 carry the guest details; rows 1, 3 and 5 are tent backs with the
+              client logo.
             </p>
+            <div className="stack stack--sm">
+              <Switch
+                checked={placeCard.showTable !== false}
+                onChange={(checked) => setPlaceCard((previous) => ({ ...previous, showTable: checked }))}
+                label="Show table"
+              />
+              <Switch
+                checked={placeCard.showMenu !== false}
+                onChange={(checked) => setPlaceCard((previous) => ({ ...previous, showMenu: checked }))}
+                label="Show menu choices"
+                hint="Turn off for a set menu, where every card would say the same thing."
+              />
+              <Switch
+                checked={placeCard.showDietary !== false}
+                onChange={(checked) => setPlaceCard((previous) => ({ ...previous, showDietary: checked }))}
+                label="Show dietary requirements"
+                hint="Turn off for name cards at a non-dining event."
+              />
+            </div>
+            {placeCard.showDietary === false && selectedDocuments.includes("placeCards") ? (
+              <Callout tone="warning">
+                Dietary requirements won&apos;t be printed on place cards. Make sure service staff have them from the
+                service plan.
+              </Callout>
+            ) : null}
             <div className="form-grid">
               <Field label="Stock name">
                 <input

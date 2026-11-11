@@ -1,4 +1,4 @@
-import type { EventModel } from "@/types";
+import type { EventModel, PlaceCardSettings } from "@/types";
 
 export interface PlaceCardData {
   id: string;
@@ -18,21 +18,28 @@ function tableSortKey(table: string): number {
   return Number.MAX_SAFE_INTEGER;
 }
 
-/** Place cards: all guests on table 1, then table 2, …; within a table, alphabetical by name (same as `byTable`). */
-export function buildPlaceCardDocument(model: EventModel): PlaceCardData[] {
+/**
+ * Place cards: all guests on table 1, then table 2, …; within a table, alphabetical by name (same as `byTable`).
+ * Lines switched off in the settings are blanked here so the renderer never sees them.
+ */
+export function buildPlaceCardDocument(
+  model: EventModel,
+  show: Pick<PlaceCardSettings, "showTable" | "showMenu" | "showDietary"> = {}
+): PlaceCardData[] {
+  const showTable = show.showTable !== false;
+  const showMenu = show.showMenu !== false;
+  const showDietary = show.showDietary !== false;
   return Object.entries(model.byTable)
     .sort(([a], [b]) => tableSortKey(a) - tableSortKey(b) || a.localeCompare(b))
     .flatMap(([, guests]) =>
       guests.map((guest) => ({
         id: guest.id,
         name: guest.name,
-        tableNumber: guest.tableNumber,
-        courses: {
-          starter: guest.starter,
-          main: guest.main,
-          dessert: guest.dessert
-        },
-        dietary: guest.dietaryNormalized
+        tableNumber: showTable ? guest.tableNumber : "",
+        courses: showMenu
+          ? { starter: guest.starter, main: guest.main, dessert: guest.dessert }
+          : { starter: "", main: "", dessert: "" },
+        dietary: showDietary ? guest.dietaryNormalized : []
       }))
     );
 }

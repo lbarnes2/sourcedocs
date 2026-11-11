@@ -65,6 +65,9 @@ const savePayloadBaseSchema = z.object({
   dishNameOverrides: z.record(z.string(), dishOverrideSchema),
   dishMenuDuplicateGroups: z.array(duplicateGroupSchema),
   normalizeGuestNamesToTitleCase: z.boolean(),
+  setMenu: z
+    .object({ starter: z.string().max(2000), main: z.string().max(2000), dessert: z.string().max(2000) })
+    .optional(),
   selectedDocuments: z.array(documentTypeSchema),
   bundleMode: z.enum(["single", "zip"]),
   profileName: z.string().max(200),
@@ -110,6 +113,7 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
     dishNameOverrides: parsed.dishNameOverrides,
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,
+    setMenu: parsed.setMenu,
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,
@@ -165,6 +169,7 @@ export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
     dishNameOverrides: parsed.dishNameOverrides,
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,
+    setMenu: parsed.setMenu,
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,

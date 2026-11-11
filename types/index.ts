@@ -30,7 +30,8 @@ export interface ValidationIssue {
     | "missing_required"
     | "duplicate_name"
     | "missing_choice"
-    | "missing_table";
+    | "missing_table"
+    | "skipped_row";
   severity: "error" | "warning";
   message: string;
   rowIndex?: number;
@@ -71,6 +72,10 @@ export interface PlaceCardSettings {
   textOffsetYmm: number;
   safeMarginMm: number;
   fontScale: number;
+  /** Optional lines on the card; older saves omit these and print everything. */
+  showTable?: boolean;
+  showMenu?: boolean;
+  showDietary?: boolean;
 }
 
 export interface MenuBookletSettings {
@@ -89,6 +94,13 @@ export interface FloorplanSettings {
   tableLayout: "aligned" | "staggered";
   numbering: "straight" | "snaked";
   startCorner: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+}
+
+/** Courses for every guest when the guest list doesn't carry choices (e.g. a 1-1-1 set menu). */
+export interface SetMenu {
+  starter: string;
+  main: string;
+  dessert: string;
 }
 
 export interface DishNameOverride {
@@ -167,6 +179,8 @@ export interface EventProjectFile {
   dishNameOverrides: Record<string, DishNameOverride>;
   dishMenuDuplicateGroups: Array<DishMenuDuplicateGroup & { id: string }>;
   normalizeGuestNamesToTitleCase: boolean;
+  /** Older saves omit this. */
+  setMenu?: SetMenu;
   selectedDocuments: DocumentType[];
   bundleMode: "single" | "zip";
   profileName: string;

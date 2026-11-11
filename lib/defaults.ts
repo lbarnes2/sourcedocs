@@ -43,7 +43,10 @@ export const defaultPlaceCardSettings: PlaceCardSettings = {
   textOffsetXmm: 0,
   textOffsetYmm: 0,
   safeMarginMm: 4,
-  fontScale: 1
+  fontScale: 1,
+  showTable: true,
+  showMenu: true,
+  showDietary: true
 };
 
 export const defaultMenuBookletSettings: MenuBookletSettings = {

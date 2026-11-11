@@ -23,7 +23,10 @@ export const placeCardSchema = z.object({
   textOffsetXmm: z.number().min(-500).max(500),
   textOffsetYmm: z.number().min(-500).max(500),
   safeMarginMm: z.number().min(0).max(100),
-  fontScale: z.number().min(0.05).max(10)
+  fontScale: z.number().min(0.05).max(10),
+  showTable: z.boolean().optional(),
+  showMenu: z.boolean().optional(),
+  showDietary: z.boolean().optional()
 });
 
 export const menuBookletSchema = z.object({
