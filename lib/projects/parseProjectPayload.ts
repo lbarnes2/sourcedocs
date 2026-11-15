@@ -7,6 +7,7 @@ import {
   floorplanSchema,
   menuBookletSchema,
   placeCardSchema,
+  tablePlanByPersonSchema,
   tablePlanSchema,
   themeSchema
 } from "@/lib/validation/layoutSchemas";
@@ -55,10 +56,11 @@ const savePayloadBaseSchema = z.object({
   headers: z.array(z.string().max(500)).max(2000),
   mapping: z.record(z.string(), z.string()),
   guests: z.array(guestRecordSchema).max(limits.MAX_PROJECT_GUESTS),
-  issues: z.array(z.object({ severity: z.string(), message: z.string() })).max(5000),
+  // `code` lets the page keep "skipped row" notices when it re-validates before export.
+  issues: z.array(z.object({ severity: z.string(), message: z.string(), code: z.string().max(100).optional() })).max(5000),
   theme: themeSchema,
   tablePlan: tablePlanSchema,
-  tablePlanByPerson: tablePlanSchema,
+  tablePlanByPerson: tablePlanByPersonSchema,
   placeCard: placeCardSchema,
   menuBooklet: menuBookletSchema,
   floorplan: floorplanSchema.optional(),

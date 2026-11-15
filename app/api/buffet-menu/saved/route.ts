@@ -7,12 +7,9 @@ import { BUFFET_MENU_JSON_SCHEMA_VERSION, type BuffetMenuSavedFile } from "@/typ
 import { buffetMenuSavePutBodySchema } from "@/lib/validation/buffetMenuSchemas";
 
 export async function GET() {
-  if (!isR2Configured()) {
-    return NextResponse.json({ configured: false, items: [] as { id: string; name: string; savedAt: string }[] });
-  }
   try {
     const items = await listSavedBuffetMenus();
-    return NextResponse.json({ configured: true, items });
+    return NextResponse.json({ configured: true, storage: isR2Configured() ? "r2" : "local", items });
   } catch (error) {
     const message = errorMessage(error, "List failed.");
     return NextResponse.json({ error: message }, { status: 500 });
@@ -20,9 +17,6 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-  if (!isR2Configured()) {
-    return NextResponse.json({ error: "R2 is not configured." }, { status: 503 });
-  }
   let body: unknown;
   try {
     body = await request.json();

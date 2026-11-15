@@ -115,6 +115,10 @@ export async function POST(request: Request) {
     let clientBytes: Awaited<ReturnType<typeof resolveClientLogo>>;
 
     if (body.mode === "adhoc") {
+      // Without this the sign would print the placeholder word "Event" for the second event.
+      if (body.secondaryArrow && body.secondaryArrow !== "none" && !body.eventName2) {
+        return NextResponse.json({ error: "Enter a name for the second event, or remove it from the sign." }, { status: 400 });
+      }
       pages = [
         {
           paperSize: body.paperSize,

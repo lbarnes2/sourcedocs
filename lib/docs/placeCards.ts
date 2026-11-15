@@ -1,4 +1,5 @@
 import type { EventModel, PlaceCardSettings } from "@/types";
+import { tablesInOrder } from "@/lib/event/model";
 
 export interface PlaceCardData {
   id: string;
@@ -12,12 +13,6 @@ export interface PlaceCardData {
   dietary: string[];
 }
 
-function tableSortKey(table: string): number {
-  const parsed = Number(table.trim());
-  if (!Number.isNaN(parsed)) return parsed;
-  return Number.MAX_SAFE_INTEGER;
-}
-
 /**
  * Place cards: all guests on table 1, then table 2, …; within a table, alphabetical by name (same as `byTable`).
  * Lines switched off in the settings are blanked here so the renderer never sees them.
@@ -29,9 +24,7 @@ export function buildPlaceCardDocument(
   const showTable = show.showTable !== false;
   const showMenu = show.showMenu !== false;
   const showDietary = show.showDietary !== false;
-  return Object.entries(model.byTable)
-    .sort(([a], [b]) => tableSortKey(a) - tableSortKey(b) || a.localeCompare(b))
-    .flatMap(([, guests]) =>
+  return tablesInOrder(model).flatMap(([, guests]) =>
       guests.map((guest) => ({
         id: guest.id,
         name: guest.name,

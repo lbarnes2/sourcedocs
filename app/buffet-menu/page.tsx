@@ -48,6 +48,22 @@ const BUFFET_DOWNLOAD_FILE_NAMES: Record<BuffetExportMode, string> = {
   labelsA7: "buffet-labels-a7.pdf"
 };
 
+/** Allergens that contradict a dish's vegetarian / vegan label (e.g. a "vegan" dish containing milk). */
+const NOT_VEGETARIAN: AllergenId[] = ["fish", "crustaceans", "molluscs"];
+const NOT_VEGAN: AllergenId[] = [...NOT_VEGETARIAN, "milk", "eggs"];
+function dietConflicts(item: BuffetMenuItem): string[] {
+  const clash = item.vegan ? NOT_VEGAN : item.vegetarian ? NOT_VEGETARIAN : [];
+  return ALLERGENS.filter((a) => clash.includes(a.id) && item.allergens[a.id]).map((a) => a.shortLabel);
+}
+
+function fileSlug(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function snapshotOf(store: BuffetMenuStore, name: string, venueLogoKey: string, displayBackgroundKey: string): string {
+  return JSON.stringify([toMenuState(store), name, venueLogoKey, displayBackgroundKey]);
+}
+
 function findItemContainerLocal(store: Store, itemId: string): string | null {
   for (const k of containerKeys(store)) {
     if ((store.orderMap[k] || []).includes(itemId)) return k;
@@ -185,6 +201,7 @@ function SortableItemRow({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: itemId });
   const style = { transform: CSS.Translate.toString(transform), transition, opacity: isDragging ? 0.6 : 1 };
+  const conflicts = dietConflicts(item);
   return (
     <div ref={setNodeRef} style={style} className="menu-item">
       <button type="button" className="drag-handle" aria-label="Drag to reorder item" {...attributes} {...listeners}>
@@ -239,6 +256,12 @@ function SortableItemRow({
             </label>
           ))}
         </div>
+        {conflicts.length ? (
+          <p className="menu-item-warning" role="alert">
+            Marked {item.vegan ? "vegan" : "vegetarian"} but contains {conflicts.join(", ").toLowerCase()} — untick one
+            or the other.
+          </p>
+        ) : null}
       </div>
       <button type="button" className="icon-btn icon-btn--sm btn-danger" onClick={onRemove} aria-label="Remove item">
         <X size={16} />
@@ -278,6 +301,10 @@ export default function BuffetMenuPage() {
   const [error, setError] = useState("");
   const [savedList, setSavedList] = useState<{ id: string; name: string; savedAt: string }[]>([]);
   const [r2SaveEnabled, setR2SaveEnabled] = useState(false);
+  const [savedStorage, setSavedStorage] = useState<"r2" | "local" | "">("");
+  /** What the editor looked like when last saved, opened or cleared — anything else is an unsaved change. */
+  const [cleanSnapshot, setCleanSnapshot] = useState(() => snapshotOf(createEmptyMenuStore(), "Untitled menu", "", ""));
+  const [savedNotice, setSavedNotice] = useState("");
   /** Edited on the Settings page; read here so downloads include it. */
   const [settings, setSettings] = useState<BuffetMenuSettings | null>(null);
   const [backgrounds, setBackgrounds] = useState<BackgroundItem[]>([]);
@@ -294,8 +321,13 @@ export default function BuffetMenuPage() {
   const refreshSaved = useCallback(async () => {
     try {
       const res = await fetch("/api/buffet-menu/saved");
-      const data = (await res.json()) as { configured?: boolean; items?: { id: string; name: string; savedAt: string }[] };
+      const data = (await res.json()) as {
+        configured?: boolean;
+        storage?: "r2" | "local";
+        items?: { id: string; name: string; savedAt: string }[];
+      };
       setR2SaveEnabled(Boolean(data.configured));
+      setSavedStorage(data.storage ?? "");
       if (data.configured && data.items) setSavedList(data.items);
       else setSavedList([]);
     } catch {
@@ -408,6 +440,20 @@ export default function BuffetMenuPage() {
 
   const downloadExport = async (exportMode: BuffetExportMode) => {
     setError("");
+    const clashing = Object.values(store.items).filter((item) => item.title.trim() && dietConflicts(item).length);
+    if (
+      clashing.length &&
+      !window.confirm(
+        `${clashing.length} dish${clashing.length === 1 ? " is" : "es are"} marked vegetarian or vegan but contain${
+          clashing.length === 1 ? "s" : ""
+        } an animal allergen (${clashing
+          .slice(0, 3)
+          .map((item) => item.title.trim())
+          .join(", ")}${clashing.length > 3 ? "…" : ""}). Print anyway?`
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     try {
       const menu = toMenuState(store);
@@ -423,7 +469,9 @@ export default function BuffetMenuPage() {
         })
       });
       if (!res.ok) throw new Error(await readResponseError(res, "Generation failed."));
-      downloadBlob(await res.blob(), BUFFET_DOWNLOAD_FILE_NAMES[exportMode]);
+      // Prefix the menu's name so downloads for different menus don't overwrite each other.
+      const prefix = savedName.trim() && savedName.trim() !== "Untitled menu" ? `${fileSlug(savedName)}-` : "";
+      downloadBlob(await res.blob(), `${prefix}${BUFFET_DOWNLOAD_FILE_NAMES[exportMode]}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
     } finally {
@@ -450,6 +498,8 @@ export default function BuffetMenuPage() {
       if (!res.ok) throw new Error(await readResponseError(res, "Save failed."));
       const j = (await res.json()) as { id: string };
       setSavedId(j.id);
+      setCleanSnapshot(snapshotOf(store, savedName, venueLogoKey, displayBackgroundKey));
+      setSavedNotice(`Saved ${new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`);
       await refreshSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed.");
@@ -459,6 +509,7 @@ export default function BuffetMenuPage() {
   };
 
   const loadSaved = async (id: string) => {
+    if (dirty && !window.confirm("You have unsaved changes to this menu. Open another one anyway?")) return;
     setError("");
     setBusy(true);
     try {
@@ -469,7 +520,10 @@ export default function BuffetMenuPage() {
       setSavedId(id);
       setVenueLogoKey(doc.venueLogoKey || "");
       setDisplayBackgroundKey(doc.displayBackgroundKey || "");
-      setStore(fromMenuState(doc.menu));
+      const loaded = fromMenuState(doc.menu);
+      setStore(loaded);
+      setCleanSnapshot(snapshotOf(loaded, doc.name, doc.venueLogoKey || "", doc.displayBackgroundKey || ""));
+      setSavedNotice("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Load failed.");
     } finally {
@@ -483,10 +537,11 @@ export default function BuffetMenuPage() {
     try {
       const res = await fetch(`/api/buffet-menu/saved/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await readResponseError(res, "Delete failed."));
+      // Deleting the stored copy leaves what's on screen alone; it simply becomes an unsaved menu again.
       if (savedId === id) {
         setSavedId(null);
-        setStore(createEmptyMenuStore());
-        setSavedName("Untitled menu");
+        setCleanSnapshot("");
+        setSavedNotice("");
       }
       await refreshSaved();
     } catch (e) {
@@ -495,15 +550,30 @@ export default function BuffetMenuPage() {
   };
 
   const newMenu = () => {
-    if (store.items && Object.keys(store.items).length > 0 && !window.confirm("Clear the current menu?")) return;
+    if (dirty && !window.confirm("You have unsaved changes to this menu. Start a new one anyway?")) return;
     setSavedId(null);
     setStore(createEmptyMenuStore());
     setSavedName("Untitled menu");
+    setVenueLogoKey("");
     setDisplayBackgroundKey("");
+    setCleanSnapshot(snapshotOf(createEmptyMenuStore(), "Untitled menu", "", ""));
+    setSavedNotice("");
   };
 
+  const dirty = snapshotOf(store, savedName, venueLogoKey, displayBackgroundKey) !== cleanSnapshot;
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
   const uncatIds = store.orderMap[BUFFET_UNCAT_CONTAINER] ?? [];
-  const itemTotal = Object.keys(store.items).length;
+  // Only named dishes print, so only they count towards having something to download.
+  const itemTotal = Object.values(store.items).filter((item) => item.title.trim()).length;
   const statementPrinted = Boolean(settings?.showAllergenStatement && settings.allergenStatement.trim());
   const defaultBackground = backgrounds.find((b) => b.key === defaultBackgroundKey);
 
@@ -533,7 +603,7 @@ export default function BuffetMenuPage() {
               type="button"
               onClick={saveToCloud}
               disabled={busy || !r2SaveEnabled}
-              title={!r2SaveEnabled ? "R2 is not configured" : undefined}
+              title={!r2SaveEnabled ? "Saving isn't available" : undefined}
             >
               <Save size={15} aria-hidden /> Save
             </button>
@@ -547,10 +617,19 @@ export default function BuffetMenuPage() {
         }
       />
 
+      {dirty || savedNotice ? (
+        <p className="text-muted header-note">{dirty ? "Unsaved changes." : `${savedNotice}.`}</p>
+      ) : null}
+
       {savedOpen ? (
         <Modal title="Saved menus" onClose={() => setSavedOpen(false)}>
+          {savedStorage === "local" ? (
+            <Callout tone="warning">
+              R2 isn&apos;t configured — menus are stored on this server in <code>data/buffet-menus/</code>.
+            </Callout>
+          ) : null}
           {!r2SaveEnabled ? (
-            <Callout tone="warning">R2 isn&apos;t configured, so menus can&apos;t be saved or loaded.</Callout>
+            <Callout tone="warning">Saved menus couldn&apos;t be reached, so menus can&apos;t be saved or loaded.</Callout>
           ) : savedList.length === 0 ? (
             <p className="text-muted" style={{ margin: 0 }}>
               No saved menus yet.

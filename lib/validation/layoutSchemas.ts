@@ -15,10 +15,16 @@ export const tablePlanSchema = z.object({
   minFontSizePt: z.number().min(4).max(72)
 });
 
+/** By-person list: `tablesPerSheet` means rows per page there, so it needs a much higher ceiling. */
+export const tablePlanByPersonSchema = tablePlanSchema.extend({
+  tablesPerSheet: z.number().int().min(1).max(500)
+});
+
 export const placeCardSchema = z.object({
   stockName: z.string().max(limits.MAX_STOCK_NAME_CHARS),
-  cardWidthMm: z.number().min(0.1).max(1000),
-  cardHeightMm: z.number().min(0.1).max(1000),
+  // Reference-only fields: never block an export over them.
+  cardWidthMm: z.number().min(0).max(1000),
+  cardHeightMm: z.number().min(0).max(1000),
   foldOffsetMm: z.number().min(-500).max(500),
   textOffsetXmm: z.number().min(-500).max(500),
   textOffsetYmm: z.number().min(-500).max(500),

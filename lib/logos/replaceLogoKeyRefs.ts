@@ -21,9 +21,7 @@ export async function replaceVenueLogoKeyAfterRename(oldKey: string, newKey: str
   }
   await replaceVenueLogoKeyInAllProjects(oldKey, newKey);
   await replaceVenueLogoKeyInAllFloorplans(oldKey, newKey);
-  if (isR2Configured()) {
-    await replaceVenueLogoKeyInAllBuffetMenus(oldKey, newKey);
-  }
+  await replaceVenueLogoKeyInAllBuffetMenus(oldKey, newKey);
 }
 
 export async function replaceClientLogoKeyAfterRename(oldKey: string, newKey: string): Promise<void> {

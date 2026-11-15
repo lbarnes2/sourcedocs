@@ -442,12 +442,25 @@ export async function renderBuffetAllergenMatrixPdf(
   const headerSin = Math.sin(headerRad);
 
   const bodyAvail = tableTop - tableBottom - headerH;
-  const rowsPerPage = Math.max(1, Math.floor(bodyAvail / rowH));
-  const pageChunks: (typeof items)[] =
-    items.length === 0 ? [[]] : [];
-  for (let i = 0; i < items.length; i += rowsPerPage) {
-    pageChunks.push(items.slice(i, i + rowsPerPage));
+  // Each row is only as tall as its own dish name needs (with room for a tick), so one long name
+  // no longer stretches every row and multiplies the page count.
+  const minRowH = Math.max(22, rowHFor(fontSize, 1));
+  const rowHeightFor = (it: (typeof items)[number]) =>
+    Math.min(rowH, Math.max(minRowH, rowHFor(fontSize, maxLinesForItems([it], fontSize))));
+  const pageChunks: (typeof items)[] = items.length === 0 ? [[]] : [];
+  let chunk: typeof items = [];
+  let chunkH = 0;
+  for (const it of items) {
+    const h = rowHeightFor(it);
+    if (chunk.length && chunkH + h > bodyAvail + 0.01) {
+      pageChunks.push(chunk);
+      chunk = [];
+      chunkH = 0;
+    }
+    chunk.push(it);
+    chunkH += h;
   }
+  if (chunk.length) pageChunks.push(chunk);
 
   for (let pageIndex = 0; pageIndex < pageChunks.length; pageIndex++) {
     const pageItems = pageChunks[pageIndex]!;
@@ -482,13 +495,13 @@ export async function renderBuffetAllergenMatrixPdf(
     });
 
     const dataTop = tableTop - headerH;
-    const bottomY = dataTop - n * rowH;
+    /** Top edge of each row, plus the bottom edge of the last one. */
+    const rowEdges: number[] = [dataTop];
+    for (const it of pageItems) rowEdges.push(rowEdges[rowEdges.length - 1]! - rowHeightFor(it));
+    const bottomY = rowEdges[n]!;
     const lineT = 0.5;
 
-    const horizYs: number[] = [tableTop, dataTop];
-    for (let k = 1; k <= n; k++) {
-      horizYs.push(dataTop - k * rowH);
-    }
+    const horizYs: number[] = [tableTop, ...rowEdges];
     for (const yH of horizYs) {
       page.drawLine({
         start: { x: tableLeft, y: yH },
@@ -551,8 +564,8 @@ export async function renderBuffetAllergenMatrixPdf(
     for (let r = 0; r < n; r++) {
       const it = pageItems[r]!;
       const name = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
-      const rowTopY = dataTop - r * rowH;
-      const rowBotY = rowTopY - rowH;
+      const rowTopY = rowEdges[r]!;
+      const rowBotY = rowEdges[r + 1]!;
       const nameLines = wrapWords(name, body, fontSize, nameColW - namePadX * 2);
       const showLines = nameLines.slice(0, maxNameLines);
       if (nameLines.length > maxNameLines) {
@@ -569,7 +582,7 @@ export async function renderBuffetAllergenMatrixPdf(
         ny -= lineStep;
       }
       const rowMidY = (rowTopY + rowBotY) / 2;
-      const cell = Math.min(rowH, colW);
+      const cell = Math.min(rowTopY - rowBotY, colW);
       const iconPt = Math.max(9, Math.min(20, cell * 0.72));
       for (let c = 0; c < ALLERGENS.length; c++) {
         const id = ALLERGENS[c]!.id as AllergenId;
@@ -729,16 +742,21 @@ export async function renderBuffetLabelSheetsPdf(
   return doc.save();
 }
 
+export type BuffetPdfKind = "display" | "matrix" | "labelsA6" | "labelsA7";
+
+/** Renders the requested documents only (all four when `only` is omitted). */
 export async function renderAllBuffetPdfs(
   menu: BuffetMenuState,
   logo: { bytes: Uint8Array; contentType?: string } | null,
-  options: { allergenStatement?: string; displayBackground: Uint8Array }
-): Promise<{ display: Uint8Array; matrix: Uint8Array; labelsA6: Uint8Array; labelsA7: Uint8Array }> {
-  const [display, matrix, labelsA6, labelsA7] = await Promise.all([
-    renderBuffetDisplayMenuPdf(menu, options.displayBackground),
-    renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, options.allergenStatement ?? ""),
-    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
-    renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")
-  ]);
-  return { display, matrix, labelsA6, labelsA7 };
+  options: { allergenStatement?: string; displayBackground: Uint8Array; only?: BuffetPdfKind[] }
+): Promise<Partial<Record<BuffetPdfKind, Uint8Array>>> {
+  const wanted = options.only ?? (["display", "matrix", "labelsA6", "labelsA7"] as BuffetPdfKind[]);
+  const render: Record<BuffetPdfKind, () => Promise<Uint8Array>> = {
+    display: () => renderBuffetDisplayMenuPdf(menu, options.displayBackground),
+    matrix: () => renderBuffetAllergenMatrixPdf(menu, logo?.bytes ?? null, options.allergenStatement ?? ""),
+    labelsA6: () => renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a6"),
+    labelsA7: () => renderBuffetLabelSheetsPdf(menu, logo?.bytes ?? null, "a7")
+  };
+  const entries = await Promise.all(wanted.map(async (kind) => [kind, await render[kind]()] as const));
+  return Object.fromEntries(entries);
 }

@@ -4,17 +4,18 @@ import { z } from "zod";
 import { parseCsv, normalizeAndValidate } from "@/lib/csv/normalize";
 import { augmentMenuLongNamesForDuplicateGroups, validateDishMenuDuplicateGroups } from "@/lib/docs/menuCards";
 import { applyDishShortOverridesToGuests } from "@/lib/dish/applyOverrides";
-import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConflicts";
+import { resolveMenuLongNames } from "@/lib/dish/overrideConflicts";
 import { buildEventModel } from "@/lib/event/model";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { logoDataUrlFromKey } from "@/lib/logos/logoDataUrl";
 import { getAppSettings } from "@/lib/appSettings/store";
-import { renderDocumentPdf } from "@/lib/pdf/render";
+import { findUndrawableText, renderDocumentPdf } from "@/lib/pdf/render";
 import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord } from "@/types";
 import {
   floorplanSchema,
   menuBookletSchema,
   placeCardSchema,
+  tablePlanByPersonSchema,
   tablePlanSchema,
   themeSchema
 } from "@/lib/validation/layoutSchemas";
@@ -36,19 +37,6 @@ function toTitleCaseName(name: string): string {
         .join("");
     })
     .join("");
-}
-
-function buildMenuLongNameMap(
-  dishNameOverrides: Record<string, { shortName: string; longName: string }>
-): Record<string, string> {
-  const byShort: Record<string, string> = {};
-  Object.values(dishNameOverrides).forEach((entry) => {
-    const shortName = entry.shortName.trim();
-    const longName = entry.longName.trim();
-    if (!shortName || !longName) return;
-    byShort[shortName] = longName;
-  });
-  return byShort;
 }
 
 const previewSchema = z.object({
@@ -87,7 +75,7 @@ const generateSchema = z.object({
     bundleMode: z.enum(["single", "zip"]),
     theme: themeSchema,
     tablePlan: tablePlanSchema,
-    tablePlanByPerson: tablePlanSchema.optional(),
+    tablePlanByPerson: tablePlanByPersonSchema.optional(),
     placeCard: placeCardSchema,
     menuBooklet: menuBookletSchema,
     floorplan: floorplanSchema,
@@ -130,7 +118,9 @@ function contentDisposition(filename: string): string {
 /** Layout notices travel in a header so the PDF/ZIP body stays a plain download. */
 function warningHeaders(warnings: string[]): Record<string, string> {
   if (!warnings.length) return {};
-  return { "X-Generation-Warnings": encodeURIComponent(JSON.stringify(warnings.slice(0, 50))) };
+  // Several documents can report the same problem; say it once.
+  const unique = Array.from(new Set(warnings));
+  return { "X-Generation-Warnings": encodeURIComponent(JSON.stringify(unique.slice(0, 50))) };
 }
 
 function documentFilename(doc: DocumentType): string {
@@ -157,10 +147,11 @@ export async function POST(request: Request) {
 
     if (mode === "preview") {
       const parsed = previewSchema.parse(payload);
-      const { rows, headers } = parseCsv(parsed.csvText);
+      const { rows, headers, raggedRows } = parseCsv(parsed.csvText);
       const { guests, validation } = normalizeAndValidate(
         rows,
-        (parsed.mapping ?? {}) as ColumnMapping
+        (parsed.mapping ?? {}) as ColumnMapping,
+        raggedRows
       );
       return NextResponse.json({
         headers,
@@ -182,9 +173,9 @@ export async function POST(request: Request) {
     if (duplicateGroupError) {
       return NextResponse.json({ error: duplicateGroupError }, { status: 400 });
     }
-    const shortNameConflict = validateDishOverrideShortNameUniqueness(dishNameOverrides);
-    if (shortNameConflict) {
-      return NextResponse.json({ error: shortNameConflict }, { status: 400 });
+    const longNames = resolveMenuLongNames(dishNameOverrides);
+    if (longNames.conflict) {
+      return NextResponse.json({ error: longNames.conflict }, { status: 400 });
     }
     const guestsAfterDishOverrides = applyDishShortOverridesToGuests(incomingGuests, dishNameOverrides);
     const guests = parsed.request.normalizeGuestNamesToTitleCase
@@ -195,15 +186,27 @@ export async function POST(request: Request) {
       : guestsAfterDishOverrides;
     const model = buildEventModel(guests);
     const menuLongNames = augmentMenuLongNamesForDuplicateGroups(
-      buildMenuLongNameMap(dishNameOverrides),
+      longNames.byShort,
       dishMenuDuplicateGroups,
       dishNameOverrides
     );
     const docs = parsed.request.documents;
     const theme = { ...parsed.request.theme };
-    if (!theme.clientLogoDataUrl) theme.clientLogoDataUrl = await logoDataUrlFromKey(parsed.request.clientLogoKey);
-    if (!theme.venueLogoDataUrl) theme.venueLogoDataUrl = await logoDataUrlFromKey(parsed.request.venueLogoKey);
     const warnings: string[] = [];
+    // A logo that was chosen but can't be loaded (deleted or renamed in the library) must not vanish silently.
+    for (const [field, key, label] of [
+      ["clientLogoDataUrl", parsed.request.clientLogoKey, "client"],
+      ["venueLogoDataUrl", parsed.request.venueLogoKey, "venue"]
+    ] as const) {
+      if (theme[field]) continue;
+      theme[field] = await logoDataUrlFromKey(key);
+      if (key?.trim() && !theme[field]) {
+        warnings.push(
+          `The ${label} logo could not be loaded from the logo library, so these documents were made without it. Re-select it under Logos.`
+        );
+      }
+    }
+    warnings.push(...(await findUndrawableText(model)));
     const eventBase = sanitizeFilename(parsed.request.theme.eventName || "") || "event-docs";
 
     const { contactPhone, contactWebsites } = await getAppSettings();

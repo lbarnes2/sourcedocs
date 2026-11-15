@@ -299,7 +299,15 @@ export function Switch({
   );
 }
 
-/** Centered dialog rendered in a portal; closes on Escape or backdrop click. */
+/** Open dialogs, outermost first: only the top one reacts to Escape and Tab. */
+const modalStack: symbol[] = [];
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Centered dialog rendered in a portal; closes on Escape or backdrop click. Keyboard focus moves
+ * into the dialog, stays inside it while open, and returns to where it was on close.
+ */
 export function Modal({
   title,
   onClose,
@@ -316,19 +324,58 @@ export function Modal({
   const titleId = useId();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    const id = Symbol("modal");
+    modalStack.push(id);
+    const isTop = () => modalStack[modalStack.length - 1] === id;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    // Respect an autoFocus field inside the dialog; otherwise focus the dialog itself.
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+
     const onKey = (e: KeyboardEvent) => {
+      if (!isTop()) return;
       if (e.key === "Escape") {
         e.preventDefault();
+        // Stop here so a dialog underneath (e.g. the one that opened a picker) stays open.
+        e.stopImmediatePropagation();
         onCloseRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+        (el) => el.offsetParent !== null
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (active === first || active === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
       }
     };
-    window.addEventListener("keydown", onKey);
+    // Capture phase, so the top dialog handles the key before page-level shortcuts do.
+    window.addEventListener("keydown", onKey, true);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       document.body.style.overflow = prevOverflow;
+      const index = modalStack.indexOf(id);
+      if (index >= 0) modalStack.splice(index, 1);
+      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
     };
   }, []);
   if (typeof document === "undefined") return null;
@@ -340,7 +387,14 @@ export function Modal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className={`modal modal--${size ?? "md"}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`modal modal--${size ?? "md"}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="modal-head">
           <h3 id={titleId} className="modal-title">
             {title}

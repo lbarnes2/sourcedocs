@@ -15,19 +15,36 @@ function composeName(row: RawCsvRow, mapping: ColumnMapping): string {
   return `${first} ${last}`.trim();
 }
 
-export function parseCsv(csvText: string): { headers: string[]; rows: RawCsvRow[] } {
+/** Papa puts cells beyond the header row under `__parsed_extra`; they are not guest data. */
+function dropExtraCells(rows: RawCsvRow[]): RawCsvRow[] {
+  rows.forEach((row) => {
+    delete (row as Record<string, unknown>).__parsed_extra;
+  });
+  return rows;
+}
+
+export function parseCsv(csvText: string): { headers: string[]; rows: RawCsvRow[]; raggedRows: number[] } {
   const parsed = Papa.parse<RawCsvRow>(csvText, {
     header: true,
     skipEmptyLines: true,
     transformHeader: (header) => header.trim()
   });
 
-  if (parsed.errors.length) {
-    throw new Error(parsed.errors.map((error) => error.message).join("; "));
+  // Rows with too many or too few cells are common in hand-edited sheets and still parse usefully.
+  const fatal = parsed.errors.filter((error) => error.type !== "FieldMismatch");
+  if (fatal.length) {
+    throw new Error(fatal.map((error) => error.message).join("; "));
   }
 
   const headers = parsed.meta.fields ?? [];
-  return { headers, rows: parsed.data };
+  const raggedRows = Array.from(
+    new Set(
+      parsed.errors
+        .filter((error) => error.type === "FieldMismatch" && typeof error.row === "number")
+        .map((error) => sheetRow(error.row as number))
+    )
+  );
+  return { headers, rows: dropExtraCells(parsed.data), raggedRows };
 }
 
 /** Spreadsheet row number for a data row (row 1 is the header line). */
@@ -142,8 +159,18 @@ export function normalizeRows(rows: RawCsvRow[], mapping: ColumnMapping): GuestR
   return normalizeRowsWithNotices(rows, mapping).guests;
 }
 
-export function normalizeAndValidate(rows: RawCsvRow[], mapping: ColumnMapping) {
+export function normalizeAndValidate(rows: RawCsvRow[], mapping: ColumnMapping, raggedRows: number[] = []) {
   const { guests, skipped } = normalizeRowsWithNotices(rows, mapping);
+  if (raggedRows.length) {
+    const shown = raggedRows.slice(0, 10).join(", ");
+    skipped.unshift({
+      code: "ragged_row",
+      severity: "warning",
+      message: `${raggedRows.length === 1 ? "Row" : "Rows"} ${shown}${raggedRows.length > 10 ? "…" : ""} ${
+        raggedRows.length === 1 ? "has" : "have"
+      } more or fewer cells than the header row — check the columns line up for ${raggedRows.length === 1 ? "that guest" : "those guests"}.`
+    });
+  }
   const requiredCourses = (["starter", "main", "dessert"] as const).filter(
     (course) => Boolean(mapping[course])
   );

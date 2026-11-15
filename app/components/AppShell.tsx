@@ -3,11 +3,26 @@
 import Link from "next/link";
 import { Settings } from "lucide-react";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { NAV_TOOLS } from "./navTools";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+
+  // A file dropped just outside an upload box would otherwise make the browser open it,
+  // replacing the page and losing unsaved work. Upload boxes still receive their own drops.
+  useEffect(() => {
+    const blockStrayFileDrop = (event: DragEvent) => {
+      if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+    };
+    window.addEventListener("dragover", blockStrayFileDrop);
+    window.addEventListener("drop", blockStrayFileDrop);
+    return () => {
+      window.removeEventListener("dragover", blockStrayFileDrop);
+      window.removeEventListener("drop", blockStrayFileDrop);
+    };
+  }, []);
+
   return (
     <div className="shell">
       <aside className="sidebar">

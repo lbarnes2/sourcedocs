@@ -31,7 +31,8 @@ export interface ValidationIssue {
     | "duplicate_name"
     | "missing_choice"
     | "missing_table"
-    | "skipped_row";
+    | "skipped_row"
+    | "ragged_row";
   severity: "error" | "warning";
   message: string;
   rowIndex?: number;
@@ -153,6 +154,8 @@ export interface GenerationRequest {
 export interface EventModel {
   guests: GuestRecord[];
   byTable: Record<string, GuestRecord[]>;
+  /** Table keys in print order; iterate this rather than `byTable` (object key order is not print order). */
+  tableOrder: string[];
   sortedByName: GuestRecord[];
 }
 
@@ -169,7 +172,7 @@ export interface EventProjectFile {
   headers: string[];
   mapping: ColumnMapping;
   guests: GuestRecord[];
-  issues: Array<{ severity: string; message: string }>;
+  issues: Array<{ severity: string; message: string; code?: string }>;
   theme: ThemeSettings;
   tablePlan: TablePlanSettings;
   tablePlanByPerson: TablePlanSettings;

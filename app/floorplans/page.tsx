@@ -713,8 +713,16 @@ export default function FloorplansPage() {
     setError("");
     try {
       const blob = await renderPdfBlob();
-      if (outputFormat === "png") await downloadPdfBlobAsPngs(blob, "floorplan");
-      else downloadBlob(blob, "floorplan.pdf");
+      // Name the file after the plan so downloads for different events are told apart.
+      const doc = draftRef.current;
+      const slug = (doc.metadata.title || doc.name || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+      const base = slug && slug !== "untitled-floorplan" ? `${slug}-floorplan` : "floorplan";
+      if (outputFormat === "png") await downloadPdfBlobAsPngs(blob, base);
+      else downloadBlob(blob, `${base}.pdf`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Print failed.");
     } finally {
