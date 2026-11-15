@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { Download, FileSpreadsheet, FolderOpen, Save, Trash2, X } from "lucide-react";
 import { LogoPicker } from "@/app/components/LogoPicker";
@@ -94,15 +94,24 @@ function parseCsvClient(csvText: string): { headers: string[]; rows: RawCsvRow[]
     skipEmptyLines: true,
     transformHeader: (header) => header.trim()
   });
-  if (parsed.errors.length) {
+  // Rows with too many / too few cells still import; the check step reports them as warnings.
+  const fatal = parsed.errors.filter((error) => error.type !== "FieldMismatch");
+  if (fatal.length) {
     // Papa's row index excludes the header line; +2 gives the spreadsheet row number.
-    const details = parsed.errors
+    const details = fatal
       .slice(0, 3)
       .map((error) => (typeof error.row === "number" ? `row ${error.row + 2}: ${error.message}` : error.message));
-    const more = parsed.errors.length > 3 ? ` (and ${parsed.errors.length - 3} more)` : "";
+    const more = fatal.length > 3 ? ` (and ${fatal.length - 3} more)` : "";
     throw new Error(`Couldn't read that file — ${details.join("; ")}${more}.`);
   }
-  return { headers: parsed.meta.fields ?? [], rows: parsed.data };
+  return { headers: (parsed.meta.fields ?? []).filter((field) => field !== "__parsed_extra"), rows: parsed.data };
+}
+
+/** Whole-number input that tolerates an empty box while typing and stays inside the allowed range. */
+function clampInt(raw: string, min: number, max: number): number {
+  const value = Math.round(Number(raw));
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -250,6 +259,7 @@ export default function HomePage() {
   const [selectedClientLogoKey, setSelectedClientLogoKey] = useState<string | null>(null);
   const [selectedVenueLogoKey, setSelectedVenueLogoKey] = useState<string | null>(null);
   const [venueLibraryBusy, setVenueLibraryBusy] = useState(false);
+  const [clientLibraryBusy, setClientLibraryBusy] = useState(false);
 
   const [projectList, setProjectList] = useState<ProjectListItem[]>([]);
   const [projectStorage, setProjectStorage] = useState<"r2" | "local" | "">("");
@@ -260,6 +270,9 @@ export default function HomePage() {
   const [profileSaveOpen, setProfileSaveOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("branding");
   const [guestFileName, setGuestFileName] = useState("");
+  /** Bumped per upload so per-file UI (the column mapping disclosure) starts fresh. */
+  const [guestFileVersion, setGuestFileVersion] = useState(0);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   /** True after user has used Preview and Validate at least once this session (shows mapping + report UI). */
   const [hasAttemptedPreviewValidate, setHasAttemptedPreviewValidate] = useState(false);
@@ -276,8 +289,23 @@ export default function HomePage() {
   /** Guests as they will print: blank courses filled from the set menu. */
   const effectiveGuests = useMemo(() => applySetMenu(guests, setMenu), [guests, setMenu]);
 
+  /** Renames a dish in any menu merge group (members are the names as they print, i.e. short names). */
+  function renameInMergeGroups(from: string, to: string) {
+    if (!from || from === to) return;
+    setDishMenuDuplicateGroups((previous) =>
+      previous.map((group) => {
+        if (!group.match.some((member) => member.trim() === from)) return group;
+        const match = Array.from(new Set(group.match.map((member) => (member.trim() === from ? to : member))));
+        return { ...group, match, canonical: group.canonical.trim() === from ? to : group.canonical };
+      })
+    );
+  }
+
   // Keep the Dishes tab in step with the guest list, the set menu and last-minute edits.
-  // Existing short/long names are kept for any dish that is still present.
+  // Existing short/long names are kept for any dish that is still present, and follow a dish
+  // that is being retyped (one name disappears as another appears) instead of resetting.
+  const dishOverridesRef = useRef(dishNameOverrides);
+  dishOverridesRef.current = dishNameOverrides;
   useEffect(() => {
     const dishes = Array.from(
       new Set(
@@ -286,14 +314,29 @@ export default function HomePage() {
         )
       )
     );
-    setDishNameOverrides((previous) => {
-      const next: Record<string, DishNameOverride> = {};
-      dishes.forEach((dish) => {
-        next[dish] = previous[dish] ?? { shortName: dish, longName: dish };
-      });
-      if (JSON.stringify(previous) === JSON.stringify(next)) return previous;
-      return next;
+    const previous = dishOverridesRef.current;
+    const had = (dish: string) => Object.prototype.hasOwnProperty.call(previous, dish);
+    const next: Record<string, DishNameOverride> = {};
+    dishes.forEach((dish) => {
+      next[dish] = had(dish) ? previous[dish] : { shortName: dish, longName: dish };
     });
+    const removed = Object.keys(previous).filter((dish) => !dishes.includes(dish));
+    const added = dishes.filter((dish) => !had(dish));
+    if (removed.length === 1 && added.length === 1) {
+      const from = removed[0];
+      const to = added[0];
+      const old = previous[from];
+      const followsOriginal = (value: string) => !value.trim() || value.trim() === from;
+      next[to] = {
+        shortName: followsOriginal(old.shortName) ? to : old.shortName,
+        longName: followsOriginal(old.longName) ? to : old.longName
+      };
+      const stillUsed = Object.entries(next).some(
+        ([original, entry]) => original !== to && (entry.shortName.trim() || original) === (old.shortName.trim() || from)
+      );
+      if (!stillUsed) renameInMergeGroups(old.shortName.trim() || from, next[to].shortName.trim() || to);
+    }
+    if (JSON.stringify(previous) !== JSON.stringify(next)) setDishNameOverrides(next);
   }, [effectiveGuests]);
 
   const uniqueEffectiveDishes = useMemo(() => {
@@ -323,9 +366,13 @@ export default function HomePage() {
 
   useEffect(() => {
     (async () => {
-      const response = await fetch("/api/profiles");
-      const payload = await response.json();
-      if (payload.profiles) setProfiles(payload.profiles);
+      try {
+        const response = await fetch("/api/profiles");
+        const payload = await response.json();
+        if (payload.profiles) setProfiles(payload.profiles);
+      } catch {
+        // Profiles are optional; the page works without them.
+      }
     })();
   }, []);
 
@@ -376,7 +423,10 @@ export default function HomePage() {
     setSelectedClientLogoKey(file.selectedClientLogoKey ?? null);
     setCurrentProjectId(file.id);
     setProjectLibraryName(file.name);
+    setSavedAt(file.savedAt ?? null);
+    markCleanSoon();
     setGuestFileName("");
+    setGuestFileVersion((version) => version + 1);
     setError("");
     setExportWarnings([]);
     // The saved guest list already includes last-minute edits, so export straight away —
@@ -443,6 +493,8 @@ export default function HomePage() {
       const data = await response.json();
       setCurrentProjectId(data.id);
       setProjectLibraryName(name);
+      setSavedAt(typeof data.savedAt === "string" ? data.savedAt : new Date().toISOString());
+      markCleanSoon();
       await refreshProjectList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
@@ -452,6 +504,7 @@ export default function HomePage() {
   }
 
   async function loadSelectedProject(id: string) {
+    if (dirty && !window.confirm("You have unsaved changes. Open another project anyway?")) return;
     setProjectBusy(true);
     setError("");
     try {
@@ -476,6 +529,7 @@ export default function HomePage() {
       if (!response.ok) throw new Error(await readResponseError(response, "Delete failed."));
       if (currentProjectId === id) {
         setCurrentProjectId(null);
+        setSavedAt(null);
       }
       await refreshProjectList();
     } catch (err) {
@@ -503,7 +557,7 @@ export default function HomePage() {
   }
 
   async function refreshClientLogoLibrary() {
-    setVenueLibraryBusy(true);
+    setClientLibraryBusy(true);
     try {
       const response = await fetch("/api/logos/client");
       const payload = await response.json();
@@ -515,7 +569,7 @@ export default function HomePage() {
     } catch {
       setClientLogoLibrary({ loaded: true, configured: false, items: [] });
     } finally {
-      setVenueLibraryBusy(false);
+      setClientLibraryBusy(false);
     }
   }
 
@@ -573,6 +627,11 @@ export default function HomePage() {
       const parsed = parseCsvClient(text);
       setHasAttemptedPreviewValidate(false);
       setExportUnlocked(false);
+      // The previous file's guests, edits and warnings don't belong to this one.
+      setGuests([]);
+      setIssues([]);
+      setExportWarnings([]);
+      setGuestFileVersion((version) => version + 1);
       setCsvText(text);
       setGuestFileName(file.name);
       setHeaders(parsed.headers);
@@ -651,13 +710,18 @@ export default function HomePage() {
       menuBooklet,
       floorplan
     };
-    const response = await fetch("/api/profiles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(profile)
-    });
-    if (!response.ok) {
-      setError(await readResponseError(response, "Could not save profile."));
+    try {
+      const response = await fetch("/api/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile)
+      });
+      if (!response.ok) {
+        setError(await readResponseError(response, "Could not save profile."));
+        return;
+      }
+    } catch {
+      setError("Could not save profile — check your connection and try again.");
       return;
     }
     setError("");
@@ -678,9 +742,10 @@ export default function HomePage() {
       accentColor: found.theme.accentColor,
       textColor: found.theme.textColor
     }));
-    setTablePlan(found.tablePlan);
-    setTablePlanByPerson(found.tablePlanByPerson ?? found.tablePlan);
-    setPlaceCard(found.placeCard);
+    // Older profiles can lack newer settings, so fill the gaps from the defaults.
+    setTablePlan({ ...defaultTablePlanSettings, ...found.tablePlan });
+    setTablePlanByPerson({ ...defaultTablePlanSettings, ...(found.tablePlanByPerson ?? found.tablePlan) });
+    setPlaceCard({ ...defaultPlaceCardSettings, ...found.placeCard });
     setMenuBooklet({ ...defaultMenuBookletSettings, ...found.menuBooklet });
     setFloorplan({ ...defaultFloorplanSettings, ...found.floorplan });
     setProfileName(found.name);
@@ -732,7 +797,10 @@ export default function HomePage() {
       { requiredCourses }
     );
     // Rows skipped on import aren't in the guest list any more, so carry their warnings over.
-    setIssues((previous) => [...previous.filter((issue) => issue.code === "skipped_row"), ...recheck.issues]);
+    setIssues((previous) => [
+      ...previous.filter((issue) => issue.code === "skipped_row" || issue.code === "ragged_row"),
+      ...recheck.issues
+    ]);
     setHasAttemptedPreviewValidate(true);
     const blocking = recheck.issues.filter((issue) => issue.severity === "error");
     if (blocking.length) {
@@ -787,7 +855,7 @@ export default function HomePage() {
       });
       if (!response.ok) throw new Error(await readResponseError(response, "Export failed."));
       const warnings = readGenerationWarnings(response);
-      if (warnings.length) setExportWarnings((previous) => [...previous, ...warnings]);
+      if (warnings.length) setExportWarnings((previous) => Array.from(new Set([...previous, ...warnings])));
       return response.blob();
     };
 
@@ -802,7 +870,7 @@ export default function HomePage() {
         window.clearInterval(progressTimer);
         setExportProgressPct(100);
         if (pdfs.length === 1) {
-          await downloadPdfBlobAsPngs(pdfs[0].blob, pdfs[0].baseName);
+          await downloadPdfBlobAsPngs(pdfs[0].blob, `${exportBaseName(theme.eventName)}-${pdfs[0].baseName}`);
         } else {
           await downloadPdfBlobsAsPngZip(pdfs, `${exportBaseName(theme.eventName)}-png.zip`);
         }
@@ -842,6 +910,74 @@ export default function HomePage() {
       return next;
     });
   }
+
+  /* ---------- unsaved-changes tracking ---------- */
+
+  /** Everything a save would store, apart from the two big values compared by reference below. */
+  const settingsSnapshot = useMemo(
+    () =>
+      JSON.stringify({
+        mapping,
+        theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
+        tablePlan,
+        tablePlanByPerson,
+        placeCard,
+        menuBooklet,
+        dishNameOverrides,
+        dishMenuDuplicateGroups,
+        normalizeGuestNamesToTitleCase,
+        setMenu,
+        selectedDocuments,
+        bundleMode,
+        selectedVenueLogoKey,
+        selectedClientLogoKey
+      }),
+    [
+      mapping,
+      theme,
+      tablePlan,
+      tablePlanByPerson,
+      placeCard,
+      menuBooklet,
+      dishNameOverrides,
+      dishMenuDuplicateGroups,
+      normalizeGuestNamesToTitleCase,
+      setMenu,
+      selectedDocuments,
+      bundleMode,
+      selectedVenueLogoKey,
+      selectedClientLogoKey
+    ]
+  );
+  const cleanRef = useRef<{ settings: string; guests: GuestRecord[]; csvText: string } | null>(null);
+  /** After a load or save, follow-up effects (dish list sync) settle for a moment before edits count as changes. */
+  const cleanUntilRef = useRef(Date.now() + 800);
+  const [, setCleanTick] = useState(0);
+  const [cleanEpoch, setCleanEpoch] = useState(0);
+  function markCleanSoon() {
+    cleanUntilRef.current = Date.now() + 800;
+    cleanRef.current = null;
+    setCleanEpoch((epoch) => epoch + 1);
+  }
+  useEffect(() => {
+    if (cleanRef.current && Date.now() >= cleanUntilRef.current) return;
+    cleanRef.current = { settings: settingsSnapshot, guests, csvText };
+    setCleanTick((tick) => tick + 1);
+  }, [settingsSnapshot, guests, csvText, cleanEpoch]);
+  const clean = cleanRef.current;
+  const dirty = Boolean(
+    clean && (clean.settings !== settingsSnapshot || clean.guests !== guests || clean.csvText !== csvText)
+  );
+
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   const columns = canonicalColumns();
   const mappedCount = columns.filter((column) => Boolean(mapping[column])).length;
@@ -895,8 +1031,14 @@ export default function HomePage() {
           </>
         }
       />
+      {!currentProjectId && dirty ? <p className="text-muted header-note">Unsaved changes — not saved as a project yet.</p> : null}
       {currentProjectId ? (
         <p className="text-muted header-note">
+          {dirty
+            ? "Unsaved changes. "
+            : savedAt
+              ? `Saved ${new Date(savedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. `
+              : ""}
           Saving updates the open project.{" "}
           <button
             type="button"
@@ -904,6 +1046,7 @@ export default function HomePage() {
             disabled={projectBusy}
             onClick={() => {
               setCurrentProjectId(null);
+              setSavedAt(null);
               setError("");
             }}
           >
@@ -979,6 +1122,21 @@ export default function HomePage() {
                 placeholder="Thursday 9th April 2026"
               />
             </Field>
+            <Field
+              label={
+                <>
+                  Place card subtitle <span className="optional">(optional)</span>
+                </>
+              }
+              hint="A short line printed under each guest's name on place cards."
+              className="span-all"
+            >
+              <input
+                value={theme.eventSubtitle ?? ""}
+                maxLength={200}
+                onChange={(event) => setTheme((previous) => ({ ...previous, eventSubtitle: event.target.value }))}
+              />
+            </Field>
           </div>
 
           <Dropzone
@@ -995,6 +1153,7 @@ export default function HomePage() {
 
           {headers.length > 0 ? (
             <Disclosure
+              key={guestFileVersion}
               label={
                 <>
                   Column mapping{" "}
@@ -1057,7 +1216,7 @@ export default function HomePage() {
                     if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
                   }}
                   emptyOption={{ label: "No client logo", value: "" }}
-                  disabled={venueLibraryBusy}
+                  disabled={clientLibraryBusy}
                 />
                 <LogoPicker
                   title="Venue logo"
@@ -1273,9 +1432,16 @@ export default function HomePage() {
                 value={theme.accentColor}
                 onChange={(value) => setTheme((previous) => ({ ...previous, accentColor: value }))}
               />
+              <ColorField
+                label="Text"
+                value={theme.textColor}
+                onChange={(value) => setTheme((previous) => ({ ...previous, textColor: value }))}
+              />
             </div>
             <p className="field-hint" style={{ margin: 0 }}>
-              Primary is the menu card front background; accent is used for borders and highlights.
+              Primary is the menu card front background and the titles; accent is used for borders and table headings;
+              text is the guest name on place cards. Very pale colours switch to dark text automatically so they stay
+              readable.
             </p>
           </div>
         ) : null}
@@ -1309,11 +1475,12 @@ export default function HomePage() {
                     <input
                       type="number"
                       min={1}
+                      max={24}
                       className="input-narrow"
                       aria-label="Tables per sheet"
                       value={tablePlan.tablesPerSheet}
                       onChange={(event) =>
-                        setTablePlan((previous) => ({ ...previous, tablesPerSheet: Number(event.target.value) || 1 }))
+                        setTablePlan((previous) => ({ ...previous, tablesPerSheet: clampInt(event.target.value, 1, 24) }))
                       }
                     />
                   ) : null}
@@ -1347,13 +1514,15 @@ export default function HomePage() {
                     <input
                       type="number"
                       min={1}
+                      max={500}
                       className="input-narrow"
                       aria-label="Rows per page"
+                      title="Guests per page. The page still holds only as many as fit."
                       value={tablePlanByPerson.tablesPerSheet}
                       onChange={(event) =>
                         setTablePlanByPerson((previous) => ({
                           ...previous,
-                          tablesPerSheet: Number(event.target.value) || 1
+                          tablesPerSheet: clampInt(event.target.value, 1, 500)
                         }))
                       }
                     />
@@ -1430,15 +1599,6 @@ export default function HomePage() {
                     }
                   />
                 </Field>
-                <Field label="Fold offset (mm, unused)">
-                  <input
-                    type="number"
-                    value={placeCard.foldOffsetMm}
-                    onChange={(event) =>
-                      setPlaceCard((previous) => ({ ...previous, foldOffsetMm: Number(event.target.value) || 0 }))
-                    }
-                  />
-                </Field>
               </div>
             </Disclosure>
           </div>
@@ -1492,12 +1652,20 @@ export default function HomePage() {
                       autoComplete="off"
                       aria-label={`Short name for ${originalName}`}
                       value={override.shortName}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const before = override.shortName.trim() || originalName;
+                        const after = value.trim() || originalName;
+                        // A merge group lists dishes by short name; keep it pointing at this dish as it is renamed.
+                        const sharedWithAnother = Object.entries(dishNameOverrides).some(
+                          ([other, entry]) => other !== originalName && (entry.shortName.trim() || other) === before
+                        );
+                        if (!sharedWithAnother) renameInMergeGroups(before, after);
                         setDishNameOverrides((previous) => ({
                           ...previous,
-                          [originalName]: { ...previous[originalName], shortName: event.target.value }
-                        }))
-                      }
+                          [originalName]: { ...previous[originalName], shortName: value }
+                        }));
+                      }}
                     />
                     </label>
                     <label className="dish-table-cell">

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { degrees, PDFDocument, rgb } from "pdf-lib";
 import { pdfPageDimensions } from "@/lib/paperSizes";
-import { hexToRgb } from "@/lib/pdf/color";
+import { hexToRgb, inkOnWhite, textOnColor } from "@/lib/pdf/color";
 import { embedRasterDataUrl } from "@/lib/pdf/imageFormat";
 import fontkit from "@pdf-lib/fontkit";
 import type {
@@ -22,7 +22,7 @@ import { buildByTableDocument } from "@/lib/docs/byTable";
 import { buildMenuBookletDocument } from "@/lib/docs/menuCards";
 import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCards";
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
-import { fitTextToFont, titleFontFor } from "@/lib/pdf/fontText";
+import { fitTextToFont, fontCanDraw, titleFontFor } from "@/lib/pdf/fontText";
 import { formatTableLabel } from "@/lib/event/tableLabel";
 import type { PDFFont } from "pdf-lib";
 
@@ -215,6 +215,19 @@ function truncateToWidth(text: string, font: PDFFont, fontSize: number, maxWidth
   return text.slice(0, low) + ell;
 }
 
+/** One line that always fits: shrinks towards `minSize` first, then truncates with an ellipsis. */
+function fitLine(
+  text: string,
+  font: PDFFont,
+  size: number,
+  maxWidth: number,
+  minSize = size * 0.7
+): { text: string; size: number } {
+  let s = size;
+  while (s > minSize && font.widthOfTextAtSize(text, s) > maxWidth) s -= 0.25;
+  return { text: truncateToWidth(text, font, s, maxWidth), size: s };
+}
+
 function wrapTextToWidthClamped(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
   const wrapped = wrapTextToWidth(text, font, fontSize, maxWidth);
   return wrapped.map((line) => truncateToWidth(line, font, fontSize, maxWidth));
@@ -269,8 +282,19 @@ function buildPlaceCardLines(options: {
   const bodyColor = rgb(0.1, 0.12, 0.17);
   const flatLines: PlaceCardLine[] = [];
 
-  wrapTextToWidthClamped(card.name, bold, nameSize, maxTextW).forEach((line) => {
-    flatLines.push({ text: line, fontRef: bold, size: nameSize, color: nameColor, kind: "name", group: "name" });
+  // A single long word (e.g. a triple-barrelled surname) shrinks the name before it is ever cut short.
+  const cardName = fitTextToFont(card.name, bold);
+  const nameFloor = Math.min(nameSize, 9);
+  let fittedNameSize = nameSize;
+  const nameWords = cardName.trim().split(/\s+/).filter(Boolean);
+  while (
+    fittedNameSize > nameFloor &&
+    nameWords.some((word) => bold.widthOfTextAtSize(word, fittedNameSize) > maxTextW)
+  ) {
+    fittedNameSize -= 0.5;
+  }
+  wrapTextToWidthClamped(cardName, bold, fittedNameSize, maxTextW).forEach((line) => {
+    flatLines.push({ text: line, fontRef: bold, size: fittedNameSize, color: nameColor, kind: "name", group: "name" });
   });
 
   if (!omitSubtitle && theme.eventSubtitle?.trim()) {
@@ -341,19 +365,6 @@ async function embedLogoFromDataUrl(
   }
 }
 
-async function embedLogoIfPresent(
-  doc: PDFDocument,
-  page: import("pdf-lib").PDFPage,
-  theme: ThemeSettings,
-  options?: {
-    x?: number;
-    y?: number;
-    width?: number;
-  }
-) {
-  await embedLogoFromDataUrl(doc, page, theme.clientLogoDataUrl || theme.venueLogoDataUrl, options);
-}
-
 export async function renderTablePlanByTablePdf(
   model: EventModel,
   settings: TablePlanSettings,
@@ -361,21 +372,23 @@ export async function renderTablePlanByTablePdf(
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const [width, height] = pageDimensions(settings);
-  const titleColor = hexToRgb(theme.primaryColor, "#012f43");
+  const titleColor = inkOnWhite(theme.primaryColor, "#012f43");
   const data = buildByTableDocument(model);
+  const headerBandHeight = 96;
+  // Size the grid against the space actually left under the header band.
   const tablesPerSheet = pickAdaptiveTablesPerSheet(
     data.tables.map((table) => table.guests.length),
     settings,
     width,
-    height
+    height - headerBandHeight
   );
   const pages = chunk(data.tables, tablesPerSheet);
-  const headerBandHeight = 96;
   const grid = estimateGrid(tablesPerSheet, width, height - headerBandHeight);
   const contentTopOffset = headerBandHeight;
   const safeSideWidth = 104;
   const logoWidth = 68;
   const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
+  const onAccent = textOnColor(theme.accentColor, "#acc1cb");
 
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
     const tables = pages[pageIndex];
@@ -456,30 +469,31 @@ export async function renderTablePlanByTablePdf(
         borderWidth: 0.8
       });
 
-      const tableLabel = formatTableLabel(table.tableNumber);
-      const tableLabelSize = 12;
-      const titleWidth = bold.widthOfTextAtSize(tableLabel, tableLabelSize);
-      page.drawText(tableLabel, {
+      const tableLabel = fitLine(fitTextToFont(formatTableLabel(table.tableNumber), bold), bold, 12, grid.boxWidth - 12, 8);
+      const titleWidth = bold.widthOfTextAtSize(tableLabel.text, tableLabel.size);
+      page.drawText(tableLabel.text, {
         x: x + (grid.boxWidth - titleWidth) / 2,
         y: y + grid.boxHeight - headerHeight + 8,
         font: bold,
-        size: tableLabelSize,
-        color: rgb(1, 1, 1)
+        size: tableLabel.size,
+        color: onAccent
       });
 
       const maxNames = Math.max(1, table.guests.length);
       const available = grid.boxHeight - headerHeight - innerPad * 2;
       const lineHeight = available / maxNames;
-      const nameSize = clamp(lineHeight * 0.8, settings.minFontSizePt, 12);
+      // Never let the type be taller than its line (manual "tables per sheet" can squeeze a big table).
+      const nameSize = Math.min(clamp(lineHeight * 0.8, settings.minFontSizePt, 12), lineHeight * 0.92);
       let cursorY = y + grid.boxHeight - headerHeight - innerPad - nameSize;
 
       table.guests.forEach((guestName) => {
-        page.drawText(guestName, {
+        // One line per guest: a long name shrinks, then truncates, rather than wrapping over the next guest.
+        const fitted = fitLine(fitTextToFont(guestName, font), font, nameSize, grid.boxWidth - innerPad * 2);
+        page.drawText(fitted.text, {
           x: x + innerPad,
           y: cursorY,
           font,
-          size: nameSize,
-          maxWidth: grid.boxWidth - innerPad * 2
+          size: fitted.size
         });
         cursorY -= lineHeight;
       });
@@ -512,25 +526,29 @@ export async function renderTablePlanByPersonPdf(
   const tableBottomMargin = 20;
   const usableTableHeight =
     height - headerBandHeight - tableTopGap - tableBottomMargin;
-  const rowHeight = 20;
   const headerRowHeight = 24;
-  const rowsPerColumn = Math.max(
-    12,
-    Math.floor((usableTableHeight - headerRowHeight) / rowHeight)
-  );
-  const people = buildByPersonDocument(model).people;
   const isLandscape = settings.orientation === "landscape";
   const columns = isLandscape ? 2 : 1;
+  const rowsThatFit = Math.max(12, Math.floor((usableTableHeight - headerRowHeight) / 20));
+  // Manual mode: "rows per page" is the page total, shared across both columns in landscape.
+  const manualRows = settings.tablesPerSheetMode === "manual";
+  const rowsPerColumn = manualRows
+    ? clamp(Math.ceil(settings.tablesPerSheet / columns), 1, rowsThatFit)
+    : rowsThatFit;
+  // Fewer rows get taller rows (up to a point) so the list still fills the page comfortably.
+  const rowHeight = manualRows ? Math.min(34, (usableTableHeight - headerRowHeight) / rowsPerColumn) : 20;
+  const people = buildByPersonDocument(model).people;
   const rowsPerPage = rowsPerColumn * columns;
   const pages = chunk(people, rowsPerPage);
-  const titleColor = hexToRgb(theme.primaryColor, "#012f43");
+  const titleColor = inkOnWhite(theme.primaryColor, "#012f43");
   const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
+  const onAccent = textOnColor(theme.accentColor, "#acc1cb");
   const safeSideWidth = 104;
   const logoWidth = 68;
   const tableX = Math.round(tableMargin);
   const tableYTop = Math.round(height - headerBandHeight - tableTopGap);
   const tableWidth = Math.round(width - tableMargin * 2);
-  const tableHeight = Math.round(usableTableHeight);
+  const tableHeight = Math.round(manualRows ? headerRowHeight + rowsPerColumn * rowHeight : usableTableHeight);
   const tableRight = tableX + tableWidth;
   const tableColSplitFull = Math.round(tableX + tableWidth * 0.78);
   const gridColor = rgb(0.72, 0.76, 0.84);
@@ -621,14 +639,14 @@ export async function renderTablePlanByPersonPdf(
         y: tableYTop - 16,
         font: bold,
         size: 11,
-        color: rgb(1, 1, 1)
+        color: onAccent
       });
       page.drawText("Table", {
         x: tableColSplit + 10,
         y: tableYTop - 16,
         font: bold,
         size: 11,
-        color: rgb(1, 1, 1)
+        color: onAccent
       });
 
       colPeople.forEach((person, rowIndex) => {
@@ -653,18 +671,26 @@ export async function renderTablePlanByPersonPdf(
           });
         }
 
-        page.drawText(person.name, {
+        const textY = rowBottom + (rowH - 8) / 2;
+        const nameFit = fitLine(fitTextToFont(person.name, font), font, 10.5, tableColSplit - colX - 16, 7.5);
+        page.drawText(nameFit.text, {
           x: colX + 10,
-          y: rowBottom + 6,
+          y: textY,
           font,
-          size: 10.5,
-          maxWidth: tableColSplit - colX - 16
+          size: nameFit.size
         });
-        page.drawText(formatTableLabel(person.tableNumber), {
+        const tableFit = fitLine(
+          fitTextToFont(formatTableLabel(person.tableNumber), bold),
+          bold,
+          10.5,
+          colRight - tableColSplit - 16,
+          7
+        );
+        page.drawText(tableFit.text, {
           x: tableColSplit + 10,
-          y: rowBottom + 6,
+          y: textY,
           font: bold,
-          size: 10.5,
+          size: tableFit.size,
           color: titleColor
         });
       });
@@ -926,8 +952,14 @@ export async function renderPlaceCardsPdf(
           );
         }
 
+        if (chosenLines.some((line) => line.kind === "name" && line.text.endsWith("…")) && !card.name.trim().endsWith("…")) {
+          options.warnings?.push(
+            `Place card for ${card.name}${card.tableNumber ? ` (${formatTableLabel(card.tableNumber)})` : ""}: the name is too long for the card and has been cut short.`
+          );
+        }
+
         const totalBlockHeight = placeCardLinesHeight(chosenLines, chosenGap);
-        let cursorY = textTop - (innerH - totalBlockHeight) / 2 + calibrationY * 0.08;
+        let cursorY = textTop - (innerH - totalBlockHeight) / 2 + calibrationY;
         chosenLines.forEach((line) => {
           const w = line.fontRef.widthOfTextAtSize(line.text, line.size);
           const drawX = clamp(panelCenterX - w / 2, textLeft, Math.max(textLeft, textRight - w));
@@ -956,7 +988,8 @@ export async function renderMenuBookletPdf(
   menuLongNames: Record<string, string> = {},
   dishMenuDuplicateGroups: DishMenuDuplicateGroup[] = [],
   /** Back cover lines from the Settings page; blank lines are left off. */
-  contact: MenuCardContact = { phone: "", websites: "" }
+  contact: MenuCardContact = { phone: "", websites: "" },
+  options: { warnings?: string[] } = {}
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const pageWidth = mmToPt(297);
@@ -969,9 +1002,12 @@ export async function renderMenuBookletPdf(
   /** Pull both outer and inner frames in from the panel edge at the center fold (pt). */
   const borderInsetExtraTowardFold = 10;
   const primary = hexToRgb(theme.primaryColor, "#012f43");
+  /** Primary as text on white paper (falls back to dark ink for pale brand colours). */
+  const primaryInk = inkOnWhite(theme.primaryColor, "#012f43");
   const accent = hexToRgb(theme.accentColor, "#acc1cb");
   const menu = buildMenuBookletDocument(model, menuLongNames, dishMenuDuplicateGroups);
-  const white = rgb(1, 1, 1);
+  /** Cover text: white on a dark cover, dark ink on a pale one. */
+  const white = textOnColor(theme.primaryColor, "#012f43");
 
   type MenuHalfSide = "left" | "right";
 
@@ -1100,7 +1136,7 @@ export async function renderMenuBookletPdf(
   const contactPhone = contact.phone.trim();
   const contactWebsites = contact.websites.trim();
   if (contactPhone) {
-    drawCenteredInPanel(sheet1, contactPhone, pageHeight / 2 - 6, bold, 16, primary, leftCoverOuter.x, leftCoverOuter.width);
+    drawCenteredInPanel(sheet1, contactPhone, pageHeight / 2 - 6, bold, 16, primaryInk, leftCoverOuter.x, leftCoverOuter.width);
   }
   if (contactWebsites) {
     /* Long web address lines shrink to fit inside the frame rather than running over it. */
@@ -1251,15 +1287,21 @@ export async function renderMenuBookletPdf(
   const innerTop = panelY + panelH - innerPad;
   const innerHeight = innerTop - innerBottom;
 
-  const headingSize = settings.headingFontPt + 2;
-  const bodySize = settings.bodyFontPt;
-  const lineGap = settings.lineHeight;
-  const sectionGapAfterHeading = 10;
-  const gapAfterLines = 10;
-  const dividerPad = 22;
-  const dividerTrailing = 32;
   const hasCoreCourses = sections.length > 0;
 
+  // Everything below scales together so a long menu shrinks to fit the panel instead of running over the frame.
+  let headingSize = settings.headingFontPt + 2;
+  let bodySize = settings.bodyFontPt;
+  let lineGap = settings.lineHeight;
+  let sectionGapAfterHeading = 10;
+  let gapAfterLines = 10;
+  let dividerTrailing = 32;
+  const dividerPad = 22;
+  let preMealLines: string[] = [];
+  let postMealLines: string[] = [];
+  let totalMenuHeight = 0;
+
+  const wrapMenuLine = (line: string): string[] => wrapTextToWidthClamped(fitTextToFont(line, font), font, bodySize, innerW - 8);
   const wrapAddonText = (rawText?: string): string[] => {
     const text = (rawText ?? "").trim();
     if (!text) return [];
@@ -1267,37 +1309,57 @@ export async function renderMenuBookletPdf(
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-      .flatMap((line) => wrapTextToWidth(line, font, bodySize, innerW - 8));
+      .flatMap((line) => wrapMenuLine(line));
   };
-  const preMealLines = wrapAddonText(settings.preMealText);
-  const postMealLines = wrapAddonText(settings.postMealText);
 
-  const measureSectionBlock = (section: MenuSection, isLast: boolean): number => {
-    let h = headingSize + sectionGapAfterHeading;
-    section.lines.forEach((line) => {
-      const wrapped = wrapTextToWidth(line, font, bodySize, innerW - 8);
-      h += wrapped.length * lineGap;
+  const layoutAtScale = (scale: number): number => {
+    headingSize = (settings.headingFontPt + 2) * scale;
+    bodySize = settings.bodyFontPt * scale;
+    lineGap = settings.lineHeight * scale;
+    sectionGapAfterHeading = 10 * scale;
+    gapAfterLines = 10 * scale;
+    dividerTrailing = 32 * scale;
+    preMealLines = wrapAddonText(settings.preMealText);
+    postMealLines = wrapAddonText(settings.postMealText);
+    const addonHeight = (lines: string[]) => lines.length * lineGap + gapAfterLines;
+    let total = 0;
+    if (preMealLines.length) {
+      total += addonHeight(preMealLines);
+      if (hasCoreCourses) total += dividerTrailing;
+    }
+    sections.forEach((section, index) => {
+      total += headingSize + sectionGapAfterHeading;
+      section.lines.forEach((line) => {
+        total += wrapMenuLine(line).length * lineGap;
+      });
+      total += gapAfterLines;
+      if (index < sections.length - 1) total += dividerTrailing;
     });
-    h += gapAfterLines;
-    if (!isLast) h += dividerTrailing;
-    return h;
+    if (postMealLines.length) {
+      if (hasCoreCourses) total += dividerTrailing;
+      total += addonHeight(postMealLines);
+    }
+    return total;
   };
-  const measureAddonBlock = (lines: string[]): number => lines.length * lineGap + gapAfterLines;
 
-  let totalMenuHeight = 0;
-  if (preMealLines.length) {
-    totalMenuHeight += measureAddonBlock(preMealLines);
-    if (hasCoreCourses) totalMenuHeight += dividerTrailing;
+  const MIN_MENU_SCALE = 0.55;
+  let menuScale = 1;
+  totalMenuHeight = layoutAtScale(menuScale);
+  while (totalMenuHeight > innerHeight && menuScale > MIN_MENU_SCALE) {
+    menuScale = Math.max(MIN_MENU_SCALE, menuScale - 0.05);
+    totalMenuHeight = layoutAtScale(menuScale);
   }
-  sections.forEach((section, index) => {
-    totalMenuHeight += measureSectionBlock(section, index === sections.length - 1);
-  });
-  if (postMealLines.length) {
-    if (hasCoreCourses) totalMenuHeight += dividerTrailing;
-    totalMenuHeight += measureAddonBlock(postMealLines);
+  if (totalMenuHeight > innerHeight) {
+    options.warnings?.push(
+      "Menu card: there is too much text to fit inside the frame even at the smallest size — shorten the long dish names or the before/after lines, then check the printed card."
+    );
+  } else if (menuScale < 0.8) {
+    options.warnings?.push(
+      `Menu card: the text was reduced to ${Math.round(bodySize * 10) / 10}pt to fit — check it is still readable.`
+    );
   }
 
-  let cursorY = innerTop - (innerHeight - totalMenuHeight) / 2;
+  let cursorY = innerTop - Math.max(0, (innerHeight - totalMenuHeight) / 2) - bodySize * 0.8;
 
   if (preMealLines.length) {
     preMealLines.forEach((line) => {
@@ -1333,13 +1395,13 @@ export async function renderMenuBookletPdf(
       cursorY,
       headingFont,
       headingSize,
-      primary,
+      primaryInk,
       innerLeft,
       innerW
     );
     cursorY -= headingSize + sectionGapAfterHeading;
     section.lines.forEach((line) => {
-      const wrapped = wrapTextToWidth(line, font, bodySize, innerW - 8);
+      const wrapped = wrapMenuLine(line);
       wrapped.forEach((wrappedLine) => {
         drawCenteredInPanel(
           sheet2,
@@ -1405,17 +1467,34 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
   let page = doc.addPage([width, height]);
   let y = height - 28;
 
-  const planTitleFont = titleFontFor([theme.eventName], titleBold, bold);
-  const planTitle = fitTextToFont(`${theme.eventName} - Service Plan`, planTitleFont);
+  // The logo sits in a fixed slot at the top right, clear of the first table's notes box.
+  const logoSlot = { width: 64, height: 36, right: 22, top: 8 };
+  const headerLogo = await embedRasterDataUrl(doc, theme.clientLogoDataUrl || theme.venueLogoDataUrl);
+  const titleMaxW = width - 44 - (headerLogo ? logoSlot.width + 12 : 0);
+  const planEventName = theme.eventName.trim() || "Event";
+  const planTitleFont = titleFontFor([planEventName], titleBold, bold);
+  const planTitleRaw = fitTextToFont(`${planEventName} - Service Plan`, planTitleFont);
   let planTitleSize = 17;
-  while (planTitleSize > 10 && planTitleFont.widthOfTextAtSize(planTitle, planTitleSize) > width - 44) planTitleSize -= 0.5;
+  while (planTitleSize > 10 && planTitleFont.widthOfTextAtSize(planTitleRaw, planTitleSize) > titleMaxW) planTitleSize -= 0.5;
+  const planTitle = truncateToWidth(planTitleRaw, planTitleFont, planTitleSize, titleMaxW);
   page.drawText(planTitle, {
     x: 22,
     y,
     font: planTitleFont,
     size: planTitleSize,
-    color: hexToRgb(theme.primaryColor, "#012f43")
+    color: inkOnWhite(theme.primaryColor, "#012f43")
   });
+  if (headerLogo) {
+    const scale = Math.min(logoSlot.width / headerLogo.width, logoSlot.height / headerLogo.height);
+    const logoW = headerLogo.width * scale;
+    const logoH = headerLogo.height * scale;
+    page.drawImage(headerLogo, {
+      x: width - logoSlot.right - logoW,
+      y: height - logoSlot.top - logoSlot.height + (logoSlot.height - logoH) / 2,
+      width: logoW,
+      height: logoH
+    });
+  }
   y -= 21;
   page.drawText(`Courses: ${coursesSubtitle}`, {
     x: 24,
@@ -1432,11 +1511,13 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y = height - 28;
   };
 
+  const checkboxPitch = 62;
+  const checkboxLabels = data.coursesOnPlan.map((key) => SERVICE_COURSE_LABEL[key]);
   const drawCourseCheckboxes = (x: number, topY: number) => {
     const size = 9;
     const gap = 7;
-    (["Starter", "Main", "Dessert"] as const).forEach((label, index) => {
-      const itemX = x + index * 62;
+    checkboxLabels.forEach((label, index) => {
+      const itemX = x + index * checkboxPitch;
       page.drawRectangle({
         x: itemX,
         y: topY - size,
@@ -1633,22 +1714,37 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
         color: rgb(0.86, 0.88, 0.93)
       });
 
-      page.drawText(part === 0 ? formatTableLabel(table.tableNumber) : `${formatTableLabel(table.tableNumber)} (cont.)`, {
+      // PAX and the course tick-boxes follow the table name, so a long named table never overprints them.
+      const paxText = `PAX: ${pax}`;
+      const paxW = bold.widthOfTextAtSize(paxText, 10);
+      const trailingW = part === 0 ? 14 + paxW + 16 + checkboxLabels.length * checkboxPitch : 0;
+      const headerLabel = fitLine(
+        fitTextToFont(
+          part === 0 ? formatTableLabel(table.tableNumber) : `${formatTableLabel(table.tableNumber)} (cont.)`,
+          bold
+        ),
+        bold,
+        13,
+        splitX - 14 - leftX - trailingW,
+        9
+      );
+      page.drawText(headerLabel.text, {
         x: leftX,
         y: headerY,
         font: bold,
-        size: 13,
+        size: headerLabel.size,
         color: rgb(0.11, 0.13, 0.18)
       });
       if (part === 0) {
-        page.drawText(`PAX: ${pax}`, {
-          x: leftX + 102,
+        const paxX = Math.max(leftX + 102, leftX + bold.widthOfTextAtSize(headerLabel.text, headerLabel.size) + 14);
+        page.drawText(paxText, {
+          x: paxX,
           y: headerY,
           font: bold,
           size: 10,
           color: rgb(0.16, 0.2, 0.26)
         });
-        drawCourseCheckboxes(leftX + 150, headerY + 9);
+        drawCourseCheckboxes(Math.max(leftX + 150, paxX + paxW + 16), headerY + 9);
       }
 
       let localY = rowTop - headerBlockH;
@@ -1658,7 +1754,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
         const line = lines[lineIndex];
         // Start a new entry only if all of it fits (unless the box is still empty).
         if (line.keepHeight && lineIndex > drawnBefore && localY - line.keepHeight + line.size < floorY) break;
-        page.drawText(line.text, { x: line.x, y: localY, font: line.font, size: line.size, color: line.color });
+        page.drawText(fitTextToFont(line.text, line.font), { x: line.x, y: localY, font: line.font, size: line.size, color: line.color });
         localY -= line.step;
         lineIndex += 1;
       }
@@ -1721,7 +1817,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y,
     font: titleBold,
     size: 14,
-    color: hexToRgb(theme.primaryColor, "#012f43")
+    color: inkOnWhite(theme.primaryColor, "#012f43")
   });
   y -= 16;
   page.drawText(`Total tables: ${data.tables.length}`, { x: 26, y, font: bold, size: 10.5 });
@@ -1748,7 +1844,7 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     y -= 10;
     summary.dishTotals.forEach(([dish, count]) => {
       ensureSummarySpace(10);
-      page.drawText(`- ${dish} (${count})`, { x: 34, y, font, size: 9.3, maxWidth: width - 54 });
+      page.drawText(truncateToWidth(fitTextToFont(`- ${dish} (${count})`, font), font, 9.3, width - 54), { x: 34, y, font, size: 9.3 });
       y -= 9.5;
     });
     ensureSummarySpace(14);
@@ -1768,23 +1864,21 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     } else {
       summary.dietaryByDish.forEach(({ dish, combos }) => {
         ensureSummarySpace(10);
-        page.drawText(`- ${dish}:`, {
+        page.drawText(truncateToWidth(fitTextToFont(`- ${dish}:`, bold), bold, 9.3, width - 54), {
           x: 34,
           y,
           font: bold,
-          size: 9.3,
-          maxWidth: width - 54
+          size: 9.3
         });
         y -= 9.5;
         combos.forEach(([combo, count]) => {
           ensureSummarySpace(10);
-          page.drawText(`  • ${combo} (${count})`, {
+          page.drawText(truncateToWidth(fitTextToFont(`  • ${combo} (${count})`, font), font, 9.2, width - 60), {
             x: 40,
             y,
             font,
             size: 9.2,
-            color: rgb(0.63, 0.23, 0.07),
-            maxWidth: width - 60
+            color: rgb(0.63, 0.23, 0.07)
           });
           y -= 9.2;
         });
@@ -1797,7 +1891,6 @@ export async function renderServicePlanPdf(model: EventModel, theme: ThemeSettin
     drawSummaryCourse(SERVICE_COURSE_LABEL[course], makeCourseSummary(course));
   });
 
-  await embedLogoIfPresent(doc, doc.getPages()[0], theme);
   return doc.save();
 }
 
@@ -2029,11 +2122,38 @@ export async function renderDocumentPdf(
       options.theme,
       options.menuLongNames ?? {},
       options.dishMenuDuplicateGroups ?? [],
-      options.menuCardContact
+      options.menuCardContact,
+      { warnings: options.warnings }
     );
   }
   if (documentType === "floorplan") {
     return renderFloorplanPdf(model, options.floorplan, options.theme);
   }
   return renderServicePlanPdf(model, options.theme);
+}
+
+/**
+ * Guest and table names containing characters the print fonts have no glyphs for (e.g. Chinese,
+ * Arabic). Those characters print as gaps, so callers should warn before anything goes to print.
+ */
+export async function findUndrawableText(model: EventModel): Promise<string[]> {
+  const { body } = await createDocWithFonts();
+  const warnings: string[] = [];
+  const names = model.guests.filter((guest) => guest.name.trim() && !fontCanDraw(guest.name, body));
+  if (names.length) {
+    const shown = names
+      .slice(0, 5)
+      .map((guest) => `${guest.name}${guest.tableNumber ? ` (${formatTableLabel(guest.tableNumber)})` : ""}`)
+      .join(", ");
+    warnings.push(
+      `${names.length} guest name${names.length === 1 ? " uses" : "s use"} characters the print font can't draw, so ${
+        names.length === 1 ? "it" : "they"
+      } will print blank or with gaps: ${shown}${names.length > 5 ? ` and ${names.length - 5} more` : ""}. Add a Latin spelling in Last-minute edits.`
+    );
+  }
+  const tables = model.tableOrder.filter((table) => !fontCanDraw(formatTableLabel(table), body));
+  if (tables.length) {
+    warnings.push(`Table name${tables.length === 1 ? "" : "s"} with characters the print font can't draw: ${tables.slice(0, 5).join(", ")}.`);
+  }
+  return warnings;
 }

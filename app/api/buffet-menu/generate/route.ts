@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/http/errorMessage";
 import { getAppSettings } from "@/lib/appSettings/store";
 import { resolveDisplayBackgroundBytes } from "@/lib/displayBackgrounds/store";
-import { renderAllBuffetPdfs } from "@/lib/pdf/buffetMenuPdf";
+import { renderAllBuffetPdfs, type BuffetPdfKind } from "@/lib/pdf/buffetMenuPdf";
+import { flattenForDisplayMenu } from "@/lib/buffetMenu/flattenMenu";
 import { loadLogoBytesFromKey, parseDataUrlImage } from "@/lib/signage/loadLogoBytes";
 import { isR2Configured } from "@/lib/storage/r2";
 import { buffetMenuGenerateBodySchema } from "@/lib/validation/buffetMenuSchemas";
@@ -39,23 +40,41 @@ export async function POST(request: Request) {
   }
   const { menu, venueLogoKey, venueLogoDataUrl, displayBackgroundKey, allergenStatement, export: exportMode } =
     parsed.data;
+  if (!flattenForDisplayMenu(menu).some((line) => line.kind === "item")) {
+    return NextResponse.json({ error: "Give at least one dish a name before downloading." }, { status: 400 });
+  }
+
+  const pdfFiles: Record<BuffetPdfKind, string> = {
+    display: "buffet-menu-display.pdf",
+    matrix: "buffet-allergen-matrix.pdf",
+    labelsA6: "buffet-labels-a6.pdf",
+    labelsA7: "buffet-labels-a7.pdf"
+  };
+  const kindForExport: Record<Exclude<typeof exportMode, "zip">, BuffetPdfKind> = {
+    display: "display",
+    matrix: "matrix",
+    labels: "labelsA6",
+    labelsA7: "labelsA7"
+  };
+  // Render only what was asked for: a single download no longer builds all four documents.
+  const only = exportMode === "zip" ? undefined : [kindForExport[exportMode]];
+
   let rendered: Awaited<ReturnType<typeof renderAllBuffetPdfs>>;
   try {
     const logo = await resolveVenueLogo(venueLogoKey ?? null, venueLogoDataUrl);
     const { defaultDisplayBackgroundKey } = await getAppSettings();
     const displayBackground = await resolveDisplayBackgroundBytes([displayBackgroundKey, defaultDisplayBackgroundKey]);
-    rendered = await renderAllBuffetPdfs(menu, logo, { allergenStatement, displayBackground });
+    rendered = await renderAllBuffetPdfs(menu, logo, { allergenStatement, displayBackground, only });
   } catch (error) {
     return NextResponse.json({ error: errorMessage(error, "Generation failed.") }, { status: 500 });
   }
-  const { display, matrix, labelsA6, labelsA7 } = rendered;
 
   if (exportMode === "zip") {
     const zip = new JSZip();
-    zip.file("buffet-menu-display.pdf", display);
-    zip.file("buffet-allergen-matrix.pdf", matrix);
-    zip.file("buffet-labels-a6.pdf", labelsA6);
-    zip.file("buffet-labels-a7.pdf", labelsA7);
+    (Object.keys(pdfFiles) as BuffetPdfKind[]).forEach((kind) => {
+      const bytes = rendered[kind];
+      if (bytes) zip.file(pdfFiles[kind], bytes);
+    });
     const zipBytes = await zip.generateAsync({ type: "uint8array" });
     return new NextResponse(Buffer.from(zipBytes), {
       status: 200,
@@ -66,19 +85,16 @@ export async function POST(request: Request) {
     });
   }
 
-  const out =
-    exportMode === "display"
-      ? { bytes: display, filename: "buffet-menu-display.pdf" as const }
-      : exportMode === "matrix"
-        ? { bytes: matrix, filename: "buffet-allergen-matrix.pdf" as const }
-        : exportMode === "labelsA7"
-          ? { bytes: labelsA7, filename: "buffet-labels-a7.pdf" as const }
-          : { bytes: labelsA6, filename: "buffet-labels-a6.pdf" as const };
-  return new NextResponse(Buffer.from(out.bytes), {
+  const kind = kindForExport[exportMode];
+  const bytes = rendered[kind];
+  if (!bytes) {
+    return NextResponse.json({ error: "Generation failed." }, { status: 500 });
+  }
+  return new NextResponse(Buffer.from(bytes), {
     status: 200,
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${out.filename}"`
+      "Content-Disposition": `attachment; filename="${pdfFiles[kind]}"`
     }
   });
 }

@@ -4,7 +4,29 @@ import type { GuestRecord, ValidationIssue, ValidationReport } from "@/types";
  * Split when the source clearly lists multiple dietaries. We intentionally do **not** split on
  * "and" / "&" so phrases like "vegetarian and no eggs" stay one literal requirement.
  */
-const DIETARY_SEGMENT_SPLIT = /\s*(?:,|;|\/|\n)\s*/;
+const DIETARY_SEGMENT_SEPARATOR = /[,;\n]/;
+
+/**
+ * Splits on commas / semicolons / new lines, but never inside brackets and never on "/":
+ * "No dairy / gluten" must not become a bare "gluten", and "Vegetarian (no eggs, no milk)" is one item.
+ */
+function splitDietarySegments(input: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of input) {
+    if (char === "(" || char === "[") depth += 1;
+    else if ((char === ")" || char === "]") && depth > 0) depth -= 1;
+    if (depth === 0 && DIETARY_SEGMENT_SEPARATOR.test(char)) {
+      out.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  out.push(current);
+  return out;
+}
 
 /** Whole-segment only: safe spelling unification, no substring inference. */
 const GLUTEN_FREE_WHOLE =
@@ -36,7 +58,15 @@ export function normalizeDietary(input: string): string[] {
     return [];
   }
 
-  const segments = trimmed.split(DIETARY_SEGMENT_SPLIT).map((s) => collapseSpaces(s)).filter(Boolean);
+  const NONE = /^(none|n\/a|na|no dietary|no dietaries|-)$/i;
+  const segments = splitDietarySegments(input)
+    .map((s) => collapseSpaces(s))
+    .filter((s) => s && !NONE.test(s))
+    // "GF/DF" is a list of one-word labels; anything with a phrase in it ("No dairy / gluten") stays whole.
+    .flatMap((s) => {
+      const parts = s.split("/").map((part) => part.trim());
+      return parts.length > 1 && parts.every((part) => part && !/\s/.test(part)) ? parts : [s];
+    });
   const out: string[] = [];
   const seen = new Set<string>();
 

@@ -1,4 +1,5 @@
 import type { EventModel } from "@/types";
+import { tablesInOrder } from "@/lib/event/model";
 
 export type ServiceCourseKey = "starter" | "main" | "dessert";
 
@@ -70,7 +71,7 @@ export function buildServicePlanDocument(model: EventModel): ServicePlanData {
     coursesOnPlan = ["main"];
   }
 
-  const tables = Object.entries(model.byTable).map(([tableNumber, guests]) => ({
+  const tables = tablesInOrder(model).map(([tableNumber, guests]) => ({
     tableNumber,
     courseBlocks: coursesOnPlan.map((course) => buildCourseBlockForTable(guests, course))
   }));

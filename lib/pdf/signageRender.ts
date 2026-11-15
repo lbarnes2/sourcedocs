@@ -1114,8 +1114,10 @@ function layoutDualSideBySide(
     const firstLineY = firstLineYMax - titleDropFromCeiling;
     const leftTitleBottom = firstLineY - (nL - 1) * lineHeight - desc;
     const rightTitleBottom = firstLineY - (nR - 1) * lineHeight - desc;
-    const arrowCyLeft = leftArrow !== "none" ? leftTitleBottom - gapTitleArrow - arrowHalf : null;
-    const arrowCyRight = rightArrow !== "none" ? rightTitleBottom - gapTitleArrow - arrowHalf : null;
+    // Both arrows hang from the taller title so they sit level, however the two names wrap.
+    const arrowRowTop = Math.min(leftTitleBottom, rightTitleBottom);
+    const arrowCyLeft = leftArrow !== "none" ? arrowRowTop - gapTitleArrow - arrowHalf : null;
+    const arrowCyRight = rightArrow !== "none" ? arrowRowTop - gapTitleArrow - arrowHalf : null;
 
     if (arrowCyLeft != null && arrowCyLeft - arrowHalf < innerBottom + arrowEdgePad) {
       return null;

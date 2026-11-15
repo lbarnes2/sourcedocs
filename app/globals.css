@@ -181,6 +181,8 @@ a {
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
+    /* Nav keeps its own height; the page takes the rest (otherwise short pages stretch the nav bar). */
+    grid-template-rows: auto 1fr;
   }
 
   .sidebar {
@@ -1288,6 +1290,10 @@ button.text-button:hover:not(:disabled) {
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: pop-in 0.14s ease;
+}
+
+.modal:focus {
+  outline: none;
 }
 
 .modal--sm {
@@ -3108,4 +3114,12 @@ button.list-item-title {
   gap: 6px;
   font-size: 0.88rem;
   color: var(--ink-2);
+}
+
+/* Buffet menu: a dish whose vegetarian / vegan label contradicts its allergens. */
+.menu-item-warning {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--danger, #b42318);
 }

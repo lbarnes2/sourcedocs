@@ -18,7 +18,8 @@ export function flattenForDisplayMenu(menu: BuffetMenuState): DisplayLine[] {
   for (const cat of categories) {
     const catItems = items.filter((it) => it.categoryId === cat.id && it.title.trim());
     if (catItems.length === 0) continue;
-    out.push({ kind: "category", title: cat.title.trim() || "Untitled" });
+    // A category left unnamed groups its dishes without printing a placeholder heading.
+    if (cat.title.trim()) out.push({ kind: "category", title: cat.title.trim() });
     for (const it of catItems) {
       out.push({ kind: "item", title: it.title.trim(), item: it });
     }

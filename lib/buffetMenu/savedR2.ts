@@ -1,8 +1,60 @@
-import { r2DeleteObject, r2GetObjectUtf8, r2ListObjectKeys, r2PutObjectUtf8 } from "@/lib/storage/r2";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import {
+  isR2Configured,
+  r2DeleteObject as r2Delete,
+  r2GetObjectUtf8 as r2Get,
+  r2ListObjectKeys as r2List,
+  r2PutObjectUtf8 as r2Put
+} from "@/lib/storage/r2";
 import { buffetMenuSavedFileSchema } from "@/lib/validation/buffetMenuSchemas";
 import type { BuffetMenuSavedFile } from "@/types/buffetMenu";
 
 export const BUFFET_MENU_PREFIX = "buffet-menus/";
+
+/**
+ * Saved menus live in R2 when it is configured, otherwise on this server in `data/buffet-menus/`
+ * (the same fallback projects, profiles and floorplans use). The helpers below hide which.
+ */
+const FS_DIR = path.join(process.cwd(), "data", "buffet-menus");
+
+function fsPathForKey(key: string): string {
+  const name = key.slice(BUFFET_MENU_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]{1,200}\.json$/.test(name)) throw new Error("Invalid buffet menu key.");
+  return path.join(FS_DIR, name);
+}
+
+async function r2GetObjectUtf8(key: string): Promise<string | null> {
+  if (isR2Configured()) return r2Get(key);
+  try {
+    return await fs.readFile(fsPathForKey(key), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function r2PutObjectUtf8(key: string, body: string): Promise<void> {
+  if (isR2Configured()) return r2Put(key, body);
+  await fs.mkdir(FS_DIR, { recursive: true });
+  await fs.writeFile(fsPathForKey(key), body, "utf8");
+}
+
+async function r2DeleteObject(key: string): Promise<void> {
+  if (isR2Configured()) return r2Delete(key);
+  await fs.rm(fsPathForKey(key), { force: true });
+}
+
+async function r2ListObjectKeys(prefix: string): Promise<string[]> {
+  if (isR2Configured()) return r2List(prefix);
+  try {
+    const files = await fs.readdir(FS_DIR);
+    return files.filter((file) => /^[A-Za-z0-9_-]{1,200}\.json$/.test(file)).map((file) => `${prefix}${file}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
 
 export function assertBuffetMenuKey(key: string): void {
   if (!key.startsWith(BUFFET_MENU_PREFIX)) throw new Error("Invalid buffet menu key.");
@@ -24,25 +76,23 @@ export interface BuffetMenuListItem {
 
 export async function listSavedBuffetMenus(): Promise<BuffetMenuListItem[]> {
   const keys = (await r2ListObjectKeys(BUFFET_MENU_PREFIX)).filter((k) => k.endsWith(".json"));
-  const out: BuffetMenuListItem[] = [];
-  for (const key of keys.sort()) {
-    const raw = await r2GetObjectUtf8(key);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      const doc = buffetMenuSavedFileSchema.safeParse(parsed);
-      if (!doc.success) continue;
-      out.push({
-        id: idFromKey(key),
-        key,
-        name: doc.data.name,
-        savedAt: doc.data.savedAt
-      });
-    } catch {
-      continue;
-    }
-  }
-  return out.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+  // Read the menus side by side rather than one after another; the list opens much faster.
+  const loaded = await Promise.all(
+    keys.map(async (key): Promise<BuffetMenuListItem | null> => {
+      try {
+        const raw = await r2GetObjectUtf8(key);
+        if (!raw) return null;
+        const doc = buffetMenuSavedFileSchema.safeParse(JSON.parse(raw) as unknown);
+        if (!doc.success) return null;
+        return { id: idFromKey(key), key, name: doc.data.name, savedAt: doc.data.savedAt };
+      } catch {
+        return null;
+      }
+    })
+  );
+  return loaded
+    .filter((item): item is BuffetMenuListItem => item !== null)
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
 }
 
 export async function getSavedBuffetMenu(keyOrId: string): Promise<BuffetMenuSavedFile | null> {

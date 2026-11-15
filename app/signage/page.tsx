@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, Download, Plus, Signpost, Trash2, X } from "lucide-react";
 import { ArrowGlyph, ArrowSymbolPicker } from "./ArrowSymbolPicker";
 import { GeneralSignTab } from "./GeneralSignTab";
@@ -14,7 +14,8 @@ import {
   Section,
   Segmented,
   Switch,
-  Tabs
+  Tabs,
+  Toasts
 } from "@/app/components/ui";
 import { defaultSignageTheme } from "@/lib/defaults";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
@@ -251,7 +252,7 @@ function SlotEditor({
             max={500}
             value={slot.count}
             aria-label={`Copies of sign ${index + 1}`}
-            onChange={(e) => onChange({ count: Math.max(1, Number(e.target.value) || 1) })}
+            onChange={(e) => onChange({ count: Math.max(1, Math.min(500, Math.round(Number(e.target.value)) || 1)) })}
           />
           <span aria-hidden>×</span>
         </label>
@@ -412,24 +413,40 @@ export default function SignagePage() {
 
   const loadProfiles = useCallback(async () => {
     setError("");
-    const r = await fetch("/api/signage/venues");
-    if (!r.ok) {
+    try {
+      const r = await fetch("/api/signage/venues");
+      if (!r.ok) throw new Error("bad status");
+      const data = (await r.json()) as { profiles: VenueSignageProfile[] };
+      setProfiles(data.profiles);
+      return data.profiles;
+    } catch {
       setError("Failed to load venue profiles.");
-      return;
+      return undefined;
     }
-    const data = (await r.json()) as { profiles: VenueSignageProfile[] };
-    setProfiles(data.profiles);
-    return data.profiles;
   }, []);
 
   const loadLogos = useCallback(async () => {
-    const [vr, cr] = await Promise.all([fetch("/api/logos/venue"), fetch("/api/logos/client")]);
-    const vj = vr.ok ? await vr.json() : { configured: false, items: [] };
-    const cj = cr.ok ? await cr.json() : { configured: false, items: [] };
-    setVenueLogos(vj.items ?? []);
-    setClientLogos(cj.items ?? []);
-    setLogosConfigured(Boolean(vj.configured));
+    try {
+      const [vr, cr] = await Promise.all([fetch("/api/logos/venue"), fetch("/api/logos/client")]);
+      const vj = vr.ok ? await vr.json() : { configured: false, items: [] };
+      const cj = cr.ok ? await cr.json() : { configured: false, items: [] };
+      setVenueLogos(vj.items ?? []);
+      setClientLogos(cj.items ?? []);
+      setLogosConfigured(Boolean(vj.configured));
+    } catch {
+      setLogosConfigured(false);
+    }
   }, []);
+
+  /** Stable React keys for the sign rows, so an expanded row stays with its sign when another is removed. */
+  const slotKeysRef = useRef<string[]>([]);
+  const nextSlotKeyRef = useRef(0);
+  const newSlotKey = () => `slot-${(nextSlotKeyRef.current += 1)}`;
+  /** The general sign tab mounts on first visit and then stays mounted, so its form survives tab switches. */
+  const [generalVisited, setGeneralVisited] = useState(false);
+  useEffect(() => {
+    if (tab === "general") setGeneralVisited(true);
+  }, [tab]);
 
   useEffect(() => {
     void (async () => {
@@ -450,6 +467,7 @@ export default function SignagePage() {
   /** Loads a profile into the editor and records it as the unchanged baseline. */
   function openDraft(p: VenueSignageProfile) {
     const copy = { ...p, slots: p.slots.map((s) => ({ ...s })), theme: { ...p.theme } };
+    slotKeysRef.current = copy.slots.map(() => newSlotKey());
     setDraft(copy);
     setBaseline(stableStringify(copy));
   }
@@ -541,10 +559,12 @@ export default function SignagePage() {
   }
 
   function addSlot() {
+    slotKeysRef.current = [...slotKeysRef.current, newSlotKey()];
     setDraft((d) => ({ ...d, slots: [...d.slots, emptySlot()] }));
   }
 
   function removeSlot(index: number) {
+    if (draft.slots.length > 1) slotKeysRef.current = slotKeysRef.current.filter((_, i) => i !== index);
     setDraft((d) => ({
       ...d,
       slots: d.slots.length > 1 ? d.slots.filter((_, i) => i !== index) : d.slots
@@ -652,6 +672,10 @@ export default function SignagePage() {
   async function generateAdhoc() {
     if (!adhocEventName.trim()) {
       setError("Enter an event name.");
+      return;
+    }
+    if (adhocDual && !adhocEventName2.trim()) {
+      setError("Enter a name for the second event, or remove it from the sign.");
       return;
     }
     setBusy(true);
@@ -1088,7 +1112,7 @@ export default function SignagePage() {
             <div className="stack stack--sm">
               {draft.slots.map((slot, index) => (
                 <SlotEditor
-                  key={`${selectedId ?? "new"}-${index}`}
+                  key={slotKeysRef.current[index] ?? `${selectedId ?? "new"}-${index}`}
                   slot={slot}
                   index={index}
                   canRemove={draft.slots.length > 1}
@@ -1171,11 +1195,14 @@ export default function SignagePage() {
         description="Print a venue's full sign pack in one go, or make a one-off sign."
       />
 
-      {error ? (
-        <Callout tone="error" onDismiss={() => setError("")}>
-          {error}
-        </Callout>
-      ) : null}
+      {/* Errors float bottom-right, as on the other tools, so they are seen wherever the page is scrolled. */}
+      <Toasts>
+        {error ? (
+          <Callout tone="error" onDismiss={() => setError("")}>
+            {error}
+          </Callout>
+        ) : null}
+      </Toasts>
       {notice ? (
         <Callout onDismiss={() => setNotice("")}>{notice}</Callout>
       ) : null}
@@ -1204,11 +1231,14 @@ export default function SignagePage() {
         packTab
       ) : tab === "single" ? (
         singleTab
-      ) : tab === "general" ? (
-        <GeneralSignTab venueLogos={venueLogos} clientLogos={clientLogos} logosConfigured={logosConfigured} />
-      ) : (
+      ) : tab === "profiles" ? (
         profilesTab
-      )}
+      ) : null}
+      {!loading && generalVisited ? (
+        <div hidden={tab !== "general"}>
+          <GeneralSignTab venueLogos={venueLogos} clientLogos={clientLogos} logosConfigured={logosConfigured} />
+        </div>
+      ) : null}
     </main>
   );
 }
