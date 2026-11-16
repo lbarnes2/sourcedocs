@@ -3123,3 +3123,95 @@ button.list-item-title {
   font-weight: 600;
   color: var(--danger, #b42318);
 }
+
+/* ==========================================================================
+   Banqueting: live preview beside the settings
+   ========================================================================== */
+.page--with-preview {
+  max-width: 1560px;
+}
+
+.banq-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+.banq-main {
+  min-width: 0;
+}
+
+.banq-main > :last-child {
+  margin-bottom: 0;
+}
+
+@media (min-width: 1280px) {
+  .banq-layout--preview {
+    grid-template-columns: minmax(0, 1040px) minmax(340px, 1fr);
+    align-items: start;
+  }
+
+  .banq-layout--preview .preview-panel {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+  }
+}
+
+.preview-panel {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-head,
+.preview-controls,
+.preview-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-head,
+.preview-controls {
+  justify-content: space-between;
+}
+
+.preview-controls select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.preview-stage {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: 10px;
+  border-radius: var(--radius, 8px);
+  background: #eef0f4;
+  transition: opacity 0.15s ease;
+}
+
+.preview-stage--loading {
+  opacity: 0.6;
+}
+
+.preview-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 62vh;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+}
+
+.preview-status {
+  margin: 0;
+}
+
+.preview-pager {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}

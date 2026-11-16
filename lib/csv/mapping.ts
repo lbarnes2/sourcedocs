@@ -18,8 +18,9 @@ const COLUMN_ALIASES: Record<CanonicalColumn, string[]> = {
   ]
 };
 
+/** Lower-case, with underscores / hyphens / dots treated as spaces: "Main_Choice" → "main choice". */
 function normalizeHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return value.trim().toLowerCase().replace(/[_\-.]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export function autoDetectMapping(headers: string[]): ColumnMapping {
@@ -30,7 +31,15 @@ export function autoDetectMapping(headers: string[]): ColumnMapping {
   }));
 
   (Object.keys(COLUMN_ALIASES) as CanonicalColumn[]).forEach((canonical) => {
-    const aliases = COLUMN_ALIASES[canonical];
+    const aliases = Array.from(
+      new Set([
+        ...COLUMN_ALIASES[canonical].map(normalizeHeader),
+        // "starter choice", "main course", "dessert option"… follow one pattern for all three courses.
+        ...(canonical === "starter" || canonical === "main" || canonical === "dessert"
+          ? ["choice", "course", "option", "selection"].map((suffix) => `${canonical} ${suffix}`)
+          : [])
+      ])
+    );
     const matched = normalized.find((header) => aliases.includes(header.normalized));
     if (matched) {
       mapping[canonical] = matched.original;
