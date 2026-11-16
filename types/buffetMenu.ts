@@ -1,4 +1,4 @@
-import type { AllergenId } from "@/lib/buffetMenu/allergens";
+import type { AllergenDetailMap, AllergenId } from "@/lib/buffetMenu/allergens";
 
 export type BuffetMenuCategory = {
   id: string;
@@ -11,6 +11,8 @@ export type BuffetMenuItem = {
   /** `null` = uncategorised */
   categoryId: string | null;
   allergens: Record<AllergenId, boolean>;
+  /** Optional cereal / nut names and guest notes for ticked Gluten or Tree nuts; absent on older menus. */
+  allergenDetail?: AllergenDetailMap;
   vegetarian: boolean;
   vegan: boolean;
 };

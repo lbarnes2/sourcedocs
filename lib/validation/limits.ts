@@ -31,6 +31,8 @@ export const MAX_BUFFET_ITEM_TITLE_CHARS = 500;
 export const MAX_BUFFET_SAVED_NAME_CHARS = 200;
 export const MAX_BUFFET_CATEGORIES = 50;
 export const MAX_BUFFET_ALLERGEN_STATEMENT_CHARS = 1500;
+/** Guest note under a dish on the allergen matrix, e.g. "barley malt extract in the gravy". */
+export const MAX_BUFFET_ALLERGEN_NOTE_CHARS = 120;
 
 /** General (non-event) signs. */
 export const MAX_GENERAL_SIGN_HEADING_CHARS = 120;

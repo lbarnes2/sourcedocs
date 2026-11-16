@@ -21,7 +21,16 @@ import { readResponseError } from "@/lib/http/readError";
 import { downloadBlob } from "@/lib/pdf/pdfToPngExport";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import { Callout, Field, Modal, PageHeader, Section, Toasts } from "@/app/components/ui";
-import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
+import {
+  ALLERGENS,
+  ALLERGENS_BY_ID,
+  ALLERGEN_SUBTYPES,
+  DETAILED_ALLERGEN_IDS,
+  type AllergenDetail,
+  type AllergenId,
+  type DetailedAllergenId
+} from "@/lib/buffetMenu/allergens";
+import { MAX_BUFFET_ALLERGEN_NOTE_CHARS } from "@/lib/validation/limits";
 import {
   BUFFET_UNCAT_CONTAINER,
   type BuffetMenuStore,
@@ -188,6 +197,98 @@ function SortableCategoryBlock({
   );
 }
 
+const DETAIL_NOUN: Record<DetailedAllergenId, string> = { gluten: "cereal", nuts: "nut" };
+const DETAIL_NOTE_PLACEHOLDER: Record<DetailedAllergenId, string> = {
+  gluten: "Note for guests (optional), e.g. barley malt extract in the gravy",
+  nuts: "Note for guests (optional), e.g. toasted almond flakes on top"
+};
+
+/**
+ * Optional detail under a ticked Gluten or Tree nuts chip: which cereal / nut, gluten-free oats, and a guest note.
+ * Collapsed to a single link until used, so the plain tick stays the quick path.
+ */
+function AllergenDetailEditor({
+  allergenId,
+  detail,
+  onChange
+}: {
+  allergenId: DetailedAllergenId;
+  detail: AllergenDetail | undefined;
+  onChange: (next: AllergenDetail | undefined) => void;
+}) {
+  const hasDetail = Boolean(detail && (detail.types.length || detail.note));
+  const [open, setOpen] = useState(hasDetail);
+  const label = ALLERGENS_BY_ID[allergenId].shortLabel;
+  const noun = DETAIL_NOUN[allergenId];
+  if (!open && !hasDetail) {
+    return (
+      <button type="button" className="allergen-detail-add" onClick={() => setOpen(true)}>
+        <Plus size={12} aria-hidden />
+        Name the {noun} under {label}
+      </button>
+    );
+  }
+  const d: AllergenDetail = detail ?? { types: [] };
+  const setTypes = (types: string[]) =>
+    onChange({ ...d, types, glutenFreeOats: types.includes("oats") ? d.glutenFreeOats : undefined });
+  return (
+    <div className="allergen-detail" role="group" aria-label={`${label}: which ${noun}`}>
+      <div className="allergen-detail-head">
+        <span className="allergen-detail-label">
+          {label}: which {noun}?
+        </span>
+        <button
+          type="button"
+          className="icon-btn icon-btn--sm"
+          aria-label={`Clear ${label} detail`}
+          title="Clear and go back to a plain tick"
+          onClick={() => {
+            onChange(undefined);
+            setOpen(false);
+          }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className="chip-group chip-group--allergens">
+        {ALLERGEN_SUBTYPES[allergenId].map((s) => (
+          <label key={s.id} className="chip chip--sm">
+            <input
+              type="checkbox"
+              checked={d.types.includes(s.id)}
+              onChange={(e) => {
+                const picked = new Set(d.types);
+                if (e.target.checked) picked.add(s.id);
+                else picked.delete(s.id);
+                setTypes(ALLERGEN_SUBTYPES[allergenId].map((x) => x.id).filter((x) => picked.has(x)));
+              }}
+            />
+            {s.label}
+          </label>
+        ))}
+        {allergenId === "gluten" && d.types.includes("oats") ? (
+          <label className="chip chip--sm" title="Printed as Oats (GF), with a key at the foot of the matrix">
+            <input
+              type="checkbox"
+              checked={Boolean(d.glutenFreeOats)}
+              onChange={(e) => onChange({ ...d, glutenFreeOats: e.target.checked || undefined })}
+            />
+            Oats are certified gluten-free
+          </label>
+        ) : null}
+      </div>
+      <input
+        className="allergen-detail-note"
+        value={d.note ?? ""}
+        maxLength={MAX_BUFFET_ALLERGEN_NOTE_CHARS}
+        placeholder={DETAIL_NOTE_PLACEHOLDER[allergenId]}
+        aria-label={`${label} note for guests`}
+        onChange={(e) => onChange({ ...d, note: e.target.value })}
+      />
+    </div>
+  );
+}
+
 function SortableItemRow({
   itemId,
   item,
@@ -256,6 +357,19 @@ function SortableItemRow({
             </label>
           ))}
         </div>
+        {DETAILED_ALLERGEN_IDS.filter((id) => item.allergens[id]).map((id) => (
+          <AllergenDetailEditor
+            key={id}
+            allergenId={id}
+            detail={item.allergenDetail?.[id]}
+            onChange={(d) => {
+              const next = { ...item.allergenDetail };
+              if (d) next[id] = d;
+              else delete next[id];
+              onChange({ ...item, allergenDetail: Object.keys(next).length ? next : undefined });
+            }}
+          />
+        ))}
         {conflicts.length ? (
           <p className="menu-item-warning" role="alert">
             Marked {item.vegan ? "vegan" : "vegetarian"} but contains {conflicts.join(", ").toLowerCase()} — untick one

@@ -3116,6 +3116,61 @@ button.list-item-title {
   color: var(--ink-2);
 }
 
+/* Buffet menu: optional cereal / nut detail under a ticked Gluten or Tree nuts chip. */
+.allergen-detail-add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.allergen-detail-add:hover {
+  text-decoration: underline;
+}
+
+.allergen-detail-add:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.allergen-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.allergen-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.allergen-detail-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+input.allergen-detail-note {
+  width: 100%;
+  font-size: 0.8rem;
+}
+
 /* Buffet menu: a dish whose vegetarian / vegan label contradicts its allergens. */
 .menu-item-warning {
   margin: 6px 0 0;

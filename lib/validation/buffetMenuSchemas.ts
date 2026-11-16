@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { ALLERGEN_IDS, type AllergenId } from "@/lib/buffetMenu/allergens";
+import {
+  ALLERGEN_IDS,
+  GLUTEN_CEREAL_IDS,
+  TREE_NUT_IDS,
+  type AllergenId,
+  normalizeAllergenDetail
+} from "@/lib/buffetMenu/allergens";
 import { BUFFET_MENU_JSON_SCHEMA_VERSION } from "@/types/buffetMenu";
 import * as limits from "@/lib/validation/limits";
 
@@ -10,6 +16,28 @@ const allergenMapSchema: z.ZodType<Record<AllergenId, boolean>> = z
     Object.fromEntries(ALLERGEN_IDS.map((id) => [id, z.boolean()])) as Record<AllergenId, z.ZodBoolean>
   )
   .strict() as z.ZodType<Record<AllergenId, boolean>>;
+
+const allergenNoteSchema = z.string().max(limits.MAX_BUFFET_ALLERGEN_NOTE_CHARS).optional();
+
+const allergenDetailSchema = z
+  .object({
+    gluten: z
+      .object({
+        types: z.array(z.enum(GLUTEN_CEREAL_IDS)).max(GLUTEN_CEREAL_IDS.length),
+        glutenFreeOats: z.boolean().optional(),
+        note: allergenNoteSchema
+      })
+      .strict()
+      .optional(),
+    nuts: z
+      .object({
+        types: z.array(z.enum(TREE_NUT_IDS)).max(TREE_NUT_IDS.length),
+        note: allergenNoteSchema
+      })
+      .strict()
+      .optional()
+  })
+  .strict();
 
 export const buffetCategorySchema = z.object({
   id: z.string().min(1).max(200),
@@ -22,13 +50,17 @@ export const buffetItemSchema = z
     title: z.string().min(0).max(limits.MAX_BUFFET_ITEM_TITLE_CHARS),
     categoryId: z.string().min(1).max(200).nullable(),
     allergens: allergenMapSchema,
+    allergenDetail: allergenDetailSchema.optional(),
     vegetarian: z.boolean(),
     vegan: z.boolean()
   })
   .transform((row) => {
     const vegan = row.vegan;
+    const { allergenDetail, ...rest } = row;
+    const detail = normalizeAllergenDetail(row.allergens, allergenDetail);
     return {
-      ...row,
+      ...rest,
+      ...(detail ? { allergenDetail: detail } : {}),
       vegetarian: vegan ? true : row.vegetarian
     };
   });
