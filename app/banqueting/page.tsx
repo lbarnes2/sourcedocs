@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { Download, FileSpreadsheet, FolderOpen, Plus, Save, Trash2, X } from "lucide-react";
+import { MenuCardEditor, emptyMenuCardLayout } from "@/app/banqueting/MenuCardEditor";
 import { PreviewPanel } from "@/app/banqueting/PreviewPanel";
 import { ReuploadReview } from "@/app/banqueting/ReuploadReview";
 import { LogoPicker } from "@/app/components/LogoPicker";
@@ -34,6 +35,8 @@ import {
 } from "@/lib/defaults";
 import { applyDishShortOverridesToGuests, rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
 import { buildKitchenSummary, kitchenSummaryToRows } from "@/lib/docs/kitchenSummary";
+import { augmentMenuLongNamesForDuplicateGroups, menuDishKeysForCourse } from "@/lib/docs/menuCards";
+import { resolveMenuLongNames } from "@/lib/dish/overrideConflicts";
 import { buildEventModel } from "@/lib/event/model";
 import { splitFullName } from "@/lib/event/surname";
 import { compareTables, formatTableLabel } from "@/lib/event/tableLabel";
@@ -49,6 +52,7 @@ import type {
   DocumentType,
   EventProjectFile,
   GuestRecord,
+  MenuCardLayout,
   PaperSize,
   ProfileSettings,
   ProjectListItem,
@@ -252,6 +256,7 @@ export default function HomePage() {
   const [menuBooklet, setMenuBooklet] = useState({ ...defaultMenuBookletSettings });
   const [floorplan, setFloorplan] = useState({ ...defaultFloorplanSettings });
   const [tableCard, setTableCard] = useState({ ...defaultTableCardSettings });
+  const [menuCard, setMenuCard] = useState<MenuCardLayout>(emptyMenuCardLayout);
   const [dishNameOverrides, setDishNameOverrides] = useState<Record<string, DishNameOverride>>({});
   const [dishMenuDuplicateGroups, setDishMenuDuplicateGroups] = useState<
     Array<DishMenuDuplicateGroup & { id: string }>
@@ -438,6 +443,7 @@ export default function HomePage() {
     setMenuBooklet({ ...defaultMenuBookletSettings, ...file.menuBooklet });
     setFloorplan({ ...defaultFloorplanSettings, ...file.floorplan });
     setTableCard({ ...defaultTableCardSettings, ...file.tableCard });
+    setMenuCard(file.menuCard ?? emptyMenuCardLayout);
     setDishNameOverrides(file.dishNameOverrides ?? {});
     setDishMenuDuplicateGroups(file.dishMenuDuplicateGroups ?? []);
     setMenuMergePick([]);
@@ -505,6 +511,7 @@ export default function HomePage() {
         menuBooklet,
         floorplan,
         tableCard,
+        menuCard,
         dishNameOverrides,
         dishMenuDuplicateGroups,
         normalizeGuestNamesToTitleCase,
@@ -871,6 +878,7 @@ export default function HomePage() {
       menuBooklet,
       floorplan,
       tableCard,
+      menuCard,
       dishNameOverrides,
       dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
         canonical,
@@ -1018,6 +1026,7 @@ export default function HomePage() {
         placeCard,
         menuBooklet,
         tableCard,
+        menuCard,
         dishNameOverrides,
         dishMenuDuplicateGroups,
         normalizeGuestNamesToTitleCase,
@@ -1035,6 +1044,7 @@ export default function HomePage() {
       placeCard,
       menuBooklet,
       tableCard,
+      menuCard,
       dishNameOverrides,
       dishMenuDuplicateGroups,
       normalizeGuestNamesToTitleCase,
@@ -1074,6 +1084,23 @@ export default function HomePage() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
+
+  /** Each course's dishes as they will be listed on the menu card, in their current order. */
+  const menuCourses = useMemo(() => {
+    const longNames = augmentMenuLongNamesForDuplicateGroups(
+      resolveMenuLongNames(dishNameOverrides).byShort,
+      dishMenuDuplicateGroups,
+      dishNameOverrides
+    );
+    const forCourse = (course: "starter" | "main" | "dessert") => ({
+      dishes: menuDishKeysForCourse(
+        effectiveGuests.map((guest) => rewriteDishWithShortOverride(guest[course], dishNameOverrides)),
+        dishMenuDuplicateGroups,
+        menuCard.order[course]
+      ).map((dish) => ({ id: dish, label: longNames[dish]?.trim() || dish }))
+    });
+    return { starter: forCourse("starter"), main: forCourse("main"), dessert: forCourse("dessert") };
+  }, [effectiveGuests, dishNameOverrides, dishMenuDuplicateGroups, menuCard.order]);
 
   /** The live preview appears once there is a checked guest list to draw. */
   const showPreview = exportUnlocked && guests.length > 0;
@@ -1846,6 +1873,8 @@ export default function HomePage() {
         ) : null}
 
         {settingsTab === "menu" ? (
+          <div className="stack">
+          <MenuCardEditor courses={menuCourses} layout={menuCard} onChange={setMenuCard} />
           <div className="form-grid">
             <Field label="Before the first course" hint="e.g. bread and butter">
               <textarea
@@ -1863,6 +1892,7 @@ export default function HomePage() {
                 onChange={(event) => setMenuBooklet((previous) => ({ ...previous, postMealText: event.target.value }))}
               />
             </Field>
+          </div>
           </div>
         ) : null}
 

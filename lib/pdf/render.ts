@@ -11,6 +11,7 @@ import type {
   EventModel,
   FloorplanSettings,
   MenuBookletSettings,
+  MenuCardLayout,
   PlaceCardSettings,
   TableCardSettings,
   TablePlanSettings,
@@ -1029,7 +1030,7 @@ export async function renderMenuBookletPdf(
   dishMenuDuplicateGroups: DishMenuDuplicateGroup[] = [],
   /** Back cover lines from the Settings page; blank lines are left off. */
   contact: MenuCardContact = { phone: "", websites: "" },
-  options: { warnings?: string[] } = {}
+  options: { warnings?: string[]; layout?: MenuCardLayout } = {}
 ): Promise<Uint8Array> {
   const { doc, body: font, bodyBold: bold, title, titleBold } = await createDocWithFonts();
   const pageWidth = mmToPt(297);
@@ -1045,7 +1046,7 @@ export async function renderMenuBookletPdf(
   /** Primary as text on white paper (falls back to dark ink for pale brand colours). */
   const primaryInk = inkOnWhite(theme.primaryColor, "#012f43");
   const accent = hexToRgb(theme.accentColor, "#acc1cb");
-  const menu = buildMenuBookletDocument(model, menuLongNames, dishMenuDuplicateGroups);
+  const menu = buildMenuBookletDocument(model, menuLongNames, dishMenuDuplicateGroups, options.layout);
   /** Cover text: white on a dark cover, dark ink on a pale one. */
   const white = textOnColor(theme.primaryColor, "#012f43");
 
@@ -1323,7 +1324,10 @@ export async function renderMenuBookletPdf(
   const innerPad = 18;
   const innerLeft = rightCoverOuter.x + innerPad;
   const innerW = rightCoverOuter.width - innerPad * 2;
-  const innerBottom = panelY + innerPad;
+  // A line explaining the dietary keys sits at the foot of the panel; the menu is centred above it.
+  const legendText = menu.keyLegend.join("   ");
+  const legendH = legendText ? 18 : 0;
+  const innerBottom = panelY + innerPad + legendH;
   const innerTop = panelY + panelH - innerPad;
   const innerHeight = innerTop - innerBottom;
 
@@ -1467,6 +1471,11 @@ export async function renderMenuBookletPdf(
       cursorY -= dividerTrailing;
     }
   });
+
+  if (legendText) {
+    const legend = fitLine(fitTextToFont(legendText, font), font, 7.5, innerW - 8, 5.5);
+    drawCenteredInPanel(sheet2, legend.text, panelY + innerPad + 2, font, legend.size, rgb(0.36, 0.41, 0.5), innerLeft, innerW);
+  }
 
   if (postMealLines.length) {
     if (hasCoreCourses) {
@@ -2135,6 +2144,7 @@ export async function renderDocumentPdf(
     menuBooklet: MenuBookletSettings;
     floorplan: FloorplanSettings;
     tableCard?: TableCardSettings;
+    menuCard?: MenuCardLayout;
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
     dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -2164,7 +2174,7 @@ export async function renderDocumentPdf(
       options.menuLongNames ?? {},
       options.dishMenuDuplicateGroups ?? [],
       options.menuCardContact,
-      { warnings: options.warnings }
+      { warnings: options.warnings, layout: options.menuCard }
     );
   }
   if (documentType === "floorplan") {

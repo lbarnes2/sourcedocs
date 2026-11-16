@@ -3310,3 +3310,44 @@ td.guest-row-actions {
   width: 1%;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   Banqueting: menu card dish order and dietary keys
+   ========================================================================== */
+.menu-order-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+.menu-order-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.menu-order-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 8px);
+  background: var(--surface, #fff);
+}
+
+.menu-order-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  overflow-wrap: break-word;
+}
+
+.menu-order-keys {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
