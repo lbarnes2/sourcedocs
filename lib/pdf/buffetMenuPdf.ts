@@ -7,7 +7,6 @@ import {
   ALLERGENS,
   ALLERGENS_BY_ID,
   DETAILED_ALLERGEN_IDS,
-  GLUTEN_FREE_OATS_KEY,
   type AllergenId,
   isDetailedAllergen,
   subtypeCellLabels
@@ -102,7 +101,7 @@ function wrapWords(text: string, font: PDFFont, fontSize: number, maxWidth: numb
 }
 
 /**
- * Packs short labels ("Wheat", "Oats (GF)") into lines, joining with ", " where two fit side by side and
+ * Packs short labels ("Wheat", "GF Oats") into lines, joining with ", " where two fit side by side and
  * otherwise starting a new line (no trailing comma, which would cost width). Never splits a label.
  */
 function packLabels(labels: string[], font: PDFFont, fontSize: number, maxWidth: number): string[] {
@@ -404,10 +403,8 @@ export async function renderBuffetAllergenMatrixPdf(
     ? `Abbreviations: ${[...abbreviated].map(([abbr, name]) => `${abbr} = ${name}`).join(", ")}.`
     : "";
 
-  /* Gluten-free oats print as "Oats (GF)"; explain that (and any abbreviations) once, above the venue's statement. */
-  const hasGlutenFreeOats = items.some((it) => it.allergens.gluten && it.allergenDetail?.gluten?.glutenFreeOats);
+  /* Any abbreviation key sits above the venue's own statement, which is printed exactly as written. */
   const statementParas = [
-    ...(hasGlutenFreeOats ? [GLUTEN_FREE_OATS_KEY] : []),
     ...(abbreviationKey ? [abbreviationKey] : []),
     ...allergenStatement
       .split(/\r?\n/)
@@ -482,7 +479,7 @@ export async function renderBuffetAllergenMatrixPdf(
         : [];
     }).slice(0, maxNoteLines);
 
-  /* Cereal / nut names under the tick, e.g. "Wheat, Barley" or "Oats (GF)". */
+  /* Cereal / nut names under the tick, e.g. "Wheat, Barley" or "GF Oats". */
   const subSizeFor = (s: number) => Math.max(4.2, Math.min(CELL_LABEL_MAX_PT, s * 0.68));
   const subLineStep = (s: number) => subSizeFor(s) * 1.15;
   /* Ticks for one-line rows set the size for every tick, so a tall row or a cell with names under it

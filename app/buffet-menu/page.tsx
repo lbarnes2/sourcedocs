@@ -267,7 +267,7 @@ function AllergenDetailEditor({
           </label>
         ))}
         {allergenId === "gluten" && d.types.includes("oats") ? (
-          <label className="chip chip--sm" title="Printed as Oats (GF), with a key at the foot of the matrix">
+          <label className="chip chip--sm" title="Printed as GF Oats on the allergen matrix">
             <input
               type="checkbox"
               checked={Boolean(d.glutenFreeOats)}

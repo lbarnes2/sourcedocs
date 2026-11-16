@@ -117,10 +117,8 @@ export type AllergenDetail = {
 
 export type AllergenDetailMap = Partial<Record<DetailedAllergenId, AllergenDetail>>;
 
-/** Printed key for gluten-free oats, used in the cell and explained once at the foot of the matrix. */
-export const GLUTEN_FREE_OATS_LABEL = "Oats (GF)";
-export const GLUTEN_FREE_OATS_KEY =
-  "Oats (GF): certified gluten-free oats. Most people with coeliac disease can eat these, but a few react to oats. Please ask a member of staff.";
+/** Printed in the matrix cell for certified gluten-free oats (regular oats print as "Oats"). */
+export const GLUTEN_FREE_OATS_LABEL = "GF Oats";
 
 export function isDetailedAllergen(id: AllergenId): id is DetailedAllergenId {
   return (DETAILED_ALLERGEN_IDS as readonly string[]).includes(id);
@@ -151,7 +149,7 @@ export function normalizeAllergenDetail(
 
 export type SubtypeCellLabel = { label: string; abbr?: string; keyName?: string };
 
-/** Sub-types to print in the allergen's matrix cell, e.g. Wheat + Barley, or Oats (GF). */
+/** Sub-types to print in the allergen's matrix cell, e.g. Wheat + Barley, or GF Oats. */
 export function subtypeCellLabels(id: DetailedAllergenId, d: AllergenDetail | undefined): SubtypeCellLabel[] {
   if (!d) return [];
   const defs = new Map(ALLERGEN_SUBTYPES[id].map((s) => [s.id, s]));
