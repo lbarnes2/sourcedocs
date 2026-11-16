@@ -3,10 +3,18 @@ import { embedRasterBytes } from "@/lib/pdf/imageFormat";
 import path from "node:path";
 import { PDFDocument, type PDFFont, type PDFImage, type PDFPage, radians, rgb } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { ALLERGENS, type AllergenId } from "@/lib/buffetMenu/allergens";
+import {
+  ALLERGENS,
+  ALLERGENS_BY_ID,
+  DETAILED_ALLERGEN_IDS,
+  GLUTEN_FREE_OATS_KEY,
+  type AllergenId,
+  isDetailedAllergen,
+  subtypeCellLabels
+} from "@/lib/buffetMenu/allergens";
 import { allItemsInOrderForLabels, flattenForDisplayMenu, type DisplayLine } from "@/lib/buffetMenu/flattenMenu";
 import { drawLucideIconStroke, lucideCheck, lucideSquare, lucideSquareCheck } from "@/lib/pdf/lucidePdfDraw";
-import type { BuffetLabelSize, BuffetMenuState } from "@/types/buffetMenu";
+import type { BuffetLabelSize, BuffetMenuItem, BuffetMenuState } from "@/types/buffetMenu";
 
 function mmToPt(mm: number): number {
   return (mm * 72) / 25.4;
@@ -90,6 +98,23 @@ function wrapWords(text: string, font: PDFFont, fontSize: number, maxWidth: numb
     }
   }
   lines.push(cur);
+  return lines;
+}
+
+/**
+ * Packs short labels ("Wheat", "Oats (GF)") into lines, joining with ", " where two fit side by side and
+ * otherwise starting a new line (no trailing comma, which would cost width). Never splits a label.
+ */
+function packLabels(labels: string[], font: PDFFont, fontSize: number, maxWidth: number): string[] {
+  const lines: string[] = [];
+  for (const label of labels) {
+    const last = lines[lines.length - 1];
+    if (last !== undefined && font.widthOfTextAtSize(`${last}, ${label}`, fontSize) <= maxWidth) {
+      lines[lines.length - 1] = `${last}, ${label}`;
+    } else {
+      lines.push(label);
+    }
+  }
   return lines;
 }
 
@@ -295,6 +320,10 @@ async function embedAllergenIcons(doc: PDFDocument): Promise<Partial<Record<Alle
 
 const ink = rgb(0, 0, 0);
 const lineGray = rgb(0.35, 0.35, 0.35);
+/** Largest size for the cereal / nut names under a matrix tick. */
+const CELL_LABEL_MAX_PT = 6.5;
+/** Guest notes under a dish name: dark enough to read, a step lighter than the name itself. */
+const noteInk = rgb(0.25, 0.25, 0.25);
 
 /**
  * A4 landscape allergen matrix with FSA allergen icons over the column labels, grid lines and Lucide "check" marks in cells.
@@ -355,10 +384,36 @@ export async function renderBuffetAllergenMatrixPdf(
   const tableTop = H - margin - Math.max(titleSize * 0.75, logoH, signOffH) - mmToPt(8);
 
   /* Optional small-print statement at the foot of every page; long statements drop from 11pt to 10pt. */
-  const statementParas = allergenStatement
-    .split(/\r?\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
+  /* Cereal / nut names under a tick keep this much clear space from the column's grid lines. */
+  const cellPadX = 5;
+  const cellInnerW = colW - cellPadX * 2;
+  /* Names too wide for a cell at full size (e.g. "Macadamia") print abbreviated on every row, with a key below.
+     Decided at the largest cell size so a name reads the same everywhere in the document. */
+  const abbreviated = new Map<string, string>();
+  for (const it of items) {
+    for (const id of DETAILED_ALLERGEN_IDS) {
+      if (!it.allergens[id]) continue;
+      for (const part of subtypeCellLabels(id, it.allergenDetail?.[id])) {
+        if (part.abbr && bodyBold.widthOfTextAtSize(part.label, CELL_LABEL_MAX_PT) > cellInnerW) {
+          abbreviated.set(part.abbr, part.keyName ?? part.label.toLowerCase());
+        }
+      }
+    }
+  }
+  const abbreviationKey = abbreviated.size
+    ? `Abbreviations: ${[...abbreviated].map(([abbr, name]) => `${abbr} = ${name}`).join(", ")}.`
+    : "";
+
+  /* Gluten-free oats print as "Oats (GF)"; explain that (and any abbreviations) once, above the venue's statement. */
+  const hasGlutenFreeOats = items.some((it) => it.allergens.gluten && it.allergenDetail?.gluten?.glutenFreeOats);
+  const statementParas = [
+    ...(hasGlutenFreeOats ? [GLUTEN_FREE_OATS_KEY] : []),
+    ...(abbreviationKey ? [abbreviationKey] : []),
+    ...allergenStatement
+      .split(/\r?\n/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+  ];
   let statementSize = 11;
   let statementLines: string[] = [];
   if (statementParas.length) {
@@ -410,43 +465,71 @@ export async function renderBuffetAllergenMatrixPdf(
     return nameTopToFirstBaseline(s) + (maxLines - 1) * ls + s * 0.22 + namePadBot;
   };
 
-  const maxLinesForItems = (slice: typeof items, size: number) => {
-    let maxLines = 1;
-    for (const it of slice) {
-      const raw = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
-      const lines = wrapWords(raw, body, size, nameColW - namePadX * 2);
-      maxLines = Math.max(maxLines, Math.min(maxNameLines, lines.length));
-    }
-    return maxLines;
+  const nameLinesFor = (it: BuffetMenuItem, size: number) => {
+    const raw = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
+    return wrapWords(raw, body, size, nameColW - namePadX * 2);
   };
 
-  // Shrink until at least one data row fits under the header (pagination handles the rest).
-  let maxLines = maxLinesForItems(items, fontSize);
-  let rowH = rowHFor(fontSize, maxLines);
+  /* Guest notes ("Gluten: barley malt extract in the gravy") sit under the dish name in a smaller size. */
+  const maxNoteLines = 3;
+  const noteSizeFor = (s: number) => s * 0.8;
+  const noteLineStep = (s: number) => noteSizeFor(s) * 1.18;
+  const noteLinesFor = (it: BuffetMenuItem, size: number) =>
+    DETAILED_ALLERGEN_IDS.flatMap((id) => {
+      const note = it.allergens[id] ? it.allergenDetail?.[id]?.note?.trim() : "";
+      return note
+        ? wrapWords(`${ALLERGENS_BY_ID[id].shortLabel}: ${note}`, body, noteSizeFor(size), nameColW - namePadX * 2)
+        : [];
+    }).slice(0, maxNoteLines);
+
+  /* Cereal / nut names under the tick, e.g. "Wheat, Barley" or "Oats (GF)". */
+  const subSizeFor = (s: number) => Math.max(4.2, Math.min(CELL_LABEL_MAX_PT, s * 0.68));
+  const subLineStep = (s: number) => subSizeFor(s) * 1.15;
+  /* Ticks for one-line rows set the size for every tick, so a tall row or a cell with names under it
+     doesn't get a bigger or smaller tick than the rest of the sheet. */
+  const tickPtAt = (s: number) => Math.max(9, Math.min(20, Math.min(Math.max(22, rowHFor(s, 1)), colW) * 0.72));
+  const cellPadY = 4;
+  const cellLabelLinesFor = (it: BuffetMenuItem, id: AllergenId, size: number) =>
+    it.allergens[id] && isDetailedAllergen(id)
+      ? packLabels(
+          subtypeCellLabels(id, it.allergenDetail?.[id]).map((p) => (p.abbr && abbreviated.has(p.abbr) ? p.abbr : p.label)),
+          bodyBold,
+          subSizeFor(size),
+          cellInnerW
+        )
+      : [];
+  const detailBlockH = (nLines: number, size: number) => tickPtAt(size) + 1.5 + nLines * subLineStep(size);
+
+  /** Height a dish's row needs: its name (and notes), or its tallest detailed cell, whichever is more. */
+  const rowHeightAt = (it: BuffetMenuItem, size: number) => {
+    const nameLines = Math.min(maxNameLines, nameLinesFor(it, size).length);
+    const notes = noteLinesFor(it, size).length;
+    const nameH = rowHFor(size, nameLines) + (notes ? notes * noteLineStep(size) + 1.5 : 0);
+    const cellLines = Math.max(0, ...DETAILED_ALLERGEN_IDS.map((id) => cellLabelLinesFor(it, id, size).length));
+    const cellH = cellLines ? detailBlockH(cellLines, size) + cellPadY * 2 : 0;
+    return Math.max(Math.max(22, rowHFor(size, 1)), nameH, cellH);
+  };
+  const tallestRowAt = (size: number) => Math.max(0, ...items.map((it) => rowHeightAt(it, size)));
+
+  // Shrink until at least the tallest data row fits under the header (pagination handles the rest).
   let headerH = headerHForTilted(headerSize);
   for (let pass = 0; pass < 40; pass++) {
-    maxLines = maxLinesForItems(items, fontSize);
-    rowH = rowHFor(fontSize, maxLines);
     headerH = headerHForTilted(headerSize);
-    if (headerH + rowH <= tableTop - tableBottom) break;
+    if (headerH + tallestRowAt(fontSize) <= tableTop - tableBottom) break;
     fontSize = Math.max(3.4, fontSize * 0.97);
     headerSize = Math.max(3.0, fontSize * 0.82);
   }
   headerSize = Math.min(10.5, headerSize * 1.1);
   headerH = headerHForTilted(headerSize);
-  maxLines = maxLinesForItems(items, fontSize);
-  rowH = rowHFor(fontSize, maxLines);
   const lineStep = fontSize * 1.12;
   const headerRad = headerAngleFor(headerSize);
   const headerCos = Math.cos(headerRad);
   const headerSin = Math.sin(headerRad);
 
   const bodyAvail = tableTop - tableBottom - headerH;
-  // Each row is only as tall as its own dish name needs (with room for a tick), so one long name
-  // no longer stretches every row and multiplies the page count.
-  const minRowH = Math.max(22, rowHFor(fontSize, 1));
-  const rowHeightFor = (it: (typeof items)[number]) =>
-    Math.min(rowH, Math.max(minRowH, rowHFor(fontSize, maxLinesForItems([it], fontSize))));
+  // Each row is only as tall as its own dish name, notes and cereal / nut names need (with room for a
+  // tick), so one long name no longer stretches every row and multiplies the page count.
+  const rowHeightFor = (it: BuffetMenuItem) => rowHeightAt(it, fontSize);
   const pageChunks: (typeof items)[] = items.length === 0 ? [[]] : [];
   let chunk: typeof items = [];
   let chunkH = 0;
@@ -563,10 +646,9 @@ export async function renderBuffetAllergenMatrixPdf(
 
     for (let r = 0; r < n; r++) {
       const it = pageItems[r]!;
-      const name = it.title.length > 200 ? it.title.slice(0, 197) + "…" : it.title;
       const rowTopY = rowEdges[r]!;
       const rowBotY = rowEdges[r + 1]!;
-      const nameLines = wrapWords(name, body, fontSize, nameColW - namePadX * 2);
+      const nameLines = nameLinesFor(it, fontSize);
       const showLines = nameLines.slice(0, maxNameLines);
       if (nameLines.length > maxNameLines) {
         // Make it obvious the item name continues rather than silently cutting it off.
@@ -581,14 +663,33 @@ export async function renderBuffetAllergenMatrixPdf(
         page.drawText(nl, { x: tableLeft + namePadX, y: ny, size: fontSize, font: body, color: ink });
         ny -= lineStep;
       }
+      const noteSize = noteSizeFor(fontSize);
+      /* The name's last baseline is `ny + lineStep`; drop below its descenders before the first note. */
+      let noteY = ny + lineStep - fontSize * 0.22 - 1.5 - noteSize * 0.95;
+      for (const nl of noteLinesFor(it, fontSize)) {
+        page.drawText(nl, { x: tableLeft + namePadX, y: noteY, size: noteSize, font: body, color: noteInk });
+        noteY -= noteLineStep(fontSize);
+      }
       const rowMidY = (rowTopY + rowBotY) / 2;
-      const cell = Math.min(rowTopY - rowBotY, colW);
-      const iconPt = Math.max(9, Math.min(20, cell * 0.72));
+      const iconPt = tickPtAt(fontSize);
       for (let c = 0; c < ALLERGENS.length; c++) {
         const id = ALLERGENS[c]!.id as AllergenId;
-        if (it.allergens[id]) {
-          const cellCx = tableLeft + nameColW + (c + 0.5) * colW;
+        if (!it.allergens[id]) continue;
+        const cellCx = tableLeft + nameColW + (c + 0.5) * colW;
+        const subLines = cellLabelLinesFor(it, id, fontSize);
+        if (!subLines.length) {
           drawLucideIconStroke(page, lucideCheck, cellCx, rowMidY, iconPt, ink);
+          continue;
+        }
+        /* Tick and its cereal / nut names centre together as one block in the cell. */
+        const subSize = subSizeFor(fontSize);
+        const blockTop = rowMidY + detailBlockH(subLines.length, fontSize) / 2;
+        drawLucideIconStroke(page, lucideCheck, cellCx, blockTop - iconPt / 2, iconPt, ink);
+        let sy = blockTop - iconPt - 1.5 - subSize * 0.8;
+        for (const sl of subLines) {
+          const sw = bodyBold.widthOfTextAtSize(sl, subSize);
+          page.drawText(sl, { x: cellCx - sw / 2, y: sy, size: subSize, font: bodyBold, color: ink });
+          sy -= subLineStep(fontSize);
         }
       }
     }
