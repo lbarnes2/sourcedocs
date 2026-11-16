@@ -199,6 +199,10 @@ export interface EventProjectFile {
   setMenu?: SetMenu;
   /** Older saves omit this. */
   tableCard?: TableCardSettings;
+  /** The guest list as last imported from a file, so a re-upload can tell manual edits from file changes. */
+  importedGuests?: GuestRecord[];
+  /** Optional capacity used to flag over-full tables while editing. */
+  seatsPerTable?: number | null;
   selectedDocuments: DocumentType[];
   bundleMode: "single" | "zip";
   profileName: string;

@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
-import { Download, FileSpreadsheet, FolderOpen, Save, Trash2, X } from "lucide-react";
+import { Download, FileSpreadsheet, FolderOpen, Plus, Save, Trash2, X } from "lucide-react";
 import { PreviewPanel } from "@/app/banqueting/PreviewPanel";
+import { ReuploadReview } from "@/app/banqueting/ReuploadReview";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import {
   Callout,
@@ -35,6 +36,8 @@ import { applyDishShortOverridesToGuests, rewriteDishWithShortOverride } from "@
 import { buildKitchenSummary, kitchenSummaryToRows } from "@/lib/docs/kitchenSummary";
 import { buildEventModel } from "@/lib/event/model";
 import { splitFullName } from "@/lib/event/surname";
+import { compareTables, formatTableLabel } from "@/lib/event/tableLabel";
+import { planReupload } from "@/lib/guests/reupload";
 import { applySetMenu, emptySetMenu } from "@/lib/event/setMenu";
 import { readResponseError } from "@/lib/http/readError";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
@@ -225,6 +228,16 @@ export default function HomePage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<ColumnMapping>({});
   const [guests, setGuests] = useState<GuestRecord[]>([]);
+  /** The guest list as last imported from a file: lets a re-upload tell manual edits from file changes. */
+  const [importedGuests, setImportedGuests] = useState<GuestRecord[]>([]);
+  /** A revised file waiting for review before it is merged into the edited list. */
+  const [reupload, setReupload] = useState<{
+    next: GuestRecord[];
+    fileIssues: Array<{ severity: string; message: string; code?: string }>;
+  } | null>(null);
+  /** Last-minute edits: show one table at a time (null = everyone). */
+  const [tableFilter, setTableFilter] = useState<string | null>(null);
+  const [seatsPerTable, setSeatsPerTable] = useState<number | null>(null);
   const [issues, setIssues] = useState<Array<{ severity: string; message: string; code?: string }>>([]);
   const [error, setError] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -410,6 +423,10 @@ export default function HomePage() {
     setHeaders(file.headers);
     setMapping(file.mapping);
     setGuests(file.guests);
+    setImportedGuests(file.importedGuests ?? []);
+    setSeatsPerTable(file.seatsPerTable ?? null);
+    setTableFilter(null);
+    setReupload(null);
     setIssues(file.issues);
     setTheme({ ...defaultThemeSettings, ...file.theme });
     setTablePlan({ ...defaultTablePlanSettings, ...file.tablePlan });
@@ -478,6 +495,8 @@ export default function HomePage() {
         headers,
         mapping,
         guests,
+        importedGuests,
+        seatsPerTable,
         issues,
         theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
         tablePlan,
@@ -639,9 +658,8 @@ export default function HomePage() {
       const parsed = parseCsvClient(text);
       setHasAttemptedPreviewValidate(false);
       setExportUnlocked(false);
-      // The previous file's guests, edits and warnings don't belong to this one.
-      setGuests([]);
-      setIssues([]);
+      // Guests already on the page stay: checking the new file compares it with them and
+      // offers a review, so edits made by hand aren't thrown away by a revised list.
       setExportWarnings([]);
       setGuestFileVersion((version) => version + 1);
       setCsvText(text);
@@ -675,18 +693,25 @@ export default function HomePage() {
       if (!response.ok) throw new Error(await readResponseError(response, "Failed to preview"));
       const payload = await response.json();
       const nextGuests: GuestRecord[] = payload.guests ?? [];
-      if (
-        guests.length > 0 &&
-        JSON.stringify(guests) !== JSON.stringify(nextGuests) &&
-        !window.confirm(
-          "Re-validating rebuilds the guest list from the uploaded file. Any last-minute edits below (names, tables, dishes, dietary) will be lost. Continue?"
-        )
-      ) {
+      const fileIssues: Array<{ severity: string; message: string; code?: string }> = payload.validation?.issues ?? [];
+      if (guests.length === 0) {
+        // First import: the file is the guest list.
+        setGuests(nextGuests);
+        setImportedGuests(nextGuests);
+        setIssues(fileIssues);
+        setExportUnlocked(nextGuests.length > 0);
         return;
       }
-      setGuests(nextGuests);
-      setIssues(payload.validation?.issues ?? []);
-      setExportUnlocked(nextGuests.length > 0);
+      // There is already a list (possibly edited by hand): merge rather than replace.
+      const baseline = importedGuests.length ? importedGuests : guests;
+      if (planReupload(baseline, guests, nextGuests).unchanged) {
+        // Nothing in the file changed, so every manual edit simply stays.
+        if (!importedGuests.length) setImportedGuests(guests);
+        setIssues(issuesAfterEdits(guests, fileIssues));
+        setExportUnlocked(true);
+        return;
+      }
+      setReupload({ next: nextGuests, fileIssues });
     } catch (previewError) {
       setExportUnlocked(false);
       setError(previewError instanceof Error ? previewError.message : "Preview failed.");
@@ -694,6 +719,47 @@ export default function HomePage() {
       setHasAttemptedPreviewValidate(true);
       setLoadingPreview(false);
     }
+  }
+
+  /** File-level notices (skipped / uneven rows) plus a fresh check of the guests as they stand now. */
+  function issuesAfterEdits(
+    list: GuestRecord[],
+    fileIssues: Array<{ severity: string; message: string; code?: string }>
+  ): Array<{ severity: string; message: string; code?: string }> {
+    const requiredCourses = (["starter", "main", "dessert"] as const).filter((course) => Boolean(mapping[course]));
+    const recheck = validateGuests(
+      applySetMenu(list, setMenu).map((guest) => ({ ...guest, tableNumber: guest.tableNumber.trim(), name: guest.name.trim() })),
+      { requiredCourses }
+    );
+    return [
+      ...fileIssues.filter((issue) => issue.code === "skipped_row" || issue.code === "ragged_row"),
+      ...recheck.issues
+    ];
+  }
+
+  function addGuest() {
+    // New guests join the table being viewed, or the last guest's table.
+    const table = tableFilter ?? guests[guests.length - 1]?.tableNumber ?? "";
+    setGuests((previous) => [
+      ...previous,
+      {
+        id: `added-${crypto.randomUUID()}`,
+        tableNumber: table,
+        name: "",
+        starter: "",
+        main: "",
+        dessert: "",
+        dietaryOriginal: "",
+        dietaryNormalized: []
+      }
+    ]);
+  }
+
+  function removeGuest(id: string) {
+    const guest = guests.find((entry) => entry.id === id);
+    if (!guest) return;
+    if (guest.name.trim() && !window.confirm(`Remove ${guest.name.trim()} from the guest list?`)) return;
+    setGuests((previous) => previous.filter((entry) => entry.id !== id));
   }
 
   async function saveCurrentProfile() {
@@ -1011,6 +1077,17 @@ export default function HomePage() {
 
   /** The live preview appears once there is a checked guest list to draw. */
   const showPreview = exportUnlocked && guests.length > 0;
+  /** Guests per table, in print order, for the headcount strip. */
+  const tableCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    guests.forEach((guest) => {
+      const table = guest.tableNumber.trim();
+      counts.set(table, (counts.get(table) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : compareTables(a, b)));
+  }, [guests]);
+  const activeTableFilter = tableFilter !== null && tableCounts.some(([table]) => table === tableFilter) ? tableFilter : null;
+  const overfullTables = seatsPerTable ? tableCounts.filter(([, count]) => count > seatsPerTable).length : 0;
   const sortBySurname = tablePlanByPerson.sortBy === "surname" && selectedDocuments.includes("tablePlanByPerson");
   const columns = canonicalColumns();
   const mappedCount = columns.filter((column) => Boolean(mapping[column])).length;
@@ -1365,6 +1442,73 @@ export default function HomePage() {
             ) : null}
             {guests.length > 0 ? (
               <Disclosure label={`Last-minute edits (${guests.length} guests)`}>
+                <div className="stack stack--sm">
+                  <div className="headcount" role="group" aria-label="Guests per table">
+                    <button
+                      type="button"
+                      className={activeTableFilter === null ? "headcount-chip headcount-chip--on" : "headcount-chip"}
+                      aria-pressed={activeTableFilter === null}
+                      onClick={() => setTableFilter(null)}
+                    >
+                      All <span className="headcount-chip-count">{guests.length}</span>
+                    </button>
+                    {tableCounts.map(([table, count]) => {
+                      const over = Boolean(seatsPerTable && count > seatsPerTable);
+                      const on = activeTableFilter === table;
+                      return (
+                        <button
+                          key={table || "__none__"}
+                          type="button"
+                          className={`headcount-chip${on ? " headcount-chip--on" : ""}${over || !table ? " headcount-chip--over" : ""}`}
+                          aria-pressed={on}
+                          title={
+                            !table
+                              ? "Guests with no table"
+                              : over
+                                ? `${count} guests for ${seatsPerTable} seats`
+                                : `Show only ${formatTableLabel(table)}`
+                          }
+                          onClick={() => setTableFilter(on ? null : table)}
+                        >
+                          {table ? formatTableLabel(table) : "No table"} <span className="headcount-chip-count">{count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="guest-edit-bar">
+                    <label>
+                      Seats per table
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        className="input-narrow"
+                        placeholder="—"
+                        value={seatsPerTable ?? ""}
+                        onChange={(event) =>
+                          setSeatsPerTable(event.target.value ? clampInt(event.target.value, 1, 500) : null)
+                        }
+                      />
+                      <span className="field-hint">
+                        {seatsPerTable
+                          ? overfullTables
+                            ? `${overfullTables} table${overfullTables === 1 ? " is" : "s are"} over (shown in red)`
+                            : "no table is over"
+                          : "optional — flags over-full tables"}
+                      </span>
+                    </label>
+                    <button type="button" className="btn-sm" onClick={addGuest}>
+                      <Plus size={14} aria-hidden /> Add guest{activeTableFilter ? ` to ${formatTableLabel(activeTableFilter)}` : ""}
+                    </button>
+                  </div>
+                  <datalist id="guest-table-options">
+                    {tableCounts
+                      .filter(([table]) => table)
+                      .map(([table]) => (
+                        <option key={table} value={table} />
+                      ))}
+                  </datalist>
+                </div>
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -1374,15 +1518,18 @@ export default function HomePage() {
                         ))}
                         {sortBySurname ? <th>Surname (A–Z)</th> : null}
                         <th>Dietary</th>
+                        <th aria-label="Remove" />
                       </tr>
                     </thead>
                     <tbody>
-                      {guests.map((guest, guestIndex) => (
+                      {guests.map((guest, guestIndex) =>
+                        activeTableFilter !== null && guest.tableNumber.trim() !== activeTableFilter ? null : (
                         <tr key={guest.id}>
                           {guestColumns.map((column) => (
                             <td key={column.key}>
                               <input
                                 value={guest[column.key]}
+                                list={column.key === "tableNumber" ? "guest-table-options" : undefined}
                                 placeholder={
                                   column.key === "starter" || column.key === "main" || column.key === "dessert"
                                     ? setMenu[column.key]
@@ -1415,8 +1562,20 @@ export default function HomePage() {
                               }
                             />
                           </td>
+                          <td className="guest-row-actions">
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--sm btn-danger"
+                              aria-label={`Remove ${guest.name || `guest ${guestIndex + 1}`}`}
+                              title="Remove guest"
+                              onClick={() => removeGuest(guest.id)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
                         </tr>
-                      ))}
+                        )
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1841,6 +2000,26 @@ export default function HomePage() {
           )
         ) : null}
       </Section>
+
+      {reupload ? (
+        <ReuploadReview
+          baseline={importedGuests.length ? importedGuests : guests}
+          current={guests}
+          next={reupload.next}
+          onCancel={() => {
+            setReupload(null);
+            setExportUnlocked(guests.length > 0);
+          }}
+          onApply={(result) => {
+            setGuests(result.guests);
+            setImportedGuests(result.baseline);
+            setIssues(issuesAfterEdits(result.guests, reupload.fileIssues));
+            setExportUnlocked(result.guests.length > 0);
+            setTableFilter(null);
+            setReupload(null);
+          }}
+        />
+      ) : null}
 
       {profileSaveOpen ? (
         <Modal
