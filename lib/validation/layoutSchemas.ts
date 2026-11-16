@@ -17,7 +17,38 @@ export const tablePlanSchema = z.object({
 
 /** By-person list: `tablesPerSheet` means rows per page there, so it needs a much higher ceiling. */
 export const tablePlanByPersonSchema = tablePlanSchema.extend({
-  tablesPerSheet: z.number().int().min(1).max(500)
+  tablesPerSheet: z.number().int().min(1).max(500),
+  sortBy: z.enum(["firstName", "surname"]).optional()
+});
+
+export const tableCardSchema = z.object({
+  showGuests: z.boolean(),
+  showEventName: z.boolean()
+});
+
+/** Every banqueting document the generator can make. */
+export const documentTypeSchema = z.enum([
+  "tablePlanByTable",
+  "tablePlanByPerson",
+  "placeCards",
+  "menuBooklet",
+  "servicePlan",
+  "tableCards",
+  "kitchenSummary",
+  "floorplan"
+]);
+
+/** One guest as sent to the generator or stored in a project. */
+export const guestRecordSchema = z.object({
+  id: z.string().max(500),
+  tableNumber: z.string().max(200),
+  name: z.string().max(500),
+  lastName: z.string().max(500).optional(),
+  starter: z.string().max(2000),
+  main: z.string().max(2000),
+  dessert: z.string().max(2000),
+  dietaryOriginal: z.string().max(4000),
+  dietaryNormalized: z.array(z.string().max(4000))
 });
 
 export const placeCardSchema = z.object({

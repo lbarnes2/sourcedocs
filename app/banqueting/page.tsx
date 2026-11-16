@@ -26,10 +26,14 @@ import {
   defaultFloorplanSettings,
   defaultMenuBookletSettings,
   defaultPlaceCardSettings,
+  defaultTableCardSettings,
   defaultTablePlanSettings,
   defaultThemeSettings
 } from "@/lib/defaults";
-import { rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { applyDishShortOverridesToGuests, rewriteDishWithShortOverride } from "@/lib/dish/applyOverrides";
+import { buildKitchenSummary, kitchenSummaryToRows } from "@/lib/docs/kitchenSummary";
+import { buildEventModel } from "@/lib/event/model";
+import { splitFullName } from "@/lib/event/surname";
 import { applySetMenu, emptySetMenu } from "@/lib/event/setMenu";
 import { readResponseError } from "@/lib/http/readError";
 import { PAPER_SIZE_OPTIONS } from "@/lib/paperSizes";
@@ -53,7 +57,9 @@ const DOCUMENTS: Array<{ id: DocumentType; label: string; description: string }>
   { id: "tablePlanByPerson", label: "Table plan · by person", description: "A–Z guest list with table numbers" },
   { id: "placeCards", label: "Place cards", description: "Six per sheet, with logo backs" },
   { id: "menuBooklet", label: "Menu card", description: "Two A4 landscape sheets, half-page layout" },
-  { id: "servicePlan", label: "Service plan", description: "Dish totals by table, dietary highlighted" }
+  { id: "servicePlan", label: "Service plan", description: "Dish totals by table, dietary highlighted" },
+  { id: "tableCards", label: "Table cards", description: "A4 tent card per table, with its guests" },
+  { id: "kitchenSummary", label: "Kitchen summary", description: "Dish totals and a table-by-dish grid on one sheet" }
 ];
 
 const COLUMN_LABELS: Record<string, string> = {
@@ -85,6 +91,8 @@ const DOCUMENT_IMAGE_BASENAMES: Record<DocumentType, string> = {
   placeCards: "place-cards",
   menuBooklet: "menu-booklet",
   servicePlan: "service-plan",
+  tableCards: "table-cards",
+  kitchenSummary: "kitchen-summary",
   floorplan: "floorplan"
 };
 
@@ -229,6 +237,7 @@ export default function HomePage() {
   const [placeCard, setPlaceCard] = useState({ ...defaultPlaceCardSettings });
   const [menuBooklet, setMenuBooklet] = useState({ ...defaultMenuBookletSettings });
   const [floorplan, setFloorplan] = useState({ ...defaultFloorplanSettings });
+  const [tableCard, setTableCard] = useState({ ...defaultTableCardSettings });
   const [dishNameOverrides, setDishNameOverrides] = useState<Record<string, DishNameOverride>>({});
   const [dishMenuDuplicateGroups, setDishMenuDuplicateGroups] = useState<
     Array<DishMenuDuplicateGroup & { id: string }>
@@ -410,6 +419,7 @@ export default function HomePage() {
     setPlaceCard({ ...defaultPlaceCardSettings, ...file.placeCard });
     setMenuBooklet({ ...defaultMenuBookletSettings, ...file.menuBooklet });
     setFloorplan({ ...defaultFloorplanSettings, ...file.floorplan });
+    setTableCard({ ...defaultTableCardSettings, ...file.tableCard });
     setDishNameOverrides(file.dishNameOverrides ?? {});
     setDishMenuDuplicateGroups(file.dishMenuDuplicateGroups ?? []);
     setMenuMergePick([]);
@@ -474,6 +484,7 @@ export default function HomePage() {
         placeCard,
         menuBooklet,
         floorplan,
+        tableCard,
         dishNameOverrides,
         dishMenuDuplicateGroups,
         normalizeGuestNamesToTitleCase,
@@ -839,6 +850,7 @@ export default function HomePage() {
         placeCard,
         menuBooklet,
         floorplan,
+        tableCard,
         dishNameOverrides,
         dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
           canonical,
@@ -903,6 +915,19 @@ export default function HomePage() {
     }
   }
 
+  /** The kitchen summary numbers as a spreadsheet, using the same short dish names as the PDFs. */
+  function downloadKitchenCsv() {
+    const model = buildEventModel(
+      applyDishShortOverridesToGuests(
+        effectiveGuests.map((guest) => ({ ...guest, tableNumber: guest.tableNumber.trim(), name: guest.name.trim() })),
+        dishNameOverrides
+      )
+    );
+    const csv = Papa.unparse(kitchenSummaryToRows(buildKitchenSummary(model)));
+    // The BOM makes Excel read accented names correctly.
+    downloadBlob(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }), `${exportBaseName(theme.eventName)}-kitchen-summary.csv`);
+  }
+
   function updateGuest(index: number, patch: Partial<GuestRecord>) {
     setGuests((previous) => {
       const next = previous.slice();
@@ -923,6 +948,7 @@ export default function HomePage() {
         tablePlanByPerson,
         placeCard,
         menuBooklet,
+        tableCard,
         dishNameOverrides,
         dishMenuDuplicateGroups,
         normalizeGuestNamesToTitleCase,
@@ -939,6 +965,7 @@ export default function HomePage() {
       tablePlanByPerson,
       placeCard,
       menuBooklet,
+      tableCard,
       dishNameOverrides,
       dishMenuDuplicateGroups,
       normalizeGuestNamesToTitleCase,
@@ -979,6 +1006,7 @@ export default function HomePage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  const sortBySurname = tablePlanByPerson.sortBy === "surname" && selectedDocuments.includes("tablePlanByPerson");
   const columns = canonicalColumns();
   const mappedCount = columns.filter((column) => Boolean(mapping[column])).length;
   const errorCount = issues.filter((issue) => issue.severity === "error").length;
@@ -1337,6 +1365,7 @@ export default function HomePage() {
                         {guestColumns.map((column) => (
                           <th key={column.key}>{column.label}</th>
                         ))}
+                        {sortBySurname ? <th>Surname (A–Z)</th> : null}
                         <th>Dietary</th>
                       </tr>
                     </thead>
@@ -1357,6 +1386,16 @@ export default function HomePage() {
                               />
                             </td>
                           ))}
+                          {sortBySurname ? (
+                            <td>
+                              <input
+                                value={guest.lastName ?? ""}
+                                placeholder={splitFullName(guest.name).surname}
+                                aria-label={`Surname for ${guest.name || `guest ${guestIndex + 1}`}`}
+                                onChange={(event) => updateGuest(guestIndex, { lastName: event.target.value || undefined })}
+                              />
+                            </td>
+                          ) : null}
                           <td>
                             <input
                               value={guest.dietaryOriginal}
@@ -1503,6 +1542,24 @@ export default function HomePage() {
                   onChange={(value) => setTablePlanByPerson((previous) => ({ ...previous, orientation: value }))}
                 />
               </Field>
+              <Field
+                label="Sort by"
+                as="div"
+                hint={
+                  tablePlanByPerson.sortBy === "surname"
+                    ? "Prints “Surname, First name” under A–Z letter headings. Fix any surname guessed wrongly in Last-minute edits."
+                    : undefined
+                }
+              >
+                <Segmented
+                  value={tablePlanByPerson.sortBy ?? "firstName"}
+                  options={[
+                    { value: "firstName" as const, label: "First name" },
+                    { value: "surname" as const, label: "Surname" }
+                  ]}
+                  onChange={(value) => setTablePlanByPerson((previous) => ({ ...previous, sortBy: value }))}
+                />
+              </Field>
               <Field label="Rows per page" as="div">
                 <div className="row">
                   <Segmented
@@ -1529,6 +1586,24 @@ export default function HomePage() {
                   ) : null}
                 </div>
               </Field>
+            </div>
+            <div className="inset stack span-all">
+              <h3 style={{ margin: 0 }}>Table cards</h3>
+              <p className="field-hint" style={{ margin: 0 }}>
+                One A4 sheet per table. Fold it in half along the dashed line and it stands as a tent, with the table
+                on both sides.
+              </p>
+              <Switch
+                checked={tableCard.showGuests}
+                onChange={(checked) => setTableCard((previous) => ({ ...previous, showGuests: checked }))}
+                label="List the table's guests"
+                hint="Turn off for a card with just the table number or name."
+              />
+              <Switch
+                checked={tableCard.showEventName}
+                onChange={(checked) => setTableCard((previous) => ({ ...previous, showEventName: checked }))}
+                label="Show the event name"
+              />
             </div>
             <p className="field-hint span-all" style={{ margin: 0 }}>
               Floorplans have their own tool now — see{" "}
@@ -1870,7 +1945,11 @@ export default function HomePage() {
               </>
             ) : !exportUnlocked ? (
               <span className="text-muted text-sm">Check the guest list (step 1) to enable downloads.</span>
-            ) : null}
+            ) : (
+              <button type="button" className="btn-sm" onClick={downloadKitchenCsv} title="Dish totals and the table-by-dish grid as a spreadsheet">
+                <FileSpreadsheet size={14} aria-hidden /> Kitchen summary CSV
+              </button>
+            )}
           </div>
           <button
             type="button"
