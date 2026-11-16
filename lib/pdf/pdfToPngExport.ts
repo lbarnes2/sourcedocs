@@ -92,3 +92,32 @@ async function zipPngPages(pages: PdfPngPage[]): Promise<Blob> {
   }
   return zip.generateAsync({ type: "blob" });
 }
+
+/** Renders one page of a PDF to a PNG (for on-screen previews); also reports how many pages there are. */
+export async function renderPdfPageToPng(
+  pdfBlob: Blob,
+  pageNumber: number,
+  scale = 1.5
+): Promise<{ blob: Blob; pageCount: number; pageNumber: number }> {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(await pdfBlob.arrayBuffer()) }).promise;
+  try {
+    const wanted = Math.max(1, Math.min(pdf.numPages, pageNumber));
+    const page = await pdf.getPage(wanted);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas rendering is unavailable in this browser.");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    const blob = await canvasToPngBlob(canvas);
+    page.cleanup();
+    return { blob, pageCount: pdf.numPages, pageNumber: wanted };
+  } finally {
+    await pdf.destroy();
+  }
+}

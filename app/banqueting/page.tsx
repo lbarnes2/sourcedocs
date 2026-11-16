@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import { Download, FileSpreadsheet, FolderOpen, Save, Trash2, X } from "lucide-react";
+import { PreviewPanel } from "@/app/banqueting/PreviewPanel";
 import { LogoPicker } from "@/app/components/LogoPicker";
 import {
   Callout,
@@ -788,6 +789,31 @@ export default function HomePage() {
     setError("");
   }
 
+  /** The /api/generate request for the current guest list and settings. */
+  const buildGenerateBody = (documents: DocumentType[], requestedBundleMode: "single" | "zip") => ({
+    mode: "generate",
+    guests: effectiveGuests,
+    request: {
+      documents,
+      bundleMode: requestedBundleMode,
+      theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
+      clientLogoKey: selectedClientLogoKey,
+      venueLogoKey: selectedVenueLogoKey,
+      tablePlan,
+      tablePlanByPerson,
+      placeCard,
+      menuBooklet,
+      floorplan,
+      tableCard,
+      dishNameOverrides,
+      dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
+        canonical,
+        match
+      })),
+      normalizeGuestNamesToTitleCase
+    }
+  });
+
   async function exportDocuments() {
     if (!guests.length) {
       setError("Run preview and validation before export.");
@@ -836,29 +862,6 @@ export default function HomePage() {
         return Math.min(progressCap, previous + delta);
       });
     }, progressStepMs);
-    const buildGenerateBody = (documents: DocumentType[], requestedBundleMode: "single" | "zip") => ({
-      mode: "generate",
-      guests: effectiveGuests,
-      request: {
-        documents,
-        bundleMode: requestedBundleMode,
-        theme: themeForRequest(theme, selectedClientLogoKey, selectedVenueLogoKey),
-        clientLogoKey: selectedClientLogoKey,
-        venueLogoKey: selectedVenueLogoKey,
-        tablePlan,
-        tablePlanByPerson,
-        placeCard,
-        menuBooklet,
-        floorplan,
-        tableCard,
-        dishNameOverrides,
-        dishMenuDuplicateGroups: dishMenuDuplicateGroups.map(({ canonical, match }) => ({
-          canonical,
-          match
-        })),
-        normalizeGuestNamesToTitleCase
-      }
-    });
     const fetchGeneratedPdf = async (documentType: DocumentType): Promise<Blob> => {
       const response = await fetch("/api/generate", {
         method: "POST",
@@ -1006,6 +1009,8 @@ export default function HomePage() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  /** The live preview appears once there is a checked guest list to draw. */
+  const showPreview = exportUnlocked && guests.length > 0;
   const sortBySurname = tablePlanByPerson.sortBy === "surname" && selectedDocuments.includes("tablePlanByPerson");
   const columns = canonicalColumns();
   const mappedCount = columns.filter((column) => Boolean(mapping[column])).length;
@@ -1029,7 +1034,7 @@ export default function HomePage() {
   ];
 
   return (
-    <main className="page">
+    <main className={showPreview ? "page page--with-preview" : "page"}>
       <PageHeader
         title="Banqueting documents"
         description="Upload a guest list, check it, then print table plans, place cards, menus and service plans."
@@ -1132,6 +1137,8 @@ export default function HomePage() {
         </Modal>
       ) : null}
 
+      <div className={showPreview ? "banq-layout banq-layout--preview" : "banq-layout"}>
+      <div className="banq-main">
       {/* 1 — Guest list */}
       <Section step={1} title="Guest list" description="CSV or Excel. Excel workbooks use the first sheet only.">
         <div className="stack">
@@ -1963,6 +1970,12 @@ export default function HomePage() {
           </button>
         </div>
       </Section>
+
+      </div>
+      {showPreview ? (
+        <PreviewPanel documents={DOCUMENTS} buildBody={(documentType) => JSON.stringify(buildGenerateBody([documentType], "single"))} />
+      ) : null}
+      </div>
 
       {exportWarnings.length > 0 ? (
         <Callout tone="warning">
