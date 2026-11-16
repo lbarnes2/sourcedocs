@@ -16,6 +16,7 @@ import {
   menuBookletSchema,
   documentTypeSchema,
   guestRecordSchema,
+  menuCardLayoutSchema,
   placeCardSchema,
   tableCardSchema,
   tablePlanByPersonSchema,
@@ -61,6 +62,7 @@ const generateSchema = z.object({
     menuBooklet: menuBookletSchema,
     floorplan: floorplanSchema,
     tableCard: tableCardSchema.optional(),
+    menuCard: menuCardLayoutSchema.optional(),
     dishNameOverrides: z
       .record(
         z.string(),
@@ -206,6 +208,7 @@ export async function POST(request: Request) {
           menuBooklet: parsed.request.menuBooklet,
           floorplan: parsed.request.floorplan,
           tableCard: parsed.request.tableCard,
+          menuCard: parsed.request.menuCard,
           theme,
           menuLongNames,
           dishMenuDuplicateGroups,

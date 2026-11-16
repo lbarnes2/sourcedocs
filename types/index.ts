@@ -107,6 +107,17 @@ export interface FloorplanSettings {
   startCorner: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 }
 
+export type MenuCourseKey = "starter" | "main" | "dessert";
+export type MenuDietaryKey = "v" | "ve" | "gf";
+
+/** Event-specific menu card arrangement: dish order per course and dietary keys per dish. */
+export interface MenuCardLayout {
+  /** Dish names (as they print before long names are applied) in the order to list them. */
+  order: Record<MenuCourseKey, string[]>;
+  /** Dietary keys printed after a dish, e.g. "(v)". */
+  keys: Record<string, MenuDietaryKey[]>;
+}
+
 /** Courses for every guest when the guest list doesn't carry choices (e.g. a 1-1-1 set menu). */
 export interface SetMenu {
   starter: string;
@@ -158,6 +169,7 @@ export interface GenerationRequest {
   menuBooklet: MenuBookletSettings;
   floorplan: FloorplanSettings;
   tableCard?: TableCardSettings;
+  menuCard?: MenuCardLayout;
   dishNameOverrides?: Record<string, DishNameOverride>;
   /** Merge exact dish strings (as they appear after short overrides) into one menu line. */
   dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -199,6 +211,8 @@ export interface EventProjectFile {
   setMenu?: SetMenu;
   /** Older saves omit this. */
   tableCard?: TableCardSettings;
+  /** Older saves omit this. */
+  menuCard?: MenuCardLayout;
   /** The guest list as last imported from a file, so a re-upload can tell manual edits from file changes. */
   importedGuests?: GuestRecord[];
   /** Optional capacity used to flag over-full tables while editing. */

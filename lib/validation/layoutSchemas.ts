@@ -26,6 +26,12 @@ export const tableCardSchema = z.object({
   showEventName: z.boolean()
 });
 
+const menuOrderList = z.array(z.string().max(2000)).max(500);
+export const menuCardLayoutSchema = z.object({
+  order: z.object({ starter: menuOrderList, main: menuOrderList, dessert: menuOrderList }),
+  keys: z.record(z.string().max(2000), z.array(z.enum(["v", "ve", "gf"])).max(3))
+});
+
 /** Every banqueting document the generator can make. */
 export const documentTypeSchema = z.enum([
   "tablePlanByTable",
