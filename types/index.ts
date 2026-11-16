@@ -18,6 +18,8 @@ export interface GuestRecord {
   id: string;
   tableNumber: string;
   name: string;
+  /** Surname for A–Z sorting, when the guest list has a last-name column or it was typed by hand. */
+  lastName?: string;
   starter: string;
   main: string;
   dessert: string;
@@ -60,6 +62,14 @@ export interface TablePlanSettings {
   tablesPerSheetMode: "auto" | "manual";
   tablesPerSheet: number;
   minFontSizePt: number;
+  /** By-person list only: A–Z by first name (default) or by surname with letter headings. */
+  sortBy?: "firstName" | "surname";
+}
+
+/** Fold-in-half A4 tent card, one per table. */
+export interface TableCardSettings {
+  showGuests: boolean;
+  showEventName: boolean;
 }
 
 export interface PlaceCardSettings {
@@ -133,6 +143,8 @@ export type DocumentType =
   | "placeCards"
   | "menuBooklet"
   | "servicePlan"
+  | "tableCards"
+  | "kitchenSummary"
   | "floorplan";
 
 export interface GenerationRequest {
@@ -145,6 +157,7 @@ export interface GenerationRequest {
   placeCard: PlaceCardSettings;
   menuBooklet: MenuBookletSettings;
   floorplan: FloorplanSettings;
+  tableCard?: TableCardSettings;
   dishNameOverrides?: Record<string, DishNameOverride>;
   /** Merge exact dish strings (as they appear after short overrides) into one menu line. */
   dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -184,6 +197,8 @@ export interface EventProjectFile {
   normalizeGuestNamesToTitleCase: boolean;
   /** Older saves omit this. */
   setMenu?: SetMenu;
+  /** Older saves omit this. */
+  tableCard?: TableCardSettings;
   selectedDocuments: DocumentType[];
   bundleMode: "single" | "zip";
   profileName: string;

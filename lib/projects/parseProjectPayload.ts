@@ -6,7 +6,10 @@ import { validateDishOverrideShortNameUniqueness } from "@/lib/dish/overrideConf
 import {
   floorplanSchema,
   menuBookletSchema,
+  documentTypeSchema,
+  guestRecordSchema,
   placeCardSchema,
+  tableCardSchema,
   tablePlanByPersonSchema,
   tablePlanSchema,
   themeSchema
@@ -16,26 +19,6 @@ import { isValidProjectUuid } from "@/lib/projects/projectKeys";
 
 /** Same rule the storage layer enforces, so bad ids fail validation with a clear message. */
 const projectIdSchema = z.string().refine(isValidProjectUuid, "Invalid project id (expected a v1–v5 UUID).");
-
-const documentTypeSchema = z.enum([
-  "tablePlanByTable",
-  "tablePlanByPerson",
-  "placeCards",
-  "menuBooklet",
-  "servicePlan",
-  "floorplan"
-]);
-
-const guestRecordSchema = z.object({
-  id: z.string().max(500),
-  tableNumber: z.string().max(200),
-  name: z.string().max(500),
-  starter: z.string().max(2000),
-  main: z.string().max(2000),
-  dessert: z.string().max(2000),
-  dietaryOriginal: z.string().max(4000),
-  dietaryNormalized: z.array(z.string().max(4000))
-});
 
 const dishOverrideSchema = z.object({
   shortName: z.string().max(2000),
@@ -70,6 +53,7 @@ const savePayloadBaseSchema = z.object({
   setMenu: z
     .object({ starter: z.string().max(2000), main: z.string().max(2000), dessert: z.string().max(2000) })
     .optional(),
+  tableCard: tableCardSchema.optional(),
   selectedDocuments: z.array(documentTypeSchema),
   bundleMode: z.enum(["single", "zip"]),
   profileName: z.string().max(200),
@@ -116,6 +100,7 @@ export function buildEventProjectFileFromSavePayload(payload: unknown): EventPro
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,
     setMenu: parsed.setMenu,
+    tableCard: parsed.tableCard,
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,
@@ -172,6 +157,7 @@ export function parseStoredEventProjectFile(raw: unknown): EventProjectFile {
     dishMenuDuplicateGroups: parsed.dishMenuDuplicateGroups,
     normalizeGuestNamesToTitleCase: parsed.normalizeGuestNamesToTitleCase,
     setMenu: parsed.setMenu,
+    tableCard: parsed.tableCard,
     selectedDocuments: parsed.selectedDocuments,
     bundleMode: parsed.bundleMode,
     profileName: parsed.profileName,

@@ -6,6 +6,7 @@ import type {
   PlaceCardSettings,
   ProfileSettings,
   SignageThemeColors,
+  TableCardSettings,
   TablePlanSettings,
   ThemeSettings
 } from "@/types";
@@ -47,6 +48,11 @@ export const defaultPlaceCardSettings: PlaceCardSettings = {
   showTable: true,
   showMenu: true,
   showDietary: true
+};
+
+export const defaultTableCardSettings: TableCardSettings = {
+  showGuests: true,
+  showEventName: true
 };
 
 export const defaultMenuBookletSettings: MenuBookletSettings = {

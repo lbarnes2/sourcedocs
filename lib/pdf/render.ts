@@ -12,9 +12,13 @@ import type {
   FloorplanSettings,
   MenuBookletSettings,
   PlaceCardSettings,
+  TableCardSettings,
   TablePlanSettings,
   ThemeSettings
 } from "@/types";
+import { defaultTableCardSettings } from "@/lib/defaults";
+import { buildKitchenSummary } from "@/lib/docs/kitchenSummary";
+import { tablesInOrder } from "@/lib/event/model";
 import { buildFloorplanPlacedCells } from "@/lib/docs/floorplanLayout";
 import { sortedTableNumbers } from "@/lib/event/model";
 import { buildByPersonDocument } from "@/lib/docs/byPerson";
@@ -537,9 +541,25 @@ export async function renderTablePlanByPersonPdf(
     : rowsThatFit;
   // Fewer rows get taller rows (up to a point) so the list still fills the page comfortably.
   const rowHeight = manualRows ? Math.min(34, (usableTableHeight - headerRowHeight) / rowsPerColumn) : 20;
-  const people = buildByPersonDocument(model).people;
+  const people = buildByPersonDocument(model, settings.sortBy ?? "firstName").people;
   const rowsPerPage = rowsPerColumn * columns;
-  const pages = chunk(people, rowsPerPage);
+  // Rows are guests plus, when sorting by surname, a heading row at the start of each letter.
+  type PersonRow =
+    | { kind: "person"; name: string; tableNumber: string }
+    | { kind: "letter"; letter: string }
+    | { kind: "blank" };
+  const rows: PersonRow[] = [];
+  let currentLetter: string | undefined;
+  people.forEach((person) => {
+    if (person.letter && person.letter !== currentLetter) {
+      currentLetter = person.letter;
+      // Never leave a letter heading alone at the foot of a column.
+      if (rowsPerColumn > 1 && rows.length % rowsPerColumn === rowsPerColumn - 1) rows.push({ kind: "blank" });
+      rows.push({ kind: "letter", letter: person.letter });
+    }
+    rows.push({ kind: "person", name: person.name, tableNumber: person.tableNumber });
+  });
+  const pages = chunk(rows, rowsPerPage);
   const titleColor = inkOnWhite(theme.primaryColor, "#012f43");
   const accentColor = hexToRgb(theme.accentColor, "#acc1cb");
   const onAccent = textOnColor(theme.accentColor, "#acc1cb");
@@ -651,6 +671,26 @@ export async function renderTablePlanByPersonPdf(
 
       colPeople.forEach((person, rowIndex) => {
         const rowBottom = Math.round(bodyTop - (rowIndex + 1) * rowH);
+        if (person.kind === "blank") return;
+        if (person.kind === "letter") {
+          page.drawRectangle({
+            x: colX,
+            y: rowBottom,
+            width: colRight - colX,
+            height: rowH,
+            color: accentColor,
+            opacity: 0.35,
+            borderWidth: 0
+          });
+          page.drawText(person.letter, {
+            x: colX + 10,
+            y: rowBottom + (rowH - 9) / 2,
+            font: bold,
+            size: 12,
+            color: titleColor
+          });
+          return;
+        }
         if (rowIndex % 2 === 1) {
           const leftStripeW = tableColSplit - colX;
           page.drawRectangle({
@@ -2094,6 +2134,7 @@ export async function renderDocumentPdf(
     placeCard: PlaceCardSettings;
     menuBooklet: MenuBookletSettings;
     floorplan: FloorplanSettings;
+    tableCard?: TableCardSettings;
     theme: ThemeSettings;
     menuLongNames?: Record<string, string>;
     dishMenuDuplicateGroups?: DishMenuDuplicateGroup[];
@@ -2129,6 +2170,12 @@ export async function renderDocumentPdf(
   if (documentType === "floorplan") {
     return renderFloorplanPdf(model, options.floorplan, options.theme);
   }
+  if (documentType === "tableCards") {
+    return renderTableCardsPdf(model, options.tableCard ?? defaultTableCardSettings, options.theme);
+  }
+  if (documentType === "kitchenSummary") {
+    return renderKitchenSummaryPdf(model, options.theme);
+  }
   return renderServicePlanPdf(model, options.theme);
 }
 
@@ -2156,4 +2203,285 @@ export async function findUndrawableText(model: EventModel): Promise<string[]> {
     warnings.push(`Table name${tables.length === 1 ? "" : "s"} with characters the print font can't draw: ${tables.slice(0, 5).join(", ")}.`);
   }
   return warnings;
+}
+
+/**
+ * Table tent cards: one A4 portrait sheet per table, folded once across the middle. Each half is an
+ * A5 landscape face with the table name and its guests; the top face is printed upside down so both
+ * read the right way up once the sheet is standing.
+ */
+export async function renderTableCardsPdf(
+  model: EventModel,
+  settings: TableCardSettings,
+  theme: ThemeSettings
+): Promise<Uint8Array> {
+  const { doc, body: font, bodyBold: bold, title } = await createDocWithFonts();
+  const pageW = mmToPt(210);
+  const pageH = mmToPt(297);
+  const faceW = pageW;
+  const faceH = pageH / 2;
+  const primary = hexToRgb(theme.primaryColor, "#012f43");
+  const accent = hexToRgb(theme.accentColor, "#acc1cb");
+  const ink = inkOnWhite(theme.primaryColor, "#012f43");
+  const bodyInk = rgb(0.1, 0.12, 0.17);
+  const logo = await embedRasterDataUrl(doc, theme.clientLogoDataUrl || theme.venueLogoDataUrl);
+  const eventName = settings.showEventName ? theme.eventName.trim() : "";
+
+  for (const [table, guests] of tablesInOrder(model)) {
+    const page = doc.addPage([pageW, pageH]);
+
+    const drawFace = (originY: number, flipped: boolean) => {
+      // Local coordinates: (0,0) is the face's bottom-left as the reader sees it.
+      const text = (value: string, x: number, y: number, f: PDFFont, size: number, color: ReturnType<typeof rgb>) => {
+        if (flipped) {
+          page.drawText(value, { x: faceW - x, y: originY + faceH - y, font: f, size, color, rotate: degrees(180) });
+        } else {
+          page.drawText(value, { x, y: originY + y, font: f, size, color });
+        }
+      };
+      const centered = (value: string, cx: number, y: number, f: PDFFont, size: number, color: ReturnType<typeof rgb>) =>
+        text(value, cx - f.widthOfTextAtSize(value, size) / 2, y, f, size, color);
+      const frame = (inset: number, color: ReturnType<typeof rgb>, width: number) =>
+        page.drawRectangle({
+          x: inset,
+          y: originY + inset,
+          width: faceW - inset * 2,
+          height: faceH - inset * 2,
+          borderColor: color,
+          borderWidth: width
+        });
+
+      frame(mmToPt(8), primary, 2);
+      frame(mmToPt(8) + 5, accent, 1.1);
+
+      const pad = mmToPt(8) + 5 + 14;
+      const innerW = faceW - pad * 2;
+      let cursorTop = faceH - pad;
+
+      if (logo) {
+        const scale = Math.min(110 / logo.width, 34 / logo.height);
+        const w = logo.width * scale;
+        const h = logo.height * scale;
+        const x = (faceW - w) / 2;
+        const y = cursorTop - h;
+        if (flipped) {
+          page.drawImage(logo, { x: faceW - x, y: originY + faceH - y, width: w, height: h, rotate: degrees(180) });
+        } else {
+          page.drawImage(logo, { x, y: originY + y, width: w, height: h });
+        }
+        cursorTop -= h + 8;
+      }
+
+      const showGuests = settings.showGuests && guests.length > 0;
+      const footerH = eventName ? 22 : 0;
+      const bodyBottom = pad + footerH;
+
+      // Table name: as large as fits, and larger still when it has the face to itself.
+      const labelFont = titleFontFor([formatTableLabel(table)], title, bold);
+      const label = fitLine(fitTextToFont(formatTableLabel(table), labelFont), labelFont, showGuests ? 54 : 96, innerW, 20);
+      const labelBaseline = showGuests
+        ? cursorTop - label.size * 0.78
+        : bodyBottom + (cursorTop - bodyBottom) / 2 - label.size * 0.32;
+      centered(label.text, faceW / 2, labelBaseline, labelFont, label.size, ink);
+
+      if (showGuests) {
+        const listTop = labelBaseline - 16;
+        const listH = Math.max(20, listTop - bodyBottom);
+        const columnCount = guests.length <= 6 ? 1 : guests.length <= 16 ? 2 : 3;
+        const perColumn = Math.ceil(guests.length / columnCount);
+        const lineH = Math.min(22, listH / perColumn);
+        const size = clamp(lineH / 1.3, 6.5, 15);
+        const colW = innerW / columnCount;
+        // Centre the block vertically in the space under the table name.
+        const blockTop = listTop - (listH - perColumn * lineH) / 2;
+        guests.forEach((guest, index) => {
+          const col = Math.floor(index / perColumn);
+          const row = index % perColumn;
+          const fitted = fitLine(fitTextToFont(guest.name, font), font, size, colW - 12);
+          centered(fitted.text, pad + colW * (col + 0.5), blockTop - (row + 1) * lineH + lineH * 0.3, font, fitted.size, bodyInk);
+        });
+      }
+
+      if (eventName) {
+        const eventFont = titleFontFor([eventName], title, bold);
+        const fitted = fitLine(fitTextToFont(eventName, eventFont), eventFont, 10, innerW, 7);
+        centered(fitted.text, faceW / 2, pad + 2, eventFont, fitted.size, rgb(0.42, 0.46, 0.52));
+      }
+    };
+
+    drawFace(0, false);
+    drawFace(faceH, true);
+
+    // Fold guide: faint dashes across the middle.
+    page.drawLine({
+      start: { x: 0, y: faceH },
+      end: { x: pageW, y: faceH },
+      thickness: 0.5,
+      color: rgb(0.8, 0.82, 0.86),
+      dashArray: [3, 5]
+    });
+  }
+
+  if (doc.getPageCount() === 0) doc.addPage([pageW, pageH]);
+  return doc.save();
+}
+
+/**
+ * Kitchen summary: A4 landscape. A totals row heads a grid of tables against dishes (grouped by
+ * course), with each table's dietary requirements alongside. Continues onto more pages if needed.
+ */
+export async function renderKitchenSummaryPdf(model: EventModel, theme: ThemeSettings): Promise<Uint8Array> {
+  const { doc, body: font, bodyBold: bold, title } = await createDocWithFonts();
+  const width = mmToPt(297);
+  const height = mmToPt(210);
+  const margin = 24;
+  const data = buildKitchenSummary(model);
+  const ink = rgb(0.1, 0.12, 0.17);
+  const muted = rgb(0.36, 0.41, 0.5);
+  const lineColor = rgb(0.72, 0.76, 0.84);
+  const dietaryInk = rgb(0.66, 0.2, 0.06);
+  const accent = hexToRgb(theme.accentColor, "#acc1cb");
+  const onAccent = textOnColor(theme.accentColor, "#acc1cb");
+
+  const tableW = width - margin * 2;
+  const tableColW = 78;
+  const paxColW = 34;
+  const dishCount = Math.max(1, data.columns.length);
+  // Dishes share what is left after the fixed columns, leaving at least a third for dietary notes.
+  const dishColW = clamp((tableW - tableColW - paxColW) * 0.62 / dishCount, 24, 64);
+  const dietaryColW = Math.max(120, tableW - tableColW - paxColW - dishColW * data.columns.length);
+  const dishX = (index: number) => margin + tableColW + paxColW + index * dishColW;
+  const dietaryX = dishX(data.columns.length);
+
+  const headSize = dishColW >= 44 ? 7.5 : 6.5;
+  // Each heading shrinks a little, if it has to, so a long single word ("Cheesecake") isn't cut short.
+  const heads = data.columns.map((column) => {
+    const text = fitTextToFont(column.dish, bold);
+    let size = headSize;
+    const longestWord = text.split(/\s+/).reduce((a, b) => (b.length > a.length ? b : a), "");
+    while (size > 5.5 && bold.widthOfTextAtSize(longestWord, size) > dishColW - 6) size -= 0.25;
+    return { size, lines: wrapTextToWidthClamped(text, bold, size, dishColW - 6).slice(0, 5) };
+  });
+  const courseBandH = 16;
+  const headH = Math.max(26, Math.max(1, ...heads.map((head) => head.lines.length)) * (headSize + 1.5) + 10);
+  const rowSize = 9.5;
+  const dietarySize = 8;
+  const dietaryLineH = 9.6;
+
+  const eventName = theme.eventName.trim() || "Event";
+  const titleFont = titleFontFor([eventName], title, bold);
+
+  let page = doc.addPage([width, height]);
+  let y = height - margin;
+  let pageNumber = 0;
+
+  const drawPageHeader = () => {
+    pageNumber += 1;
+    const heading = fitLine(
+      fitTextToFont(`${eventName} - Kitchen Summary${pageNumber > 1 ? " (cont.)" : ""}`, titleFont),
+      titleFont,
+      16,
+      tableW - 200,
+      10
+    );
+    page.drawText(heading.text, { x: margin, y: y - 14, font: titleFont, size: heading.size, color: inkOnWhite(theme.primaryColor, "#012f43") });
+    const meta = [theme.eventDate?.trim(), `${data.totalGuests} guests`, `${data.rows.length} tables`, `${data.totalDietary} dietary`]
+      .filter(Boolean)
+      .join("  ·  ");
+    const metaW = font.widthOfTextAtSize(meta, 9.5);
+    page.drawText(meta, { x: width - margin - metaW, y: y - 12, font, size: 9.5, color: muted });
+    y -= 26;
+
+    // Course band above the dish headings.
+    let start = 0;
+    while (start < data.columns.length) {
+      let end = start;
+      while (end + 1 < data.columns.length && data.columns[end + 1].course === data.columns[start].course) end += 1;
+      const x = dishX(start);
+      const w = (end - start + 1) * dishColW;
+      page.drawRectangle({ x, y: y - courseBandH, width: w, height: courseBandH, color: accent, borderColor: rgb(1, 1, 1), borderWidth: 1 });
+      const label = fitLine(data.columns[start].courseLabel, bold, 9, w - 6, 6);
+      page.drawText(label.text, { x: x + (w - bold.widthOfTextAtSize(label.text, label.size)) / 2, y: y - courseBandH + 4.5, font: bold, size: label.size, color: onAccent });
+      start = end + 1;
+    }
+    y -= courseBandH;
+
+    page.drawRectangle({ x: margin, y: y - headH, width: tableW, height: headH, color: rgb(0.95, 0.96, 0.98) });
+    page.drawText("Table", { x: margin + 6, y: y - headH + 6, font: bold, size: 9, color: ink });
+    page.drawText("Pax", { x: margin + tableColW + 6, y: y - headH + 6, font: bold, size: 9, color: ink });
+    page.drawText("Dietary requirements", { x: dietaryX + 6, y: y - headH + 6, font: bold, size: 9, color: ink });
+    heads.forEach((head, index) => {
+      let ly = y - 4 - headSize;
+      head.lines.forEach((line) => {
+        page.drawText(line, { x: dishX(index) + (dishColW - bold.widthOfTextAtSize(line, head.size)) / 2, y: ly, font: bold, size: head.size, color: ink });
+        ly -= headSize + 1.5;
+      });
+    });
+    y -= headH;
+  };
+
+  const verticals = (top: number, bottom: number) => {
+    const xs = [margin, margin + tableColW, margin + tableColW + paxColW, ...data.columns.map((_, i) => dishX(i + 1)), margin + tableW];
+    xs.forEach((x) => page.drawLine({ start: { x, y: top }, end: { x, y: bottom }, thickness: 0.5, color: lineColor }));
+  };
+  const drawRow = (
+    label: string,
+    pax: string,
+    counts: (index: number) => string,
+    dietary: string[],
+    options: { bold?: boolean; fill?: ReturnType<typeof rgb> }
+  ) => {
+    const wrapped = dietary.flatMap((entry) => wrapTextToWidthClamped(fitTextToFont(entry, font), font, dietarySize, dietaryColW - 12));
+    const rowH = Math.max(20, wrapped.length * dietaryLineH + 9);
+    if (y - rowH < margin) {
+      page = doc.addPage([width, height]);
+      y = height - margin;
+      drawPageHeader();
+    }
+    const top = y;
+    const bottom = y - rowH;
+    if (options.fill) page.drawRectangle({ x: margin, y: bottom, width: tableW, height: rowH, color: options.fill });
+    const f = options.bold ? bold : font;
+    const baseline = top - 13.5;
+    const name = fitLine(fitTextToFont(label, bold), bold, rowSize, tableColW - 10, 6.5);
+    page.drawText(name.text, { x: margin + 6, y: baseline, font: bold, size: name.size, color: ink });
+    page.drawText(pax, { x: margin + tableColW + (paxColW - f.widthOfTextAtSize(pax, rowSize)) / 2, y: baseline, font: f, size: rowSize, color: ink });
+    data.columns.forEach((_, index) => {
+      const value = counts(index);
+      if (!value) return;
+      page.drawText(value, { x: dishX(index) + (dishColW - f.widthOfTextAtSize(value, rowSize + 1)) / 2, y: baseline, font: f, size: rowSize + 1, color: ink });
+    });
+    let dy = top - 6 - dietarySize;
+    wrapped.forEach((line) => {
+      page.drawText(line, { x: dietaryX + 6, y: dy, font, size: dietarySize, color: options.bold ? ink : dietaryInk });
+      dy -= dietaryLineH;
+    });
+    page.drawLine({ start: { x: margin, y: top }, end: { x: margin + tableW, y: top }, thickness: 0.5, color: lineColor });
+    page.drawLine({ start: { x: margin, y: bottom }, end: { x: margin + tableW, y: bottom }, thickness: 0.5, color: lineColor });
+    verticals(top, bottom);
+    y = bottom;
+  };
+
+  drawPageHeader();
+  drawRow(
+    "All tables",
+    String(data.totalGuests),
+    (index) => String(data.columns[index].total),
+    [`${data.totalDietary} guest${data.totalDietary === 1 ? "" : "s"} with dietary requirements`],
+    { bold: true, fill: rgb(0.98, 0.96, 0.9) }
+  );
+  data.rows.forEach((row) => {
+    drawRow(
+      row.tableLabel,
+      String(row.pax),
+      (index) => {
+        const count = row.counts[data.columns[index].key];
+        return count ? String(count) : "";
+      },
+      row.dietary,
+      {}
+    );
+  });
+
+  return doc.save();
 }

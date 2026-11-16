@@ -14,7 +14,10 @@ import type { ColumnMapping, DishMenuDuplicateGroup, DocumentType, GuestRecord }
 import {
   floorplanSchema,
   menuBookletSchema,
+  documentTypeSchema,
+  guestRecordSchema,
   placeCardSchema,
+  tableCardSchema,
   tablePlanByPersonSchema,
   tablePlanSchema,
   themeSchema
@@ -45,33 +48,11 @@ const previewSchema = z.object({
   mapping: z.record(z.string(), z.string()).optional()
 });
 
-const guestPayloadSchema = z.object({
-  id: z.string().max(500),
-  tableNumber: z.string().max(200),
-  name: z.string().max(500),
-  starter: z.string().max(2000),
-  main: z.string().max(2000),
-  dessert: z.string().max(2000),
-  dietaryOriginal: z.string().max(4000),
-  dietaryNormalized: z.array(z.string().max(4000))
-});
-
 const generateSchema = z.object({
   mode: z.literal("generate"),
-  guests: z.array(guestPayloadSchema).max(limits.MAX_GENERATION_GUESTS),
+  guests: z.array(guestRecordSchema).max(limits.MAX_GENERATION_GUESTS),
   request: z.object({
-    documents: z
-      .array(
-        z.enum([
-          "tablePlanByTable",
-          "tablePlanByPerson",
-          "placeCards",
-          "menuBooklet",
-          "servicePlan",
-          "floorplan"
-        ])
-      )
-      .min(1),
+    documents: z.array(documentTypeSchema).min(1),
     bundleMode: z.enum(["single", "zip"]),
     theme: themeSchema,
     tablePlan: tablePlanSchema,
@@ -79,6 +60,7 @@ const generateSchema = z.object({
     placeCard: placeCardSchema,
     menuBooklet: menuBookletSchema,
     floorplan: floorplanSchema,
+    tableCard: tableCardSchema.optional(),
     dishNameOverrides: z
       .record(
         z.string(),
@@ -135,6 +117,10 @@ function documentFilename(doc: DocumentType): string {
       return "menu-booklet.pdf";
     case "servicePlan":
       return "service-plan.pdf";
+    case "tableCards":
+      return "table-cards.pdf";
+    case "kitchenSummary":
+      return "kitchen-summary.pdf";
     case "floorplan":
       return "floorplan.pdf";
   }
@@ -181,7 +167,8 @@ export async function POST(request: Request) {
     const guests = parsed.request.normalizeGuestNamesToTitleCase
       ? guestsAfterDishOverrides.map((guest) => ({
           ...guest,
-          name: toTitleCaseName(guest.name)
+          name: toTitleCaseName(guest.name),
+          ...(guest.lastName ? { lastName: toTitleCaseName(guest.lastName) } : {})
         }))
       : guestsAfterDishOverrides;
     const model = buildEventModel(guests);
@@ -218,6 +205,7 @@ export async function POST(request: Request) {
           placeCard: parsed.request.placeCard,
           menuBooklet: parsed.request.menuBooklet,
           floorplan: parsed.request.floorplan,
+          tableCard: parsed.request.tableCard,
           theme,
           menuLongNames,
           dishMenuDuplicateGroups,

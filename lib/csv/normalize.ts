@@ -144,6 +144,8 @@ export function normalizeRowsWithNotices(rows: RawCsvRow[], mapping: ColumnMappi
       id: `guest-${index + 1}`,
       tableNumber: ownTable || currentTable,
       name,
+      // With separate first / last name columns the surname is known, not guessed.
+      ...(!mapping.name && safeValue(row, mapping.lastName) ? { lastName: safeValue(row, mapping.lastName) } : {}),
       starter: safeValue(row, mapping.starter),
       main: safeValue(row, mapping.main),
       dessert: safeValue(row, mapping.dessert),
