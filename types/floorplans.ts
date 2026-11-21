@@ -1,7 +1,7 @@
 import type { PaperOrientation, PaperSize } from "./paper";
 import type { ThemeSettings } from "./index";
 
-export type FloorplanObjectType = "table" | "rect" | "circle" | "text";
+export type FloorplanObjectType = "table" | "rect" | "circle" | "text" | "seating";
 
 export interface FloorplanBaseObject {
   id: string;
@@ -47,6 +47,8 @@ export interface FloorplanRectObject extends FloorplanBaseObject {
   label?: string;
   /** Hex colour, or "none" for an outline only. */
   fill?: string;
+  /** An exit (fire exit or main doors); its longer side counts towards total exit width. */
+  exit?: boolean;
 }
 
 export interface FloorplanCircleObject extends FloorplanBaseObject {
@@ -66,11 +68,39 @@ export interface FloorplanTextObject extends FloorplanBaseObject {
   color?: string;
 }
 
+/**
+ * A block of theatre-style chairs in straight rows, drawn from these settings rather than stored chair
+ * by chair. `x`/`y` is the block centre. Unrotated, the block faces up the page: row 0 is the front row
+ * at the top (nearest the stage) and each chair's back is on its lower edge. Lengths are canvas units.
+ */
+export interface FloorplanSeatingObject extends FloorplanBaseObject {
+  type: "seating";
+  name?: string;
+  rows: number;
+  seatsPerRow: number;
+  chairWidth: number;
+  chairDepth: number;
+  /** Centre to centre across a row. */
+  seatSpacing: number;
+  /** Front of one row to the front of the next. The seatway (clear gap between rows) is rowPitch − chairDepth. */
+  rowPitch: number;
+  /** Aisles inside the block, as "after this many seats" (e.g. [7] puts an aisle after the 7th seat). */
+  aisles?: number[];
+  /** Clear width of the aisles inside the block, chair edge to chair edge. */
+  aisleWidth?: number;
+  rotation?: number;
+  /** Seats taken out of the block, as "row:seat" (both from 0). */
+  removed?: string[];
+  /** The chair preset the size came from, if any. */
+  chairPreset?: string;
+}
+
 export type FloorplanCanvasObject =
   | FloorplanTableObject
   | FloorplanRectObject
   | FloorplanCircleObject
-  | FloorplanTextObject;
+  | FloorplanTextObject
+  | FloorplanSeatingObject;
 
 export interface FloorplanMetadata {
   title: string;
@@ -100,6 +130,32 @@ export interface FloorplanPrintOptions {
   fixedScale?: number | null;
 }
 
+/** The theatre-seating generator's form, saved with the plan. Lengths in metres. */
+export interface FloorplanTheatreSettings {
+  totalSeats?: number;
+  seatsPerRow?: number;
+  aisles?: number;
+  aisleWidthM?: number;
+  /** Make each section between aisles its own block (easier to move), rather than one block with aisles in it. */
+  splitAtAisles?: boolean;
+  /** Start a new block (with a cross-aisle) every N rows; 0 or missing for none. */
+  crossAisleEvery?: number;
+  chairPreset?: string;
+  seatwayM?: number;
+  frontDistanceM?: number;
+  facing?: "up" | "down" | "left" | "right";
+}
+
+/** The user's own figures to compare the plan's measurements against (metres, seats). Nothing is a rule. */
+export interface FloorplanLimits {
+  minAisleM?: number | null;
+  minSeatwayM?: number | null;
+  maxSeatsBetweenAisles?: number | null;
+  minFrontDistanceM?: number | null;
+  maxCapacity?: number | null;
+  minExitWidthM?: number | null;
+}
+
 export interface FloorplanAutoLayoutSettings {
   paperSize: PaperSize;
   orientation: PaperOrientation;
@@ -120,6 +176,9 @@ export interface FloorplanAutoLayoutSettings {
   seatsPerTable?: number;
   topTable?: boolean;
   useGuestNumbers?: boolean;
+  /** Which generator the Auto layout form shows. */
+  generator?: "tables" | "theatre";
+  theatre?: FloorplanTheatreSettings;
 }
 
 export interface FloorplanDocument {
@@ -137,6 +196,7 @@ export interface FloorplanDocument {
   /** Saved event project whose guest list drives guest counts and checks. */
   projectId?: string | null;
   print?: FloorplanPrintOptions;
+  limits?: FloorplanLimits;
 }
 
 export interface FloorplanListItem {

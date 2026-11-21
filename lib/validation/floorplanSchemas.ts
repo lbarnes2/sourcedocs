@@ -37,7 +37,8 @@ const rectObjectSchema = objectBase.extend({
   height: z.number().min(6).max(10_000),
   rotation: rotationSchema.optional(),
   label: z.string().max(200).optional(),
-  fill: colorSchema.optional()
+  fill: colorSchema.optional(),
+  exit: z.boolean().optional()
 });
 
 const circleObjectSchema = objectBase.extend({
@@ -56,6 +57,22 @@ const textObjectSchema = objectBase.extend({
   color: colorSchema.optional()
 });
 
+const seatingObjectSchema = objectBase.extend({
+  type: z.literal("seating"),
+  name: z.string().max(200).optional(),
+  rows: z.number().int().min(1).max(200),
+  seatsPerRow: z.number().int().min(1).max(200),
+  chairWidth: z.number().min(1).max(1_000),
+  chairDepth: z.number().min(1).max(1_000),
+  seatSpacing: z.number().min(1).max(2_000),
+  rowPitch: z.number().min(1).max(2_000),
+  aisles: z.array(z.number().int().min(1).max(200)).max(50).optional(),
+  aisleWidth: z.number().min(0).max(5_000).optional(),
+  rotation: rotationSchema.optional(),
+  removed: z.array(z.string().max(20)).max(40_000).optional(),
+  chairPreset: z.string().max(40).optional()
+});
+
 const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();
 
 export const floorplanPrintOptionsSchema = z.object({
@@ -71,8 +88,33 @@ export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
   tableObjectSchema,
   rectObjectSchema,
   circleObjectSchema,
-  textObjectSchema
+  textObjectSchema,
+  seatingObjectSchema
 ]);
+
+const optionalLimit = z.number().min(0).max(100_000).nullable().optional();
+
+export const floorplanLimitsSchema = z.object({
+  minAisleM: optionalLimit,
+  minSeatwayM: optionalLimit,
+  maxSeatsBetweenAisles: optionalLimit,
+  minFrontDistanceM: optionalLimit,
+  maxCapacity: optionalLimit,
+  minExitWidthM: optionalLimit
+});
+
+const theatreSettingsSchema = z.object({
+  totalSeats: z.number().int().min(1).max(10_000).optional(),
+  seatsPerRow: z.number().int().min(1).max(200).optional(),
+  aisles: z.number().int().min(0).max(20).optional(),
+  aisleWidthM: z.number().min(0).max(20).optional(),
+  splitAtAisles: z.boolean().optional(),
+  crossAisleEvery: z.number().int().min(0).max(200).optional(),
+  chairPreset: z.string().max(40).optional(),
+  seatwayM: z.number().min(0).max(5).optional(),
+  frontDistanceM: z.number().min(0).max(100).optional(),
+  facing: z.enum(["up", "down", "left", "right"]).optional()
+});
 
 /** Banqueting floorplan fields plus optional stagger direction for standalone floorplan auto-layout. */
 export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
@@ -82,7 +124,9 @@ export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
   roundSize: z.enum(["6ft", "5ft"]).optional(),
   seatsPerTable: z.number().int().min(1).max(60).optional(),
   topTable: z.boolean().optional(),
-  useGuestNumbers: z.boolean().optional()
+  useGuestNumbers: z.boolean().optional(),
+  generator: z.enum(["tables", "theatre"]).optional(),
+  theatre: theatreSettingsSchema.optional()
 });
 
 export const floorplanDocumentSchema = z.object({
@@ -110,7 +154,8 @@ export const floorplanDocumentSchema = z.object({
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
   selectedVenueLogoKey: z.string().max(500).nullable().optional(),
   projectId: z.string().max(200).nullable().optional(),
-  print: floorplanPrintOptionsSchema.optional()
+  print: floorplanPrintOptionsSchema.optional(),
+  limits: floorplanLimitsSchema.optional()
 });
 
 export const floorplanSavePayloadSchema = z.object({
@@ -136,7 +181,8 @@ export const floorplanSavePayloadSchema = z.object({
   selectedClientLogoKey: z.string().max(500).nullable().optional(),
   selectedVenueLogoKey: z.string().max(500).nullable().optional(),
   projectId: z.string().max(200).nullable().optional(),
-  print: floorplanPrintOptionsSchema.optional()
+  print: floorplanPrintOptionsSchema.optional(),
+  limits: floorplanLimitsSchema.optional()
 });
 
 export function withFloorplanSaveDefaults(raw: z.infer<typeof floorplanSavePayloadSchema>) {

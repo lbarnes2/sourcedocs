@@ -31,6 +31,7 @@ import {
   type OccupancyStatus
 } from "@/lib/floorplans/geometry";
 import { planTotals } from "@/lib/floorplans/checks";
+import { seatingNameBand, seatingSeats } from "@/lib/floorplans/seating";
 import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
@@ -494,6 +495,54 @@ export async function renderFloorplanDocumentPdf(
       continue;
     }
 
+    if (item.type === "seating") {
+      // All the chairs in one path, then all the backrests in another: thousands of seats stay quick.
+      const back = Math.max(0.6, item.chairDepth * 0.22);
+      const quad = (x0: number, y0: number, x1: number, y1: number) =>
+        [
+          [x0, y0],
+          [x1, y0],
+          [x1, y1],
+          [x0, y1]
+        ]
+          .map(([x, y], i) => {
+            const p = rotatePoint({ x, y }, box.rotation);
+            return `${i === 0 ? "M" : "L"} ${toX(box.cx + p.x).toFixed(2)} ${(-toY(box.cy + p.y)).toFixed(2)}`;
+          })
+          .join(" ") + " Z";
+      const seats: string[] = [];
+      const backs: string[] = [];
+      for (const seat of seatingSeats(item)) {
+        const x0 = seat.x - item.chairWidth / 2;
+        const x1 = seat.x + item.chairWidth / 2;
+        const y0 = seat.y - item.chairDepth / 2;
+        const y1 = seat.y + item.chairDepth / 2;
+        seats.push(quad(x0, y0, x1, y1));
+        backs.push(quad(x0, y1 - back, x1, y1));
+      }
+      if (seats.length) {
+        page.drawSvgPath(seats.join(" "), {
+          x: 0,
+          y: 0,
+          color: rgb(0.83, 0.9, 0.95),
+          borderColor: rgb(0.5, 0.57, 0.66),
+          borderWidth: Math.max(0.3, strokeWidth * 0.5)
+        });
+        page.drawSvgPath(backs.join(" "), { x: 0, y: 0, color: rgb(0.5, 0.57, 0.66) });
+      }
+      const name = item.name?.trim();
+      const band = seatingNameBand(item);
+      if (name && band) {
+        const at = rotatePoint({ x: 0, y: box.h / 2 + band / 2 }, box.rotation);
+        const sideways = Math.abs(Math.sin((box.rotation * Math.PI) / 180)) > 0.7;
+        const usable = (sideways ? box.h : box.w) * scale;
+        const maxSize = Math.max(6, Math.min(14, band * scale * 0.75));
+        const size = fitTextSingleLine(bodyBold, name, usable, maxSize, 4.5).size;
+        drawCentered(page, bodyBold, name, toX(box.cx + at.x), toY(box.cy + at.y) - size * 0.35, usable, maxSize, 4.5, textColor);
+      }
+      continue;
+    }
+
     if (item.type === "rect" || item.type === "circle") {
       const fill = parseFill(item.fill, item.type === "rect" ? DEFAULT_FILLS.rect : DEFAULT_FILLS.circle);
       const style = { ...(fill ? { color: fill } : {}), borderColor: rgb(0.5, 0.57, 0.66), borderWidth: strokeWidth };
@@ -555,7 +604,11 @@ export async function renderFloorplanDocumentPdf(
 
   if (print.legend) {
     const totals = planTotals(docInput.objects, guests);
-    const parts = [`${totals.tables} table${totals.tables === 1 ? "" : "s"}`, `${totals.seats} seats`];
+    const parts: string[] = [];
+    if (totals.tables || !totals.blocks) {
+      parts.push(`${totals.tables} table${totals.tables === 1 ? "" : "s"}`, `${totals.seats} seats`);
+    }
+    if (totals.blocks) parts.push(`${totals.theatreSeats} theatre seat${totals.theatreSeats === 1 ? "" : "s"}`);
     if (totals.guests != null) parts.push(`${totals.guests} guests`);
     drawLegend(page, { body: bodyFont, bold: bodyBold }, layout, {
       summary: parts.join("  ·  "),

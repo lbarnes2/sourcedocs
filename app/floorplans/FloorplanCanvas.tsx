@@ -10,6 +10,7 @@ import {
   normaliseRotation,
   objectBodyBounds,
   objectBox,
+  objectPrintBounds,
   objectsBodyBounds,
   occupancyStatus,
   resizeFromCorner,
@@ -20,6 +21,8 @@ import {
   type Point
 } from "@/lib/floorplans/geometry";
 import { guestCountFor, type TableGuestMap } from "@/lib/floorplans/guests";
+import type { Highlight } from "@/lib/floorplans/measure";
+import { seatingNameBand, seatingSeatCount, seatingSeats } from "@/lib/floorplans/seating";
 import type { FloorplanCanvasObject } from "@/types";
 
 export type CanvasView = { zoom: number; pan: Point };
@@ -77,6 +80,8 @@ interface Props {
   onCancelGesture: () => void;
   onLive: (objects: FloorplanCanvasObject[]) => void;
   emptyHint: ReactNode;
+  /** A measurement to point at (outlined shapes and/or a dimension line). */
+  highlight?: Highlight | null;
 }
 
 function snapTo(value: number, step: number): number {
@@ -462,12 +467,14 @@ export function FloorplanCanvas(props: Props) {
   const sizeChip = useMemo(() => {
     if (!single || !unitsPerMetre) return null;
     const box = objectBox(single);
-    const b = objectBodyBounds(single);
+    // Seating names print below the back row, so the readout goes below those.
+    const b = single.type === "seating" ? objectPrintBounds(single) : objectBodyBounds(single);
     const fmt = (units: number) => {
       const m = units / unitsPerMetre;
       return m >= 10 ? m.toFixed(0) : m.toFixed(1);
     };
-    const text = box.round && box.w === box.h ? `Ø ${fmt(box.w)} m` : `${fmt(box.w)} × ${fmt(box.h)} m`;
+    const dims = box.round && box.w === box.h ? `Ø ${fmt(box.w)} m` : `${fmt(box.w)} × ${fmt(box.h)} m`;
+    const text = single.type === "seating" ? `${seatingSeatCount(single)} seats · ${dims}` : dims;
     return { x: (b.minX + b.maxX) / 2, y: b.maxY, text };
   }, [single, unitsPerMetre]);
   const handleSize = 10 * inv;
@@ -545,6 +552,49 @@ export function FloorplanCanvas(props: Props) {
       );
     }
 
+    if (obj.type === "seating") {
+      const back = Math.max(0.6, obj.chairDepth * 0.22);
+      const band = seatingNameBand(obj);
+      const name = obj.name?.trim();
+      const count = seatingSeatCount(obj);
+      return (
+        <button
+          key={obj.id}
+          {...common}
+          className={`${common.className} fp-obj--seating`}
+          aria-label={`${name || "Seating block"}, ${count} seats`}
+          style={wrapper}
+        >
+          <svg className="fp-seating" width={box.w} height={box.h} viewBox={`0 0 ${box.w} ${box.h}`} aria-hidden="true">
+            {seatingSeats(obj).map((seat) => {
+              const x = box.w / 2 + seat.x - obj.chairWidth / 2;
+              const y = box.h / 2 + seat.y - obj.chairDepth / 2;
+              return (
+                <g key={`${seat.row}:${seat.seat}`}>
+                  <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat" />
+                  <rect x={x} y={y + obj.chairDepth - back} width={obj.chairWidth} height={back} className="fp-seat-back" />
+                </g>
+              );
+            })}
+          </svg>
+          {name ? (
+            <span
+              className="fp-seating-name"
+              style={{
+                top: box.h,
+                height: band,
+                fontSize: Math.max(5, Math.min(14, band * 0.75)),
+                // Keep the name the right way up when the block faces down or sideways.
+                transform: box.rotation ? `rotate(${-box.rotation}deg)` : undefined
+              }}
+            >
+              {name}
+            </span>
+          ) : null}
+        </button>
+      );
+    }
+
     if (obj.type === "rect" || obj.type === "circle") {
       const fill = obj.fill === "none" ? "transparent" : (obj.fill ?? (obj.type === "rect" ? DEFAULT_FILLS.rect : DEFAULT_FILLS.circle));
       const counter = box.rotation ? { transform: `rotate(${-box.rotation}deg)` } : undefined;
@@ -605,6 +655,7 @@ export function FloorplanCanvas(props: Props) {
       const rotatable =
         single.type === "rect" ||
         single.type === "text" ||
+        single.type === "seating" ||
         (single.type === "table" && (tableShape(single) === "rect" || (single.seatSpan ?? 360) < 360));
       const corners: Array<{ sx: -1 | 1; sy: -1 | 1 }> = [
         { sx: -1, sy: -1 },
@@ -713,6 +764,36 @@ export function FloorplanCanvas(props: Props) {
           </div>
         ) : null}
         {objects.map(renderObject)}
+        {props.highlight ? (
+          <svg className="fp-highlight" width={1} height={1} aria-hidden="true">
+            {props.highlight.polygons.map((poly, i) => (
+              <polygon
+                key={i}
+                points={poly.map((p) => `${p.x},${p.y}`).join(" ")}
+                strokeWidth={2 * inv}
+                strokeDasharray={`${6 * inv} ${4 * inv}`}
+              />
+            ))}
+            {props.highlight.line ? (
+              <>
+                <line
+                  className="fp-highlight-line"
+                  x1={props.highlight.line[0].x}
+                  y1={props.highlight.line[0].y}
+                  x2={props.highlight.line[1].x}
+                  y2={props.highlight.line[1].y}
+                  strokeWidth={2 * inv}
+                />
+                {props.highlight.line.map((p, i) => (
+                  <circle key={i} className="fp-highlight-end" cx={p.x} cy={p.y} r={3.5 * inv} />
+                ))}
+              </>
+            ) : null}
+          </svg>
+        ) : null}
+        {props.highlight?.label ? (
+          <HighlightLabel highlight={props.highlight} inv={inv} />
+        ) : null}
         {renderOverlay()}
         {sizeChip ? (
           <div
@@ -747,6 +828,26 @@ export function FloorplanCanvas(props: Props) {
         />
       ) : null}
       {objects.length === 0 ? <div className="editor-canvas-empty">{props.emptyHint}</div> : null}
+    </div>
+  );
+}
+
+/** The measurement's value, by the dimension line or above the first outlined shape. */
+function HighlightLabel({ highlight, inv }: { highlight: Highlight; inv: number }) {
+  let at: Point | null = null;
+  if (highlight.line) {
+    at = { x: (highlight.line[0].x + highlight.line[1].x) / 2, y: (highlight.line[0].y + highlight.line[1].y) / 2 };
+  } else if (highlight.polygons[0]?.length) {
+    const poly = highlight.polygons[0];
+    at = { x: poly.reduce((s, p) => s + p.x, 0) / poly.length, y: Math.min(...poly.map((p) => p.y)) };
+  }
+  if (!at) return null;
+  return (
+    <div
+      className="fp-highlight-label"
+      style={{ left: at.x, top: at.y, transform: `translate(-50%, -120%) scale(${inv})`, transformOrigin: "bottom center" }}
+    >
+      {highlight.label}
     </div>
   );
 }

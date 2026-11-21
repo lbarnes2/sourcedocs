@@ -20,7 +20,23 @@ import {
   tableShape
 } from "@/lib/floorplans/geometry";
 import { guestCountFor, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
-import type { FloorplanCanvasObject, FloorplanTableObject } from "@/types";
+import {
+  CHAIR_PRESETS,
+  MAX_SEATING_ROWS,
+  MAX_SEATS_PER_ROW,
+  blockAisleWidth,
+  chairPreset,
+  evenAisles,
+  keepFrontRow,
+  longestRun,
+  pruneRemoved,
+  seatGap,
+  seatingAisles,
+  seatingSeatCount,
+  seatingSize,
+  seatway
+} from "@/lib/floorplans/seating";
+import type { FloorplanCanvasObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
 interface Props {
   /** The object being edited (last one selected). */
@@ -207,6 +223,7 @@ function titleFor(obj: FloorplanCanvasObject, count: number): string {
   if (obj.type === "table") return `Table ${obj.tableNumber}`;
   if (obj.type === "rect") return obj.label || "Rectangle";
   if (obj.type === "circle") return obj.label || "Circle";
+  if (obj.type === "seating") return obj.name?.trim() || "Seating block";
   return "Text";
 }
 
@@ -239,6 +256,15 @@ export function Inspector({ primary, selectionCount, tableGuests, totalGuests, g
             patchTable={patchTable}
             multiple={selectionCount > 1}
             unitsPerMetre={unitsPerMetre}
+          />
+        ) : null}
+
+        {primary.type === "seating" ? (
+          <SeatingFields
+            block={primary}
+            multiple={selectionCount > 1}
+            unitsPerMetre={unitsPerMetre}
+            patchSeating={(fn, key) => onPatch((o) => (o.type === "seating" ? fn(o) : o), key)}
           />
         ) : null}
 
@@ -287,6 +313,12 @@ export function Inspector({ primary, selectionCount, tableGuests, totalGuests, g
                 onChange={(fill) => onPatch((o) => (o.type === "rect" ? { ...o, fill } : o))}
               />
             </Field>
+            <Switch
+              label="Exit"
+              hint="Counts towards total exit width (its longer side) in the plan measurements."
+              checked={Boolean(primary.exit)}
+              onChange={(exit) => onPatch((o) => (o.type === "rect" ? { ...o, exit: exit || undefined } : o))}
+            />
           </>
         ) : null}
 
@@ -353,7 +385,15 @@ export function Inspector({ primary, selectionCount, tableGuests, totalGuests, g
 
         {selectionCount > 1 ? (
           <p className="field-hint" style={{ margin: 0 }}>
-            Changes apply to every selected {primary.type === "table" ? "table" : primary.type === "text" ? "label" : "shape"} of the
+            Changes apply to every selected{" "}
+            {primary.type === "table"
+              ? "table"
+              : primary.type === "text"
+                ? "label"
+                : primary.type === "seating"
+                  ? "seating block"
+                  : "shape"}{" "}
+            of the
             same kind. Grid snap is {gridSize} units.
           </p>
         ) : null}
@@ -585,6 +625,254 @@ function TableFields({
             </ul>
           ) : null}
         </div>
+      ) : null}
+    </>
+  );
+}
+
+function AislePositions({
+  value,
+  seats,
+  disabled,
+  onChange
+}: {
+  value: number[];
+  seats: number;
+  disabled: boolean;
+  onChange: (aisles: number[]) => void;
+}) {
+  const shown = value.join(", ");
+  const [text, setText] = useState(shown);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(shown);
+  }, [shown]);
+  const parse = (raw: string) =>
+    Array.from(
+      new Set(
+        raw
+          .split(/[\s,;]+/)
+          .map((part) => Math.round(Number(part)))
+          .filter((n) => Number.isFinite(n) && n >= 1 && n < seats)
+      )
+    ).sort((a, b) => a - b);
+  return (
+    <input
+      value={text}
+      disabled={disabled}
+      inputMode="numeric"
+      placeholder="e.g. 6, 14"
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parse(e.target.value));
+      }}
+      onBlur={() => {
+        focused.current = false;
+        setText(shown);
+      }}
+    />
+  );
+}
+
+function SeatingFields({
+  block,
+  multiple,
+  unitsPerMetre,
+  patchSeating
+}: {
+  block: FloorplanSeatingObject;
+  multiple: boolean;
+  unitsPerMetre: number | null;
+  patchSeating: (fn: (s: FloorplanSeatingObject) => FloorplanSeatingObject, key?: string) => void;
+}) {
+  const [rowMode, setRowMode] = useState<"seatway" | "pitch">("seatway");
+  const upm = unitsPerMetre;
+  const k = upm ?? DEFAULT_UNITS_PER_METRE;
+  const aisles = seatingAisles(block);
+  const count = seatingSeatCount(block);
+  const removed = block.rows * block.seatsPerRow - count;
+  const size = seatingSize(block);
+  const metres = (units: number) => (upm ? `${(units / upm).toFixed(2)} m` : `${Math.round(units)} units`);
+  const preset = CHAIR_PRESETS.find((p) => p.id === block.chairPreset);
+
+  // Every change keeps the front row where it is; the block grows away from the stage.
+  const change = (fn: (s: FloorplanSeatingObject) => FloorplanSeatingObject, key?: string) =>
+    patchSeating((s) => keepFrontRow(s, pruneRemoved(fn(s))), key);
+
+  const setChair = (id: string) =>
+    change((s) => {
+      const p = chairPreset(id);
+      const w = p.widthM * k;
+      const d = p.depthM * k;
+      return {
+        ...s,
+        chairPreset: p.id,
+        chairWidth: w,
+        chairDepth: d,
+        seatSpacing: w + seatGap(s),
+        rowPitch: d + seatway(s)
+      };
+    });
+
+  return (
+    <>
+      <div className="form-grid">
+        <Field label="Name" className="span-all" hint="Printed behind the back row, e.g. Left, Stalls.">
+          <input
+            value={block.name ?? ""}
+            disabled={multiple}
+            onChange={(e) => patchSeating((s) => ({ ...s, name: e.target.value || undefined }), "name")}
+          />
+        </Field>
+        <NumberField
+          label="Rows"
+          min={1}
+          max={MAX_SEATING_ROWS}
+          step={1}
+          value={block.rows}
+          onChange={(v) => change((s) => ({ ...s, rows: Math.round(v) }), "rows")}
+        />
+        <NumberField
+          label="Seats per row"
+          min={1}
+          max={MAX_SEATS_PER_ROW}
+          step={1}
+          value={block.seatsPerRow}
+          onChange={(v) =>
+            change((s) => {
+              const n = Math.round(v);
+              return { ...s, seatsPerRow: n, aisles: (s.aisles ?? []).filter((a) => a < n) };
+            }, "seats")
+          }
+        />
+      </div>
+      <p className="field-hint" style={{ margin: 0 }}>
+        <strong>{count}</strong> seat{count === 1 ? "" : "s"} · {metres(size.w)} × {metres(size.h)}
+        {removed > 0 ? ` · ${removed} taken out` : ""}
+      </p>
+      {removed > 0 ? (
+        <button type="button" className="btn-sm" onClick={() => patchSeating((s) => ({ ...s, removed: undefined }))}>
+          Put back removed seats
+        </button>
+      ) : null}
+
+      <div className="form-grid">
+        <Field label="Chair" className="span-all">
+          <select value={preset?.id ?? ""} onChange={(e) => e.target.value && setChair(e.target.value)}>
+            {preset ? null : <option value="">Custom size</option>}
+            {CHAIR_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
+              </option>
+            ))}
+          </select>
+        </Field>
+        <LengthField
+          label="Chair width (m)"
+          min={1}
+          units={block.chairWidth}
+          upm={upm}
+          onChange={(v) =>
+            change((s) => ({ ...s, chairWidth: v, seatSpacing: v + seatGap(s), chairPreset: undefined }), "chairW")
+          }
+        />
+        <LengthField
+          label="Chair depth (m)"
+          min={1}
+          units={block.chairDepth}
+          upm={upm}
+          onChange={(v) =>
+            change((s) => ({ ...s, chairDepth: v, rowPitch: v + seatway(s), chairPreset: undefined }), "chairD")
+          }
+        />
+        <LengthField
+          label="Chair gap (m)"
+          min={0}
+          units={seatGap(block)}
+          upm={upm}
+          onChange={(v) => change((s) => ({ ...s, seatSpacing: s.chairWidth + v }), "gap")}
+        />
+      </div>
+
+      <Field label="Row spacing" as="div">
+        <Segmented
+          value={rowMode}
+          options={[
+            { value: "seatway", label: "Seatway" },
+            { value: "pitch", label: "Row pitch" }
+          ]}
+          onChange={setRowMode}
+        />
+      </Field>
+      <div className="form-grid">
+        {rowMode === "seatway" ? (
+          <LengthField
+            label="Seatway (m)"
+            min={0}
+            units={seatway(block)}
+            upm={upm}
+            hint="Clear gap from the back of one row to the front of the next."
+            onChange={(v) => change((s) => ({ ...s, rowPitch: s.chairDepth + v }), "seatway")}
+          />
+        ) : (
+          <LengthField
+            label="Row pitch (m)"
+            min={1}
+            units={block.rowPitch}
+            upm={upm}
+            hint="Front of one row to the front of the next."
+            onChange={(v) => change((s) => ({ ...s, rowPitch: Math.max(s.chairDepth, v) }), "pitch")}
+          />
+        )}
+      </div>
+
+      <div className="form-grid">
+        <NumberField
+          label="Aisles"
+          min={0}
+          max={Math.max(0, block.seatsPerRow - 1)}
+          step={1}
+          value={aisles.length}
+          onChange={(v) =>
+            change((s) => ({
+              ...s,
+              aisles: evenAisles(s.seatsPerRow, Math.round(v)),
+              aisleWidth: s.aisleWidth ?? 1.2 * k
+            }), "aisles")
+          }
+        />
+        <LengthField
+          label="Aisle width (m)"
+          min={0}
+          units={blockAisleWidth(block)}
+          upm={upm}
+          onChange={(v) => change((s) => ({ ...s, aisleWidth: Math.max(seatGap(s), v) }), "aisleW")}
+        />
+        {aisles.length ? (
+          <Field label="Aisle after seat" className="span-all" hint="Seat counts from the left, looking at the stage.">
+            <AislePositions
+              key={block.id}
+              value={aisles}
+              seats={block.seatsPerRow}
+              disabled={multiple}
+              onChange={(next) => change((s) => ({ ...s, aisles: next }), "aislePos")}
+            />
+          </Field>
+        ) : null}
+        <RotationField
+          value={block.rotation ?? 0}
+          onChange={(v) => patchSeating((s) => ({ ...s, rotation: v || undefined }), "rotation")}
+        />
+      </div>
+
+      {!multiple ? (
+        <p className="field-hint" style={{ margin: 0 }}>
+          Longest run {longestRun(block)} seats · seatway {metres(seatway(block))}
+          {aisles.length ? ` · aisles ${metres(blockAisleWidth(block))}` : ""}
+        </p>
       ) : null}
     </>
   );

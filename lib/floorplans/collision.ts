@@ -10,7 +10,8 @@ import {
   type Bounds,
   type Point
 } from "@/lib/floorplans/geometry";
-import type { FloorplanCanvasObject } from "@/types";
+import { seatingRunBoxes } from "@/lib/floorplans/seating";
+import type { FloorplanCanvasObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
 type Circle = { kind: "circle"; x: number; y: number; r: number };
 type Box = { kind: "box"; cx: number; cy: number; hw: number; hh: number; rotation: number };
@@ -30,6 +31,13 @@ function rotate(p: Point, degrees: number): Point {
 /** The shapes that make up an object: a table's top plus each chair, or a shape's outline. */
 export function objectShapes(obj: FloorplanCanvasObject): Shape[] {
   const box = objectBox(obj);
+  if (obj.type === "seating") {
+    // Each run of chairs between aisles, row by row: aisles and seatways are open floor.
+    return seatingRunBoxes(obj).map((b) => {
+      const c = rotate({ x: b.cx, y: b.cy }, box.rotation);
+      return { kind: "box", cx: box.cx + c.x, cy: box.cy + c.y, hw: b.w / 2, hh: b.h / 2, rotation: box.rotation };
+    });
+  }
   const body: Shape =
     box.round && box.w === box.h
       ? { kind: "circle", x: box.cx, y: box.cy, r: box.w / 2 }
@@ -110,8 +118,13 @@ export function objectsCollide(a: FloorplanCanvasObject, b: FloorplanCanvasObjec
  * and text labels are not obstacles.
  */
 export function isObstacle(obj: FloorplanCanvasObject): boolean {
-  if (obj.type === "text" || obj.type === "table") return false;
+  if (obj.type === "text" || isFurnishing(obj)) return false;
   return obj.fill !== "none";
+}
+
+/** Tables and seating blocks: the things people sit at, which shouldn't overlap each other. */
+export function isFurnishing(obj: FloorplanCanvasObject): obj is FloorplanTableObject | FloorplanSeatingObject {
+  return obj.type === "table" || obj.type === "seating";
 }
 
 function area(b: Bounds): number {
@@ -143,7 +156,7 @@ export function findFreeCentre(
   maxRings = 25
 ): Point {
   const blockers = others.filter(
-    (o) => o.type === "table" || (isObstacle(o) && !(obj.type === "table" && isFloorAreaFor(o, obj)))
+    (o) => isFurnishing(o) || (isObstacle(o) && !(isFurnishing(obj) && isFloorAreaFor(o, obj)))
   );
   if (!blockers.length || step <= 0) return start;
   const prepared = blockers.map(prepare);

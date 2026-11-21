@@ -32,11 +32,23 @@ import { LogoPicker } from "@/app/components/LogoPicker";
 import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts } from "@/app/components/ui";
 import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
 import { Inspector } from "@/app/floorplans/Inspector";
+import { PlanPanel } from "@/app/floorplans/PlanPanel";
+import { buildMeasurements, type Measurement } from "@/lib/floorplans/measure";
 import { NumericInput } from "@/app/floorplans/NumericInput";
 import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
 import { findFreeCentre } from "@/lib/floorplans/collision";
+import { CHAIR_PRESETS } from "@/lib/floorplans/seating";
+import {
+  GENERATED_SEATING_ID,
+  MAX_THEATRE_SEATS,
+  buildTheatreLayout,
+  findStage,
+  resolveTheatreSettings,
+  theatreRows,
+  type TheatreFacing
+} from "@/lib/floorplans/theatre";
 import {
   DEFAULT_UNITS_PER_METRE,
   MAX_TABLE_SEATS,
@@ -166,6 +178,8 @@ export default function FloorplansPage() {
   const tableStyle: TableStyle = draft.autoLayout.tableStyle ?? "round";
   const withTopTable = draft.autoLayout.topTable ?? false;
   const useGuestNumbers = draft.autoLayout.useGuestNumbers ?? true;
+  const generator = draft.autoLayout.generator ?? "tables";
+  const theatre = resolveTheatreSettings(draft.autoLayout.theatre);
 
   // Guest list link
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
@@ -173,7 +187,11 @@ export default function FloorplansPage() {
   const [guestsLoading, setGuestsLoading] = useState(false);
 
   const [recovered, setRecovered] = useState<Autosave | null>(null);
-  const [generatePrompt, setGeneratePrompt] = useState(false);
+  /** Which generator is asking before it replaces things, and whether to clear the other kind too. */
+  const [generatePrompt, setGeneratePrompt] = useState<"tables" | "theatre" | null>(null);
+  const [removeOther, setRemoveOther] = useState(false);
+  /** The Plan panel measurement being pointed out on the canvas. */
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const clipboardRef = useRef<{ objects: FloorplanCanvasObject[]; pastes: number } | null>(null);
 
   /* ---------- derived ---------- */
@@ -225,6 +243,16 @@ export default function FloorplansPage() {
   const plannedCount = usingGuestNumbers ? guestTableNumbers.length : tableCount;
   const gridCapacity = draft.autoLayout.rows * draft.autoLayout.columns;
   const gridOverflow = growGridToFit(plannedCount, draft.autoLayout.rows, draft.autoLayout.columns);
+
+  const measurements = useMemo(
+    () => buildMeasurements(objects, unitsPerMetre, draft.limits),
+    [objects, unitsPerMetre, draft.limits]
+  );
+  // Looked up by id each render, so the highlight follows the plan as it's edited.
+  const activeMeasurement = measurements.find((item) => item.id === highlightId && item.highlight) ?? null;
+  const canvasHighlight = activeMeasurement?.highlight
+    ? { ...activeMeasurement.highlight, label: activeMeasurement.value }
+    : null;
 
   const isSaved = items.some((item) => item.id === draft.id);
   const filteredItems = useMemo(() => {
@@ -375,6 +403,30 @@ export default function FloorplansPage() {
   const fitSoon = useCallback(() => {
     requestAnimationFrame(() => zoomToFit());
   }, [zoomToFit]);
+
+  // Selecting something on the canvas puts the measurement highlight away.
+  useEffect(() => {
+    if (validSelected.length) setHighlightId(null);
+  }, [validSelected.length]);
+
+  /** Point out a measurement: highlight it and bring it into the middle of the view. */
+  function showMeasurement(item: Measurement | null) {
+    setHighlightId(item?.id ?? null);
+    const pts = item?.highlight ? [...item.highlight.polygons.flat(), ...(item.highlight.line ?? [])] : [];
+    const rect = canvasViewportRef.current?.getBoundingClientRect();
+    if (!pts.length || !rect) return;
+    const cx = (Math.min(...pts.map((p) => p.x)) + Math.max(...pts.map((p) => p.x))) / 2;
+    const cy = (Math.min(...pts.map((p) => p.y)) + Math.max(...pts.map((p) => p.y))) / 2;
+    setView((v) => ({ ...v, pan: { x: rect.width / 2 - cx * v.zoom, y: rect.height / 2 - cy * v.zoom } }));
+  }
+
+  function setLimits(patch: Partial<NonNullable<FloorplanDocument["limits"]>>) {
+    commit((doc) => {
+      const merged = { ...doc.limits, ...patch };
+      const kept = Object.fromEntries(Object.entries(merged).filter(([, v]) => v != null));
+      return { ...doc, limits: Object.keys(kept).length ? kept : undefined };
+    }, "limits");
+  }
 
   function viewCentre() {
     const rect = canvasViewportRef.current?.getBoundingClientRect();
@@ -623,16 +675,61 @@ export default function FloorplansPage() {
   /** Tables Auto layout didn't make (added from the panel, pasted or duplicated). */
   const handPlacedTables = objects.filter((o) => o.type === "table" && !GENERATED_ID.test(o.id));
 
-  function generateTables() {
-    if (handPlacedTables.length) {
-      setGeneratePrompt(true);
-      return;
-    }
-    runGenerate(false);
+  /** Seating blocks Auto layout didn't make. */
+  const handPlacedSeating = objects.filter((o) => o.type === "seating" && !GENERATED_SEATING_ID.test(o.id));
+  const seatingBlocks = objects.filter((o) => o.type === "seating");
+  const tableObjects = objects.filter((o) => o.type === "table");
+  const stage = findStage(objects);
+
+  function setTheatre(patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>, key?: string) {
+    commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, theatre: { ...doc.autoLayout.theatre, ...patch } } }), key);
   }
 
-  function runGenerate(keepHandPlaced: boolean) {
-    setGeneratePrompt(false);
+  /**
+   * Ask first when generating would replace things placed by hand, or when the plan holds the other kind of
+   * seating (tables while laying out theatre rows, or the other way round), which is kept unless asked.
+   */
+  function startGenerate(kind: "tables" | "theatre") {
+    const handPlaced = kind === "tables" ? handPlacedTables : handPlacedSeating;
+    const other = kind === "tables" ? seatingBlocks : tableObjects;
+    if (handPlaced.length || other.length) {
+      setRemoveOther(false);
+      setGeneratePrompt(kind);
+      return;
+    }
+    if (kind === "tables") runGenerate(false, false);
+    else runTheatre(false, false);
+  }
+
+  function runTheatre(keepHandPlaced: boolean, clearTables: boolean) {
+    setGeneratePrompt(null);
+    const kept = new Set(keepHandPlaced ? handPlacedSeating.map((o) => o.id) : []);
+    const generated = buildTheatreLayout(draft.autoLayout.theatre, {
+      unitsPerMetre: unitsPerMetre ?? DEFAULT_UNITS_PER_METRE,
+      objects,
+      fallbackCentre: viewCentre()
+    });
+    commit((doc) => ({
+      ...doc,
+      metadata: {
+        title: doc.metadata.title || doc.themeSnapshot.eventName,
+        subtitle: doc.metadata.subtitle || doc.themeSnapshot.eventSubtitle || ""
+      },
+      objects: [
+        ...doc.objects.filter((o) => {
+          if (o.type === "seating") return kept.has(o.id);
+          if (o.type === "table") return !clearTables;
+          return true;
+        }),
+        ...generated
+      ]
+    }));
+    setSelectedIds([]);
+    fitSoon();
+  }
+
+  function runGenerate(keepHandPlaced: boolean, clearSeating: boolean) {
+    setGeneratePrompt(null);
     const kept = keepHandPlaced ? handPlacedTables : [];
     const taken = new Set(kept.map((t) => (t.type === "table" ? t.tableNumber.trim() : "")));
     let numbers: string[];
@@ -662,7 +759,14 @@ export default function FloorplansPage() {
         subtitle: doc.metadata.subtitle || doc.themeSnapshot.eventSubtitle || ""
       },
       autoLayout,
-      objects: [...doc.objects.filter((o) => o.type !== "table" || keptIds.has(o.id)), ...generated]
+      objects: [
+        ...doc.objects.filter((o) => {
+          if (o.type === "table") return keptIds.has(o.id);
+          if (o.type === "seating") return !clearSeating;
+          return true;
+        }),
+        ...generated
+      ]
     }));
     setSelectedIds([]);
     fitSoon();
@@ -1216,30 +1320,15 @@ export default function FloorplansPage() {
       ) : null}
 
       {generatePrompt ? (
-        <Modal
-          title="Replace tables?"
-          size="sm"
-          onClose={() => setGeneratePrompt(false)}
-          footer={
-            <>
-              <button type="button" onClick={() => setGeneratePrompt(false)}>
-                Cancel
-              </button>
-              <button type="button" onClick={() => runGenerate(true)}>
-                Keep them
-              </button>
-              <button type="button" className="btn-primary" onClick={() => runGenerate(false)}>
-                Replace all tables
-              </button>
-            </>
-          }
-        >
-          <p style={{ margin: 0 }}>
-            {handPlacedTables.length} table{handPlacedTables.length === 1 ? " was" : "s were"} added by hand rather than by
-            Auto layout. Generating replaces every table on the plan; you can keep the hand-placed ones instead, and new
-            tables will skip their numbers. Shapes and labels are kept either way, and you can undo.
-          </p>
-        </Modal>
+        <GeneratePrompt
+          kind={generatePrompt}
+          handPlaced={generatePrompt === "tables" ? handPlacedTables.length : handPlacedSeating.length}
+          other={generatePrompt === "tables" ? seatingBlocks.length : tableObjects.length}
+          removeOther={removeOther}
+          onRemoveOther={setRemoveOther}
+          onCancel={() => setGeneratePrompt(null)}
+          onRun={(keep) => (generatePrompt === "tables" ? runGenerate(keep, removeOther) : runTheatre(keep, removeOther))}
+        />
       ) : null}
 
       {previewUrl ? (
@@ -1396,6 +1485,7 @@ export default function FloorplansPage() {
               setDoc({ ...draftRef.current, objects: next });
               setDirty(true);
             }}
+            highlight={canvasHighlight}
             emptyHint={
               <span>
                 Add tables from <strong>Add to plan</strong>, or generate a grid with <strong>Auto layout</strong>.
@@ -1432,6 +1522,17 @@ export default function FloorplansPage() {
               onDelete={deleteSelection}
               onOrder={reorderSelected}
             />
+          ) : objects.length ? (
+            <PlanPanel
+              measurements={measurements}
+              limits={draft.limits}
+              scaled={Boolean(unitsPerMetre)}
+              seatingBlocks={seatingBlocks.length}
+              activeId={activeMeasurement?.id ?? null}
+              onShow={showMeasurement}
+              onLimits={setLimits}
+              onSelectAllSeating={() => setSelectedIds(seatingBlocks.map((o) => o.id))}
+            />
           ) : null}
 
           <Section
@@ -1439,13 +1540,17 @@ export default function FloorplansPage() {
             collapsible
             defaultOpen
             summary={issues.length ? `${issues.length} to look at` : "All clear"}
-            description={`${totals.tables} table${totals.tables === 1 ? "" : "s"} · ${totals.seats} seats${
-              totals.guests != null ? ` · ${totals.guests} guests` : ""
-            }`}
+            description={[
+              totals.tables || !totals.blocks ? `${totals.tables} table${totals.tables === 1 ? "" : "s"} · ${totals.seats} seats` : "",
+              totals.blocks ? `${totals.theatreSeats} theatre seats` : "",
+              totals.guests != null ? `${totals.guests} guests` : ""
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           >
             {issues.length === 0 ? (
               <p className="field-hint" style={{ margin: 0 }}>
-                {hasTables ? "No problems found." : "Add some tables to see checks."}
+                {hasTables || totals.blocks ? "No problems found." : "Add some tables or seating to see checks."}
               </p>
             ) : (
               <ul className="issue-list">
@@ -1752,162 +1857,184 @@ export default function FloorplansPage() {
             title="Auto layout"
             collapsible
             defaultOpen={objects.length === 0}
-            summary="Generate a numbered grid of tables"
+            summary={generator === "tables" ? "Generate a numbered grid of tables" : "Generate rows of theatre seating"}
           >
             <div className="stack">
-              <Field label="Table type" as="div">
-                <Segmented value={tableStyle} options={STYLE_OPTIONS} onChange={(value) => setAuto({ tableStyle: value })} />
-              </Field>
-              {tableStyle !== "long" ? (
-                <Field label="Round table size" as="div">
-                  <Segmented
-                    value={roundSize}
-                    options={(Object.keys(ROUND_TABLE_SIZES) as RoundTableSize[]).map((key) => ({
-                      value: key,
-                      label: ROUND_TABLE_SIZES[key].label,
-                      title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
-                    }))}
-                    onChange={(value) => {
-                      setAuto({ roundSize: value, seatsPerTable: ROUND_TABLE_SIZES[value].seats });
-                    }}
-                  />
-                </Field>
-              ) : null}
-              <div className="form-grid">
-                <Field label="Tables">
-                  <NumericInput
-                    min={1}
-                    max={MAX_GENERATED_TABLES}
-                    integer
-                    value={plannedCount}
-                    disabled={usingGuestNumbers}
-                    onCommit={(n) => {
-                      if (n != null) setAuto({ tableCount: n }, "tableCount");
-                    }}
-                  />
-                </Field>
-                <Field label="Seats each">
-                  <NumericInput
-                    min={1}
-                    max={MAX_TABLE_SEATS}
-                    integer
-                    value={seatsPerTable}
-                    onCommit={(n) => {
-                      if (n != null) setAuto({ seatsPerTable: n }, "seatsPerTable");
-                    }}
-                  />
-                </Field>
-                <Field label="Rows">
-                  <NumericInput
-                    min={1}
-                    max={MAX_GRID}
-                    integer
-                    value={draft.autoLayout.rows}
-                    onCommit={(rows) => {
-                      if (rows != null) commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, rows } }), "rows");
-                    }}
-                  />
-                </Field>
-                <Field label="Columns">
-                  <NumericInput
-                    min={1}
-                    max={MAX_GRID}
-                    integer
-                    value={draft.autoLayout.columns}
-                    onCommit={(columns) => {
-                      if (columns != null)
-                        commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, columns } }), "columns");
-                    }}
-                  />
-                </Field>
-                {gridOverflow ? (
-                  <p className="field-hint span-all" style={{ margin: 0 }}>
-                    A {draft.autoLayout.rows} × {draft.autoLayout.columns} grid holds {gridCapacity} tables. Generating{" "}
-                    {plannedCount} will make it {gridOverflow.rows} × {gridOverflow.columns}.
-                  </p>
-                ) : null}
-                <Field label="Numbering">
-                  <select
-                    value={draft.autoLayout.numbering}
-                    onChange={(e) => {
-                      const numbering = e.target.value as "straight" | "snaked";
-                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, numbering } }));
-                    }}
-                  >
-                    <option value="straight">Straight</option>
-                    <option value="snaked">Snaked</option>
-                  </select>
-                </Field>
-                <Field label="Start corner">
-                  <select
-                    value={draft.autoLayout.startCorner}
-                    onChange={(e) => {
-                      const startCorner = e.target.value as FloorplanDocument["autoLayout"]["startCorner"];
-                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, startCorner } }));
-                    }}
-                  >
-                    <option value="topLeft">Top left</option>
-                    <option value="topRight">Top right</option>
-                    <option value="bottomLeft">Bottom left</option>
-                    <option value="bottomRight">Bottom right</option>
-                  </select>
-                </Field>
-                <Field
-                  label="Arrangement"
-                  as="div"
-                  className="span-all"
-                  hint="Staggered offsets every other row or column by half a cell so tables nest like bricks."
-                >
-                  <Segmented
-                    value={draft.autoLayout.tableLayout}
-                    options={[
-                      { value: "aligned", label: "Aligned grid" },
-                      { value: "staggered", label: "Staggered" }
-                    ]}
-                    onChange={(value) =>
-                      commit((doc) => ({
-                        ...doc,
-                        autoLayout: {
-                          ...doc.autoLayout,
-                          tableLayout: value,
-                          staggerAxis: value === "staggered" ? (doc.autoLayout.staggerAxis ?? "horizontal") : undefined
-                        }
-                      }))
-                    }
-                  />
-                </Field>
-                {draft.autoLayout.tableLayout === "staggered" ? (
-                  <Field label="Offset" as="div" className="span-all">
-                    <Segmented
-                      value={draft.autoLayout.staggerAxis ?? "horizontal"}
-                      options={[
-                        { value: "horizontal", label: "Odd rows", title: "Horizontal: odd rows offset (classic banqueting)" },
-                        { value: "vertical", label: "Odd columns", title: "Vertical: odd columns offset downward" }
-                      ]}
-                      onChange={(value) =>
-                        commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, staggerAxis: value } }))
-                      }
-                    />
+              <Segmented
+                value={generator}
+                aria-label="What to generate"
+                options={[
+                  { value: "tables", label: "Tables" },
+                  { value: "theatre", label: "Theatre seating" }
+                ]}
+                onChange={(value) => setAuto({ generator: value })}
+              />
+              {generator === "tables" ? (
+                <>
+                  <Field label="Table type" as="div">
+                    <Segmented value={tableStyle} options={STYLE_OPTIONS} onChange={(value) => setAuto({ tableStyle: value })} />
                   </Field>
-                ) : null}
-              </div>
-              <Switch label="Add a top table" checked={withTopTable} onChange={(topTable) => setAuto({ topTable })} />
-              {tableGuests ? (
-                <Switch
-                  label="Use table numbers from guest list"
-                  hint={`${Object.keys(tableGuests).length} tables in the linked event.`}
-                  checked={useGuestNumbers}
-                  onChange={(on) => setAuto({ useGuestNumbers: on })}
+                  {tableStyle !== "long" ? (
+                    <Field label="Round table size" as="div">
+                      <Segmented
+                        value={roundSize}
+                        options={(Object.keys(ROUND_TABLE_SIZES) as RoundTableSize[]).map((key) => ({
+                          value: key,
+                          label: ROUND_TABLE_SIZES[key].label,
+                          title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
+                        }))}
+                        onChange={(value) => {
+                          setAuto({ roundSize: value, seatsPerTable: ROUND_TABLE_SIZES[value].seats });
+                        }}
+                      />
+                    </Field>
+                  ) : null}
+                  <div className="form-grid">
+                    <Field label="Tables">
+                      <NumericInput
+                        min={1}
+                        max={MAX_GENERATED_TABLES}
+                        integer
+                        value={plannedCount}
+                        disabled={usingGuestNumbers}
+                        onCommit={(n) => {
+                          if (n != null) setAuto({ tableCount: n }, "tableCount");
+                        }}
+                      />
+                    </Field>
+                    <Field label="Seats each">
+                      <NumericInput
+                        min={1}
+                        max={MAX_TABLE_SEATS}
+                        integer
+                        value={seatsPerTable}
+                        onCommit={(n) => {
+                          if (n != null) setAuto({ seatsPerTable: n }, "seatsPerTable");
+                        }}
+                      />
+                    </Field>
+                    <Field label="Rows">
+                      <NumericInput
+                        min={1}
+                        max={MAX_GRID}
+                        integer
+                        value={draft.autoLayout.rows}
+                        onCommit={(rows) => {
+                          if (rows != null) commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, rows } }), "rows");
+                        }}
+                      />
+                    </Field>
+                    <Field label="Columns">
+                      <NumericInput
+                        min={1}
+                        max={MAX_GRID}
+                        integer
+                        value={draft.autoLayout.columns}
+                        onCommit={(columns) => {
+                          if (columns != null)
+                            commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, columns } }), "columns");
+                        }}
+                      />
+                    </Field>
+                    {gridOverflow ? (
+                      <p className="field-hint span-all" style={{ margin: 0 }}>
+                        A {draft.autoLayout.rows} × {draft.autoLayout.columns} grid holds {gridCapacity} tables. Generating{" "}
+                        {plannedCount} will make it {gridOverflow.rows} × {gridOverflow.columns}.
+                      </p>
+                    ) : null}
+                    <Field label="Numbering">
+                      <select
+                        value={draft.autoLayout.numbering}
+                        onChange={(e) => {
+                          const numbering = e.target.value as "straight" | "snaked";
+                          commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, numbering } }));
+                        }}
+                      >
+                        <option value="straight">Straight</option>
+                        <option value="snaked">Snaked</option>
+                      </select>
+                    </Field>
+                    <Field label="Start corner">
+                      <select
+                        value={draft.autoLayout.startCorner}
+                        onChange={(e) => {
+                          const startCorner = e.target.value as FloorplanDocument["autoLayout"]["startCorner"];
+                          commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, startCorner } }));
+                        }}
+                      >
+                        <option value="topLeft">Top left</option>
+                        <option value="topRight">Top right</option>
+                        <option value="bottomLeft">Bottom left</option>
+                        <option value="bottomRight">Bottom right</option>
+                      </select>
+                    </Field>
+                    <Field
+                      label="Arrangement"
+                      as="div"
+                      className="span-all"
+                      hint="Staggered offsets every other row or column by half a cell so tables nest like bricks."
+                    >
+                      <Segmented
+                        value={draft.autoLayout.tableLayout}
+                        options={[
+                          { value: "aligned", label: "Aligned grid" },
+                          { value: "staggered", label: "Staggered" }
+                        ]}
+                        onChange={(value) =>
+                          commit((doc) => ({
+                            ...doc,
+                            autoLayout: {
+                              ...doc.autoLayout,
+                              tableLayout: value,
+                              staggerAxis: value === "staggered" ? (doc.autoLayout.staggerAxis ?? "horizontal") : undefined
+                            }
+                          }))
+                        }
+                      />
+                    </Field>
+                    {draft.autoLayout.tableLayout === "staggered" ? (
+                      <Field label="Offset" as="div" className="span-all">
+                        <Segmented
+                          value={draft.autoLayout.staggerAxis ?? "horizontal"}
+                          options={[
+                            { value: "horizontal", label: "Odd rows", title: "Horizontal: odd rows offset (classic banqueting)" },
+                            { value: "vertical", label: "Odd columns", title: "Vertical: odd columns offset downward" }
+                          ]}
+                          onChange={(value) =>
+                            commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, staggerAxis: value } }))
+                          }
+                        />
+                      </Field>
+                    ) : null}
+                  </div>
+                  <Switch label="Add a top table" checked={withTopTable} onChange={(topTable) => setAuto({ topTable })} />
+                  {tableGuests ? (
+                    <Switch
+                      label="Use table numbers from guest list"
+                      hint={`${Object.keys(tableGuests).length} tables in the linked event.`}
+                      checked={useGuestNumbers}
+                      onChange={(on) => setAuto({ useGuestNumbers: on })}
+                    />
+                  ) : null}
+                  <button type="button" onClick={() => startGenerate("tables")}>
+                    Generate tables
+                  </button>
+                  {hasTables ? (
+                    <p className="field-hint" style={{ margin: 0 }}>
+                      Replaces the existing tables. Shapes and labels are kept. Undo is available.
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <TheatreForm
+                  settings={theatre}
+                  stageLabel={stage ? stage.label || "Stage" : null}
+                  scaled={Boolean(unitsPerMetre)}
+                  hasSeating={seatingBlocks.length > 0}
+                  onChange={setTheatre}
+                  onGenerate={() => startGenerate("theatre")}
                 />
-              ) : null}
-              <button type="button" onClick={generateTables}>
-                Generate tables
-              </button>
-              {hasTables ? (
-                <p className="field-hint" style={{ margin: 0 }}>
-                  Replaces the existing tables. Shapes and labels are kept. Undo is available.
-                </p>
-              ) : null}
+              )}
             </div>
           </Section>
         </aside>
@@ -1921,5 +2048,226 @@ export default function FloorplansPage() {
         ) : null}
       </Toasts>
     </main>
+  );
+}
+
+function GeneratePrompt({
+  kind,
+  handPlaced,
+  other,
+  removeOther,
+  onRemoveOther,
+  onCancel,
+  onRun
+}: {
+  kind: "tables" | "theatre";
+  handPlaced: number;
+  other: number;
+  removeOther: boolean;
+  onRemoveOther: (on: boolean) => void;
+  onCancel: () => void;
+  onRun: (keepHandPlaced: boolean) => void;
+}) {
+  const tables = kind === "tables";
+  const noun = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const otherNoun = tables ? noun(other, "seating block", "seating blocks") : noun(other, "table", "tables");
+  return (
+    <Modal
+      title={tables ? "Generate tables" : "Generate theatre seating"}
+      size="sm"
+      onClose={onCancel}
+      footer={
+        <>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          {handPlaced ? (
+            <button type="button" onClick={() => onRun(true)}>
+              Keep them
+            </button>
+          ) : null}
+          <button type="button" className="btn-primary" onClick={() => onRun(false)}>
+            {handPlaced ? (tables ? "Replace all tables" : "Replace all seating") : "Generate"}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        {handPlaced ? (
+          <p style={{ margin: 0 }}>
+            {tables
+              ? `${noun(handPlaced, "table was", "tables were")} added by hand rather than by Auto layout. Generating replaces every table on the plan; you can keep the hand-placed ones instead, and new tables will skip their numbers.`
+              : `${noun(handPlaced, "seating block was", "seating blocks were")} added by hand rather than by Auto layout. Generating replaces all the seating on the plan; you can keep the hand-placed blocks instead.`}{" "}
+            Shapes and labels are kept either way, and you can undo.
+          </p>
+        ) : null}
+        {other ? (
+          <Switch
+            label={`Also remove the ${otherNoun}`}
+            hint={
+              tables
+                ? "Off keeps the theatre seating alongside the new tables."
+                : "Off keeps the tables alongside the new seating, e.g. to compare a dinner and a conference layout."
+            }
+            checked={removeOther}
+            onChange={onRemoveOther}
+          />
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
+function TheatreForm({
+  settings,
+  stageLabel,
+  scaled,
+  hasSeating,
+  onChange,
+  onGenerate
+}: {
+  settings: ReturnType<typeof resolveTheatreSettings>;
+  stageLabel: string | null;
+  scaled: boolean;
+  hasSeating: boolean;
+  onChange: (patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>, key?: string) => void;
+  onGenerate: () => void;
+}) {
+  const rows = theatreRows(settings);
+  const actual = rows * settings.seatsPerRow;
+  const aisles = Math.min(settings.aisles, Math.max(0, settings.seatsPerRow - 1));
+  return (
+    <>
+      <div className="form-grid">
+        <Field label="Seats">
+          <NumericInput
+            min={1}
+            max={MAX_THEATRE_SEATS}
+            integer
+            value={settings.totalSeats}
+            onCommit={(n) => {
+              if (n != null) onChange({ totalSeats: n }, "theatreTotal");
+            }}
+          />
+        </Field>
+        <Field label="Seats per row">
+          <NumericInput
+            min={1}
+            max={200}
+            integer
+            value={settings.seatsPerRow}
+            onCommit={(n) => {
+              if (n != null) onChange({ seatsPerRow: n }, "theatrePerRow");
+            }}
+          />
+        </Field>
+        <p className="field-hint span-all" style={{ margin: 0 }}>
+          {rows} row{rows === 1 ? "" : "s"} of {settings.seatsPerRow} = <strong>{actual}</strong> seats
+          {actual > settings.totalSeats ? ` (${actual - settings.totalSeats} more than asked, to fill the back row)` : ""}.
+        </p>
+        <Field label="Chair" className="span-all">
+          <select value={settings.chairPreset} onChange={(e) => onChange({ chairPreset: e.target.value })}>
+            {CHAIR_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Seatway (m)" hint="Clear gap between rows.">
+          <NumericInput
+            min={0}
+            max={5}
+            value={settings.seatwayM}
+            onCommit={(n) => {
+              if (n != null) onChange({ seatwayM: n }, "theatreSeatway");
+            }}
+          />
+        </Field>
+        <Field label="Aisles">
+          <NumericInput
+            min={0}
+            max={20}
+            integer
+            value={settings.aisles}
+            onCommit={(n) => {
+              if (n != null) onChange({ aisles: n }, "theatreAisles");
+            }}
+          />
+        </Field>
+        <Field label="Aisle width (m)">
+          <NumericInput
+            min={0}
+            max={20}
+            value={settings.aisleWidthM}
+            onCommit={(n) => {
+              if (n != null) onChange({ aisleWidthM: n }, "theatreAisleW");
+            }}
+          />
+        </Field>
+        <Field label="Cross aisle every" hint="Rows; 0 for none.">
+          <NumericInput
+            min={0}
+            max={200}
+            integer
+            value={settings.crossAisleEvery}
+            onCommit={(n) => {
+              if (n != null) onChange({ crossAisleEvery: n }, "theatreCross");
+            }}
+          />
+        </Field>
+      </div>
+      {aisles > 0 ? (
+        <Switch
+          label="A separate block for each section"
+          hint="Each run of seats between aisles becomes its own block, so it can be moved on its own."
+          checked={settings.splitAtAisles}
+          onChange={(splitAtAisles) => onChange({ splitAtAisles })}
+        />
+      ) : null}
+      <Field label="Audience faces" as="div">
+        <Segmented
+          value={settings.facing}
+          options={[
+            { value: "up", label: "Up" },
+            { value: "down", label: "Down" },
+            { value: "left", label: "Left" },
+            { value: "right", label: "Right" }
+          ]}
+          onChange={(facing: TheatreFacing) => onChange({ facing })}
+        />
+      </Field>
+      <Field
+        label="Front row to stage (m)"
+        hint={
+          stageLabel
+            ? `Measured from “${stageLabel}”.`
+            : "No shape labelled Stage yet, so the seating goes in the middle of the view."
+        }
+      >
+        <NumericInput
+          min={0}
+          max={100}
+          value={settings.frontDistanceM}
+          disabled={!stageLabel}
+          onCommit={(n) => {
+            if (n != null) onChange({ frontDistanceM: n }, "theatreFront");
+          }}
+        />
+      </Field>
+      {!scaled ? (
+        <p className="field-hint" style={{ margin: 0 }}>
+          No scale is set, so chair sizes are approximate. Set one under Grid and scale for true sizes.
+        </p>
+      ) : null}
+      <button type="button" onClick={onGenerate}>
+        Generate seating
+      </button>
+      {hasSeating ? (
+        <p className="field-hint" style={{ margin: 0 }}>
+          Replaces the existing seating. Tables, shapes and labels are kept unless you choose otherwise. Undo is available.
+        </p>
+      ) : null}
+    </>
   );
 }
