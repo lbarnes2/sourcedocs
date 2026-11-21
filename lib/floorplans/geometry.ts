@@ -458,7 +458,7 @@ export function resizeFromCorner(
   const anchor = { x: (-handle.sx * box.w) / 2, y: (-handle.sy * box.h) / 2 };
   if (obj.type === "seating") {
     // Seating grows and shrinks by whole rows and seats; the opposite corner stays put.
-    const fitted = seatingFitTo(obj, (local.x - anchor.x) * handle.sx, (local.y - anchor.y) * handle.sy, handle.sx < 0);
+    const fitted = seatingFitTo(obj, (local.x - anchor.x) * handle.sx, (local.y - anchor.y) * handle.sy, handle.sx < 0, handle.sy < 0);
     const size = seatingSize(fitted);
     const centre = rotatePoint({ x: anchor.x + (handle.sx * size.w) / 2, y: anchor.y + (handle.sy * size.h) / 2 }, box.rotation);
     return { ...fitted, x: tidy(box.cx + centre.x), y: tidy(box.cy + centre.y) };

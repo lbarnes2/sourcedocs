@@ -10,7 +10,7 @@ import {
   type Bounds,
   type Point
 } from "@/lib/floorplans/geometry";
-import { seatingRunBoxes } from "@/lib/floorplans/seating";
+import { seatKey, seatingRunBoxes, seatingSeats } from "@/lib/floorplans/seating";
 import type { FloorplanCanvasObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
 type Circle = { kind: "circle"; x: number; y: number; r: number };
@@ -179,3 +179,33 @@ export function findFreeCentre(
   return start;
 }
 
+
+/**
+ * Chairs in a seating block that stand on, or come within `gap` of, something else: obstacles (pillars,
+ * bars, AV desks…), tables and other seating. Floor areas the whole block stands on (a coloured room) and
+ * the block's own chairs don't count. Returns "row:seat" keys.
+ */
+export function seatsBlocked(block: FloorplanSeatingObject, others: FloorplanCanvasObject[], gap: number): string[] {
+  const blockers = others
+    .filter((o) => o.id !== block.id && (isFurnishing(o) || (isObstacle(o) && !isFloorAreaFor(o, block))))
+    .map(prepare);
+  if (!blockers.length) return [];
+  const rotation = block.rotation ?? 0;
+  const out: string[] = [];
+  for (const seat of seatingSeats(block)) {
+    const c = rotate({ x: seat.x, y: seat.y }, rotation);
+    const chair: Box = {
+      kind: "box",
+      cx: block.x + c.x,
+      cy: block.y + c.y,
+      hw: block.chairWidth / 2,
+      hh: block.chairDepth / 2,
+      rotation
+    };
+    const r = Math.hypot(chair.hw, chair.hh) + gap;
+    const bounds = { minX: chair.cx - r, minY: chair.cy - r, maxX: chair.cx + r, maxY: chair.cy + r };
+    const hit = blockers.some((o) => boundsMeet(bounds, o.bounds, 0) && o.shapes.some((sh) => shapesHit(chair, sh, gap)));
+    if (hit) out.push(seatKey(seat.row, seat.seat));
+  }
+  return out;
+}

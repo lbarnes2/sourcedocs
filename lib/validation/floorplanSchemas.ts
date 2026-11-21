@@ -70,6 +70,7 @@ const seatingObjectSchema = objectBase.extend({
   aisleWidth: z.number().min(0).max(5_000).optional(),
   rotation: rotationSchema.optional(),
   removed: z.array(z.string().max(20)).max(40_000).optional(),
+  wheelchair: z.array(z.string().max(20)).max(40_000).optional(),
   chairPreset: z.string().max(40).optional()
 });
 
@@ -113,7 +114,8 @@ const theatreSettingsSchema = z.object({
   chairPreset: z.string().max(40).optional(),
   seatwayM: z.number().min(0).max(5).optional(),
   frontDistanceM: z.number().min(0).max(100).optional(),
-  facing: z.enum(["up", "down", "left", "right"]).optional()
+  facing: z.enum(["up", "down", "left", "right"]).optional(),
+  maxRun: z.number().int().min(1).max(200).optional()
 });
 
 /** Banqueting floorplan fields plus optional stagger direction for standalone floorplan auto-layout. */

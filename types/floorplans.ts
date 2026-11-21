@@ -91,6 +91,8 @@ export interface FloorplanSeatingObject extends FloorplanBaseObject {
   rotation?: number;
   /** Seats taken out of the block, as "row:seat" (both from 0). */
   removed?: string[];
+  /** Chair positions kept clear as wheelchair spaces, as "row:seat". Not counted as chairs. */
+  wheelchair?: string[];
   /** The chair preset the size came from, if any. */
   chairPreset?: string;
 }
@@ -144,6 +146,8 @@ export interface FloorplanTheatreSettings {
   seatwayM?: number;
   frontDistanceM?: number;
   facing?: "up" | "down" | "left" | "right";
+  /** Filling an area: the most seats allowed between aisles (aisles are added to keep within it). */
+  maxRun?: number;
 }
 
 /** The user's own figures to compare the plan's measurements against (metres, seats). Nothing is a rule. */

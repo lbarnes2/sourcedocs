@@ -10,6 +10,7 @@ import {
   seatingAisleStrips,
   seatingAisles,
   seatingSeatCount,
+  seatingWheelchairCount,
   seatingSeatwayStrip,
   seatway,
   type LocalBox
@@ -127,16 +128,22 @@ export function buildMeasurements(
   const theatreSeats = blocks.reduce((sum, s) => sum + seatingSeatCount(s), 0);
   const tableSeats = objects.reduce((sum, o) => sum + (o.type === "table" ? tableSeatCount(o) : 0), 0);
   const capacity = theatreSeats + tableSeats;
+  const wheelchair = blocks.reduce((sum, s) => sum + seatingWheelchairCount(s), 0);
   out.push({
     id: "capacity",
     label: "Seats",
     value: String(capacity),
     detail:
-      theatreSeats && tableSeats
-        ? `${theatreSeats} in rows, ${tableSeats} at tables`
-        : blocks.length
-          ? `${blocks.length} block${blocks.length === 1 ? "" : "s"}`
-          : undefined,
+      [
+        theatreSeats && tableSeats
+          ? `${theatreSeats} in rows, ${tableSeats} at tables`
+          : blocks.length
+            ? `${blocks.length} block${blocks.length === 1 ? "" : "s"}`
+            : "",
+        wheelchair ? `plus ${wheelchair} wheelchair space${wheelchair === 1 ? "" : "s"}` : ""
+      ]
+        .filter(Boolean)
+        .join(", ") || undefined,
     past: L.maxCapacity != null && capacity > L.maxCapacity,
     limit: L.maxCapacity != null ? `max ${L.maxCapacity}` : undefined,
     objectIds: []

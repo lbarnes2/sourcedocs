@@ -10,6 +10,7 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalDistributeCenter,
+  Armchair,
   Copy,
   CopyPlus,
   Download,
@@ -38,15 +39,17 @@ import { NumericInput } from "@/app/floorplans/NumericInput";
 import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
-import { findFreeCentre } from "@/lib/floorplans/collision";
-import { CHAIR_PRESETS } from "@/lib/floorplans/seating";
+import { findFreeCentre, seatsBlocked } from "@/lib/floorplans/collision";
+import { CHAIR_PRESETS, withSeatState, type SeatState } from "@/lib/floorplans/seating";
 import {
   GENERATED_SEATING_ID,
   MAX_THEATRE_SEATS,
   buildTheatreLayout,
+  fillAreaWithSeating,
   findStage,
   resolveTheatreSettings,
   theatreRows,
+  type FillArea,
   type TheatreFacing
 } from "@/lib/floorplans/theatre";
 import {
@@ -62,6 +65,7 @@ import {
   objectsPrintBounds,
   printFit,
   printLayout,
+  rotatePoint,
   recommendedRadius,
   recommendedRectSize,
   resolvePrintOptions,
@@ -108,6 +112,19 @@ const MAX_GENERATED_TABLES = 400;
 const UNTITLED = "Untitled floorplan";
 /** Ids Auto layout gives its tables ("table-12", "table-top"); anything else was placed by hand. */
 const GENERATED_ID = /^table-/;
+
+/** Corners of a fill area, for outlining it on the canvas. */
+function areaPolygon(area: FillArea) {
+  return [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1]
+  ].map(([sx, sy]) => {
+    const p = rotatePoint({ x: (sx * area.w) / 2, y: (sy * area.h) / 2 }, area.rotation);
+    return { x: area.cx + p.x, y: area.cy + p.y };
+  });
+}
 
 /** The smallest grid (keeping the column count where possible) that fits `count` tables, or null if it already fits. */
 function growGridToFit(count: number, rows: number, columns: number): { rows: number; columns: number } | null {
@@ -157,6 +174,15 @@ export default function FloorplansPage() {
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<CanvasView>({ zoom: 1, pan: { x: 0, y: 0 } });
   const [panTool, setPanTool] = useState(false);
+  /** Drawing a rectangle to fill with seating. */
+  const [drawMode, setDrawMode] = useState(false);
+  const [fillPrompt, setFillPrompt] = useState<{
+    area: FillArea;
+    marginM: number;
+    facing: TheatreFacing;
+    /** The shape being filled, which isn't in the way of its own seating. */
+    shapeId?: string;
+  } | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showFrame, setShowFrame] = useState(true);
@@ -190,6 +216,15 @@ export default function FloorplansPage() {
   /** Which generator is asking before it replaces things, and whether to clear the other kind too. */
   const [generatePrompt, setGeneratePrompt] = useState<"tables" | "theatre" | null>(null);
   const [removeOther, setRemoveOther] = useState(false);
+  /** Editing the chairs of one seating block: clicking a chair takes it out or marks a wheelchair space. */
+  const [seatEdit, setSeatEdit] = useState<{ id: string; tool: "remove" | "wheelchair" } | null>(null);
+  /** A short-lived note about something that just happened. */
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   /** The Plan panel measurement being pointed out on the canvas. */
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const clipboardRef = useRef<{ objects: FloorplanCanvasObject[]; pastes: number } | null>(null);
@@ -403,6 +438,83 @@ export default function FloorplansPage() {
   const fitSoon = useCallback(() => {
     requestAnimationFrame(() => zoomToFit());
   }, [zoomToFit]);
+
+  // Seat editing ends when its block is no longer the one thing selected.
+  useEffect(() => {
+    if (seatEdit && !(validSelected.length === 1 && validSelected[0] === seatEdit.id)) setSeatEdit(null);
+  }, [seatEdit, validSelected]);
+
+  function editSeats(id: string) {
+    setSelectedIds([id]);
+    setSeatEdit((current) => ({ id, tool: current?.tool ?? "remove" }));
+  }
+
+  function paintSeat(id: string, key: string, state: SeatState, stroke: number) {
+    commitObjects(
+      (list) => list.map((o) => (o.id === id && o.type === "seating" ? withSeatState(o, key, state) : o)),
+      `seats-${stroke}`
+    );
+  }
+
+  /** Clearance kept between chairs and the objects they're cleared from. */
+  const seatClearance = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.3;
+
+  function clearSeatsUnderObjects() {
+    const ids = new Set(validSelected);
+    let cleared = 0;
+    const next = objects.map((o) => {
+      if (!ids.has(o.id) || o.type !== "seating") return o;
+      const keys = seatsBlocked(o, objects, seatClearance);
+      cleared += keys.length;
+      return keys.reduce((s, key) => withSeatState(s, key, "removed"), o);
+    });
+    if (!cleared) {
+      setNotice("No chairs stand on another object.");
+      return;
+    }
+    commitObjects(() => next);
+    setNotice(`Took out ${cleared} chair${cleared === 1 ? "" : "s"}. Undo puts them back.`);
+  }
+
+  /** Which way an audience in `area` would face to look at the stage (or the saved setting without one). */
+  function facingFor(area: FillArea): TheatreFacing {
+    const stage = findStage(objects);
+    if (!stage) return theatre.facing;
+    const b = objectBodyBounds(stage);
+    const v = rotatePoint({ x: (b.minX + b.maxX) / 2 - area.cx, y: (b.minY + b.maxY) / 2 - area.cy }, -area.rotation);
+    if (Math.abs(v.x) > Math.abs(v.y)) return v.x < 0 ? "left" : "right";
+    return v.y < 0 ? "up" : "down";
+  }
+
+  function openFill(area: FillArea, marginM: number, shapeId?: string) {
+    setDrawMode(false);
+    setFillPrompt({ area, marginM, facing: facingFor(area), shapeId });
+  }
+
+  function onDrawArea(b: Bounds) {
+    setDrawMode(false);
+    const minSize = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.5;
+    if (b.maxX - b.minX < minSize || b.maxY - b.minY < minSize) return;
+    openFill({ cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, w: b.maxX - b.minX, h: b.maxY - b.minY, rotation: 0 }, 0);
+  }
+
+  function fillSelectedShape() {
+    if (!primary || primary.type !== "rect") return;
+    const box = objectBox(primary);
+    // A room outline gets a gangway round the walls to start with; any other shape is filled to its edges.
+    openFill({ cx: box.cx, cy: box.cy, w: box.w, h: box.h, rotation: box.rotation }, primary.fill === "none" ? 1 : 0, primary.id);
+  }
+
+  function runFill(blocks: FloorplanCanvasObject[], patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>) {
+    setFillPrompt(null);
+    if (!blocks.length) return;
+    commit((doc) => ({
+      ...doc,
+      autoLayout: { ...doc.autoLayout, theatre: { ...doc.autoLayout.theatre, ...patch } },
+      objects: [...doc.objects, ...blocks]
+    }));
+    setSelectedIds(blocks.map((b) => b.id));
+  }
 
   // Selecting something on the canvas puts the measurement highlight away.
   useEffect(() => {
@@ -1061,7 +1173,7 @@ export default function FloorplansPage() {
   // Keyboard shortcuts. The handler is re-bound each render so it always sees fresh state.
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (event: KeyboardEvent) => {
-    if (listOpen || previewUrl || generatePrompt) return;
+    if (listOpen || previewUrl || generatePrompt || fillPrompt) return;
     const meta = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (meta && key === "s") {
@@ -1101,7 +1213,17 @@ export default function FloorplansPage() {
       return;
     }
     if (meta) return;
+    if (event.key === "Escape" && seatEdit) {
+      setSeatEdit(null);
+      return;
+    }
+    if (event.key === "Escape" && drawMode) {
+      setDrawMode(false);
+      return;
+    }
     if (event.key === "Delete" || event.key === "Backspace") {
+      // Editing seats: the block itself isn't what's being worked on.
+      if (seatEdit) return;
       if (validSelected.length) {
         event.preventDefault();
         deleteSelection();
@@ -1319,6 +1441,21 @@ export default function FloorplansPage() {
         </Modal>
       ) : null}
 
+      {fillPrompt ? (
+        <FillPrompt
+          area={fillPrompt.area}
+          initialMargin={fillPrompt.marginM}
+          initialFacing={fillPrompt.facing}
+          settings={theatre}
+          objects={fillPrompt.shapeId ? objects.filter((o) => o.id !== fillPrompt.shapeId) : objects}
+          unitsPerMetre={unitsPerMetre ?? DEFAULT_UNITS_PER_METRE}
+          clearance={seatClearance}
+          scaled={Boolean(unitsPerMetre)}
+          onCancel={() => setFillPrompt(null)}
+          onFill={runFill}
+        />
+      ) : null}
+
       {generatePrompt ? (
         <GeneratePrompt
           kind={generatePrompt}
@@ -1450,6 +1587,19 @@ export default function FloorplansPage() {
               >
                 <Hand size={16} />
               </button>
+              <button
+                type="button"
+                className={`icon-btn${drawMode ? " icon-btn--on" : ""}`}
+                aria-pressed={drawMode}
+                onClick={() => {
+                  setDrawMode((v) => !v);
+                  setPanTool(false);
+                }}
+                title="Fill an area with seating: drag a rectangle on the plan"
+                aria-label="Fill an area with seating"
+              >
+                <Armchair size={16} />
+              </button>
             </div>
             <div className="btn-group">
               <button type="button" className="icon-btn" onClick={() => zoomBy(1 / 1.2)} title="Zoom out" aria-label="Zoom out">
@@ -1485,7 +1635,14 @@ export default function FloorplansPage() {
               setDoc({ ...draftRef.current, objects: next });
               setDirty(true);
             }}
-            highlight={canvasHighlight}
+            highlight={
+fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
+            }
+            drawMode={drawMode}
+            onDrawArea={onDrawArea}
+            seatEdit={seatEdit}
+            onEditSeats={editSeats}
+            onSeatPaint={paintSeat}
             emptyHint={
               <span>
                 Add tables from <strong>Add to plan</strong>, or generate a grid with <strong>Auto layout</strong>.
@@ -1519,6 +1676,10 @@ export default function FloorplansPage() {
               gridSize={draft.canvas.gridSize}
               unitsPerMetre={unitsPerMetre}
               onPatch={patchSelected}
+              seatEdit={seatEdit}
+              onClearUnderObjects={clearSeatsUnderObjects}
+              onFillShape={fillSelectedShape}
+              onSeatEdit={(next) => setSeatEdit(next && primary ? { id: primary.id, tool: next } : null)}
               onDelete={deleteSelection}
               onOrder={reorderSelected}
             />
@@ -1543,6 +1704,7 @@ export default function FloorplansPage() {
             description={[
               totals.tables || !totals.blocks ? `${totals.tables} table${totals.tables === 1 ? "" : "s"} · ${totals.seats} seats` : "",
               totals.blocks ? `${totals.theatreSeats} theatre seats` : "",
+              totals.wheelchairSpaces ? `${totals.wheelchairSpaces} wheelchair` : "",
               totals.guests != null ? `${totals.guests} guests` : ""
             ]
               .filter(Boolean)
@@ -2046,6 +2208,11 @@ export default function FloorplansPage() {
             {error}
           </Callout>
         ) : null}
+        {notice ? (
+          <Callout tone="info" onDismiss={() => setNotice("")}>
+            {notice}
+          </Callout>
+        ) : null}
       </Toasts>
     </main>
   );
@@ -2269,5 +2436,155 @@ function TheatreForm({
         </p>
       ) : null}
     </>
+  );
+}
+
+function FillPrompt({
+  area,
+  initialMargin,
+  initialFacing,
+  settings,
+  objects,
+  unitsPerMetre,
+  clearance,
+  scaled,
+  onCancel,
+  onFill
+}: {
+  area: FillArea;
+  initialMargin: number;
+  initialFacing: TheatreFacing;
+  settings: ReturnType<typeof resolveTheatreSettings>;
+  objects: FloorplanCanvasObject[];
+  unitsPerMetre: number;
+  clearance: number;
+  scaled: boolean;
+  onCancel: () => void;
+  onFill: (
+    blocks: FloorplanCanvasObject[],
+    patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>
+  ) => void;
+}) {
+  const [margin, setMargin] = useState(initialMargin);
+  const [form, setForm] = useState({ ...settings, facing: initialFacing });
+  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+
+  const result = useMemo(
+    () =>
+      fillAreaWithSeating(area, form, {
+        unitsPerMetre,
+        marginM: margin,
+        maxRun: form.maxRun,
+        objects,
+        blocked: (block) => seatsBlocked(block, objects, clearance)
+      }),
+    [area, form, margin, unitsPerMetre, objects, clearance]
+  );
+  const total = result.rows * result.perRow;
+  const takenOut = total - result.seats;
+
+  return (
+    <Modal
+      title="Fill with seating"
+      size="sm"
+      onClose={onCancel}
+      footer={
+        <>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!result.blocks.length}
+            onClick={() =>
+              onFill(result.blocks, {
+                facing: form.facing,
+                maxRun: form.maxRun,
+                chairPreset: form.chairPreset,
+                seatwayM: form.seatwayM,
+                aisleWidthM: form.aisleWidthM,
+                splitAtAisles: form.splitAtAisles,
+                crossAisleEvery: form.crossAisleEvery,
+                frontDistanceM: form.frontDistanceM
+              })
+            }
+          >
+            Fill
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p className="fill-summary" style={{ margin: 0 }}>
+          {result.blocks.length ? (
+            <>
+              <strong>{result.seats}</strong> seats: {result.rows} row{result.rows === 1 ? "" : "s"} of {result.perRow}
+              {result.aisles ? `, ${result.aisles} aisle${result.aisles === 1 ? "" : "s"}` : ", no aisles"}
+              {takenOut ? `, ${takenOut} chair${takenOut === 1 ? "" : "s"} left out around other objects` : ""}.
+            </>
+          ) : (
+            "No chairs fit in this area with these settings."
+          )}
+        </p>
+        <Field label="Audience faces" as="div" hint={area.rotation ? "Relative to the shape." : undefined}>
+          <Segmented
+            value={form.facing}
+            options={[
+              { value: "up", label: "Up" },
+              { value: "down", label: "Down" },
+              { value: "left", label: "Left" },
+              { value: "right", label: "Right" }
+            ]}
+            onChange={(facing: TheatreFacing) => set({ facing })}
+          />
+        </Field>
+        <div className="form-grid">
+          <Field label="Most seats between aisles" hint="Aisles are added to keep every run within this.">
+            <NumericInput min={1} max={200} integer value={form.maxRun} onCommit={(n) => n != null && set({ maxRun: n })} />
+          </Field>
+          <Field label="Margin (m)" hint="Clear space kept inside the edges.">
+            <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && setMargin(n)} />
+          </Field>
+          <Field label="Chair" className="span-all">
+            <select value={form.chairPreset} onChange={(e) => set({ chairPreset: e.target.value })}>
+              {CHAIR_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Seatway (m)">
+            <NumericInput min={0} max={5} value={form.seatwayM} onCommit={(n) => n != null && set({ seatwayM: n })} />
+          </Field>
+          <Field label="Aisle width (m)">
+            <NumericInput min={0} max={20} value={form.aisleWidthM} onCommit={(n) => n != null && set({ aisleWidthM: n })} />
+          </Field>
+          <Field label="Cross aisle every" hint="Rows; 0 for none.">
+            <NumericInput
+              min={0}
+              max={200}
+              integer
+              value={form.crossAisleEvery}
+              onCommit={(n) => n != null && set({ crossAisleEvery: n })}
+            />
+          </Field>
+          <Field label="Front row to stage (m)" hint="Used when a stage reaches into the area.">
+            <NumericInput min={0} max={100} value={form.frontDistanceM} onCommit={(n) => n != null && set({ frontDistanceM: n })} />
+          </Field>
+        </div>
+        <Switch
+          label="A separate block for each section"
+          checked={form.splitAtAisles}
+          onChange={(splitAtAisles) => set({ splitAtAisles })}
+        />
+        {!scaled ? (
+          <p className="field-hint" style={{ margin: 0 }}>
+            No scale is set, so chair sizes are approximate. Set one under Grid and scale for true sizes.
+          </p>
+        ) : null}
+      </div>
+    </Modal>
   );
 }

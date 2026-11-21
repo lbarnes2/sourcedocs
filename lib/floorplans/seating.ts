@@ -97,30 +97,60 @@ export function seatKey(row: number, seat: number): string {
   return `${row}:${seat}`;
 }
 
-/** Chair centres in the block frame, without removed seats. */
-export function seatingSeats(s: FloorplanSeatingObject): Array<{ row: number; seat: number; x: number; y: number }> {
+export type SeatState = "chair" | "removed" | "wheelchair";
+export type SeatPosition = { row: number; seat: number; x: number; y: number; state: SeatState };
+
+function inBlock(s: FloorplanSeatingObject, key: string): boolean {
+  const [r, c] = key.split(":").map(Number);
+  return r >= 0 && r < s.rows && c >= 0 && c < s.seatsPerRow;
+}
+
+/** Every chair position in the block frame, with what's there. */
+export function seatingPositions(s: FloorplanSeatingObject): SeatPosition[] {
   const { w, h } = seatingSize(s);
   const aisles = seatingAisles(s);
   const removed = new Set(s.removed ?? []);
-  const out: Array<{ row: number; seat: number; x: number; y: number }> = [];
+  const wheelchair = new Set(s.wheelchair ?? []);
+  const out: SeatPosition[] = [];
   for (let r = 0; r < s.rows; r += 1) {
     const y = rowY(s, r, h);
     for (let c = 0; c < s.seatsPerRow; c += 1) {
-      if (removed.has(seatKey(r, c))) continue;
-      out.push({ row: r, seat: c, x: seatX(s, c, aisles, w), y });
+      const key = seatKey(r, c);
+      const state: SeatState = wheelchair.has(key) ? "wheelchair" : removed.has(key) ? "removed" : "chair";
+      out.push({ row: r, seat: c, x: seatX(s, c, aisles, w), y, state });
     }
   }
   return out;
 }
 
+/** Chair centres in the block frame (not removed seats or wheelchair spaces). */
+export function seatingSeats(s: FloorplanSeatingObject): SeatPosition[] {
+  return seatingPositions(s).filter((p) => p.state === "chair");
+}
+
+export function seatingWheelchairCount(s: FloorplanSeatingObject): number {
+  return new Set((s.wheelchair ?? []).filter((key) => inBlock(s, key))).size;
+}
+
+/** Chairs in the block: every position less removed seats and wheelchair spaces. */
 export function seatingSeatCount(s: FloorplanSeatingObject): number {
-  const removed = new Set(s.removed ?? []);
-  let gone = 0;
-  removed.forEach((key) => {
-    const [r, c] = key.split(":").map(Number);
-    if (r >= 0 && r < s.rows && c >= 0 && c < s.seatsPerRow) gone += 1;
-  });
-  return Math.max(0, s.rows * s.seatsPerRow - gone);
+  const gone = new Set([...(s.removed ?? []), ...(s.wheelchair ?? [])].filter((key) => inBlock(s, key)));
+  return Math.max(0, s.rows * s.seatsPerRow - gone.size);
+}
+
+/** Set what's at one chair position. */
+export function withSeatState(s: FloorplanSeatingObject, key: string, state: SeatState): FloorplanSeatingObject {
+  const removed = (s.removed ?? []).filter((k) => k !== key);
+  const wheelchair = (s.wheelchair ?? []).filter((k) => k !== key);
+  if (state === "removed") removed.push(key);
+  if (state === "wheelchair") wheelchair.push(key);
+  return { ...s, removed: removed.length ? removed : undefined, wheelchair: wheelchair.length ? wheelchair : undefined };
+}
+
+export function seatStateAt(s: FloorplanSeatingObject, key: string): SeatState {
+  if (s.wheelchair?.includes(key)) return "wheelchair";
+  if (s.removed?.includes(key)) return "removed";
+  return "chair";
 }
 
 /** Runs of seats between aisles: [first seat, last seat] (inclusive). */
@@ -131,17 +161,32 @@ export function seatingRuns(s: FloorplanSeatingObject): Array<[number, number]> 
   return runs;
 }
 
-/** Each run of each row as a box: the solid parts of the block, for overlap checks. */
+/**
+ * The solid parts of the block, for overlap checks: each unbroken stretch of chairs (or wheelchair
+ * spaces) in each row as one box. Aisles and seats taken out are open floor.
+ */
 export function seatingRunBoxes(s: FloorplanSeatingObject): LocalBox[] {
   const { w, h } = seatingSize(s);
   const aisles = seatingAisles(s);
+  const removed = new Set(s.removed ?? []);
   const out: LocalBox[] = [];
+  const push = (y: number, a: number, b: number) => {
+    const x0 = seatX(s, a, aisles, w) - s.chairWidth / 2;
+    const x1 = seatX(s, b, aisles, w) + s.chairWidth / 2;
+    out.push({ cx: (x0 + x1) / 2, cy: y, w: x1 - x0, h: s.chairDepth });
+  };
   for (let r = 0; r < s.rows; r += 1) {
     const y = rowY(s, r, h);
     for (const [a, b] of seatingRuns(s)) {
-      const x0 = seatX(s, a, aisles, w) - s.chairWidth / 2;
-      const x1 = seatX(s, b, aisles, w) + s.chairWidth / 2;
-      out.push({ cx: (x0 + x1) / 2, cy: y, w: x1 - x0, h: s.chairDepth });
+      let start = -1;
+      for (let c = a; c <= b + 1; c += 1) {
+        const solid = c <= b && !removed.has(seatKey(r, c));
+        if (solid && start < 0) start = c;
+        if (!solid && start >= 0) {
+          push(y, start, c - 1);
+          start = -1;
+        }
+      }
     }
   }
   return out;
@@ -176,14 +221,34 @@ export function seatingNameBand(s: FloorplanSeatingObject): number {
  * Rows and seats that best fill a `w` × `h` box at the block's spacing (used when a block is resized by a
  * corner handle). Aisle positions past the new row length drop out.
  */
-export function seatingFitTo(s: FloorplanSeatingObject, w: number, h: number, fromLeft = false): FloorplanSeatingObject {
+export function seatingFitTo(
+  s: FloorplanSeatingObject,
+  w: number,
+  h: number,
+  fromLeft = false,
+  fromFront = false
+): FloorplanSeatingObject {
   const rows = Math.max(1, Math.min(MAX_SEATING_ROWS, Math.round((h - s.chairDepth) / s.rowPitch) + 1));
   const extra = seatingAisles(s).length * aisleExtra(s);
   const seats = Math.max(1, Math.min(MAX_SEATS_PER_ROW, Math.round((w - s.chairWidth - extra) / s.seatSpacing) + 1));
   // Dragging the left edge adds or takes away seats on the left, so the aisles move with the seats.
   const shift = fromLeft ? seats - s.seatsPerRow : 0;
   const aisles = (s.aisles ?? []).map((a) => a + shift).filter((a) => a >= 1 && a < seats);
-  return { ...s, rows, seatsPerRow: seats, aisles: aisles.length ? aisles : undefined };
+  // Likewise rows added at the front: seats taken out keep their place in the block.
+  const rowShift = fromFront ? rows - s.rows : 0;
+  const move = (keys: string[] | undefined) =>
+    keys?.map((key) => {
+      const [r, c] = key.split(":").map(Number);
+      return seatKey(r + rowShift, c + shift);
+    });
+  return pruneRemoved({
+    ...s,
+    rows,
+    seatsPerRow: seats,
+    aisles: aisles.length ? aisles : undefined,
+    removed: move(s.removed),
+    wheelchair: move(s.wheelchair)
+  });
 }
 
 /** Even aisle positions for `count` aisles across `seats` seats (e.g. 20 seats, 1 aisle → [10]). */
@@ -211,17 +276,20 @@ export function keepFrontRow(before: FloorplanSeatingObject, after: FloorplanSea
   return { ...after, x: Math.round((before.x + shift.x) * 1000) / 1000, y: Math.round((before.y + shift.y) * 1000) / 1000 };
 }
 
-/** Longest unbroken run of seats in any row (aisles and removed seats break a run). */
+/**
+ * Longest run of seats in any row: the people seated between two aisles (or an aisle and a row end).
+ * Only aisles break a run. Seats taken out at the ends of a row shorten it; a gap left by a seat taken
+ * out in the middle doesn't make a way out, so the people either side still count as one run. Wheelchair
+ * spaces count as a place.
+ */
 export function longestRun(s: FloorplanSeatingObject): number {
   const removed = new Set(s.removed ?? []);
   let best = 0;
   for (let r = 0; r < s.rows; r += 1) {
     for (const [a, b] of seatingRuns(s)) {
-      let run = 0;
-      for (let c = a; c <= b; c += 1) {
-        run = removed.has(seatKey(r, c)) ? 0 : run + 1;
-        if (run > best) best = run;
-      }
+      let n = 0;
+      for (let c = a; c <= b; c += 1) if (!removed.has(seatKey(r, c))) n += 1;
+      if (n > best) best = n;
     }
   }
   return best;
@@ -229,10 +297,8 @@ export function longestRun(s: FloorplanSeatingObject): number {
 
 /** Drop removed-seat entries that no longer fall inside the block. */
 export function pruneRemoved(s: FloorplanSeatingObject): FloorplanSeatingObject {
-  if (!s.removed?.length) return s;
-  const kept = s.removed.filter((key) => {
-    const [r, c] = key.split(":").map(Number);
-    return r >= 0 && r < s.rows && c >= 0 && c < s.seatsPerRow;
-  });
-  return { ...s, removed: kept.length ? kept : undefined };
+  if (!s.removed?.length && !s.wheelchair?.length) return s;
+  const removed = (s.removed ?? []).filter((key) => inBlock(s, key));
+  const wheelchair = (s.wheelchair ?? []).filter((key) => inBlock(s, key));
+  return { ...s, removed: removed.length ? removed : undefined, wheelchair: wheelchair.length ? wheelchair : undefined };
 }

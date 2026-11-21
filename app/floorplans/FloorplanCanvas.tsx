@@ -22,7 +22,13 @@ import {
 } from "@/lib/floorplans/geometry";
 import { guestCountFor, type TableGuestMap } from "@/lib/floorplans/guests";
 import type { Highlight } from "@/lib/floorplans/measure";
-import { seatingNameBand, seatingSeatCount, seatingSeats } from "@/lib/floorplans/seating";
+import {
+  seatKey,
+  seatingNameBand,
+  seatingPositions,
+  seatingSeatCount,
+  type SeatState
+} from "@/lib/floorplans/seating";
 import type { FloorplanCanvasObject } from "@/types";
 
 export type CanvasView = { zoom: number; pan: Point };
@@ -49,6 +55,7 @@ type Interaction =
       collapseTo: string | null;
     }
   | { kind: "marquee"; startClient: Point; additive: boolean; base: string[]; moved: boolean }
+  | { kind: "draw"; startClient: Point; moved: boolean }
   | { kind: "resize"; id: string; handle: { sx: -1 | 1; sy: -1 | 1 }; startObj: FloorplanCanvasObject; moved: boolean }
   | { kind: "rotate"; id: string; startObj: FloorplanCanvasObject; moved: boolean }
   | { kind: "pinch"; startDistance: number; startMid: Point; startView: CanvasView };
@@ -82,6 +89,35 @@ interface Props {
   emptyHint: ReactNode;
   /** A measurement to point at (outlined shapes and/or a dimension line). */
   highlight?: Highlight | null;
+  /** The seating block whose chairs are being edited, and what clicking a chair does. */
+  seatEdit?: { id: string; tool: "remove" | "wheelchair" } | null;
+  /** Drawing an area: drags on the canvas draw a rectangle instead of selecting. */
+  drawMode?: boolean;
+  onDrawArea?: (area: Bounds) => void;
+  /** Double-click on a seating block. */
+  onEditSeats?: (id: string) => void;
+  /** Set chair positions in a block; `stroke` is the same for every call in one press-and-drag. */
+  onSeatPaint?: (id: string, key: string, state: SeatState, stroke: number) => void;
+}
+
+/** The lucide "accessible" wheelchair symbol, drawn in a 24-unit box. */
+export const WHEELCHAIR_PATHS = [
+  "M18 19 19 12 13 13",
+  "M5 8 8 5 13.5 8 11.14 11.5",
+  "M4.24 14.5a5 5 0 0 0 6.88 6",
+  "M13.76 17.5a5 5 0 0 0-6.88-6"
+];
+
+function WheelchairMark({ cx, cy, size }: { cx: number; cy: number; size: number }) {
+  const k = size / 24;
+  return (
+    <g transform={`translate(${cx - size / 2} ${cy - size / 2}) scale(${k})`} className="fp-seat-wc-mark">
+      <circle cx={16} cy={4} r={1.4} />
+      {WHEELCHAIR_PATHS.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </g>
+  );
 }
 
 function snapTo(value: number, step: number): number {
@@ -96,6 +132,9 @@ export function FloorplanCanvas(props: Props) {
   const pointers = useRef(new Map<number, Point>());
   const [guides, setGuides] = useState<Guide[]>([]);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  /** Press-and-drag over chairs while editing seats: every chair passed over gets `state`. */
+  const paint = useRef<{ id: string; state: SeatState; stroke: number } | null>(null);
+  const strokeCount = useRef(0);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const single = selectedIds.length === 1 ? (objects.find((o) => o.id === selectedIds[0]) ?? null) : null;
@@ -179,6 +218,20 @@ export function FloorplanCanvas(props: Props) {
           y: act.startPan.y + event.clientY - act.startClient.y
         };
         p.onViewChange((v) => ({ ...v, pan }));
+        return;
+      }
+
+      if (act.kind === "draw") {
+        const rect = p.viewportRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        if (!act.moved && Math.hypot(event.clientX - act.startClient.x, event.clientY - act.startClient.y) < DRAG_THRESHOLD_PX) return;
+        act.moved = true;
+        setMarquee({
+          x0: Math.min(act.startClient.x, event.clientX) - rect.left,
+          y0: Math.min(act.startClient.y, event.clientY) - rect.top,
+          x1: Math.max(act.startClient.x, event.clientX) - rect.left,
+          y1: Math.max(act.startClient.y, event.clientY) - rect.top
+        });
         return;
       }
 
@@ -329,6 +382,7 @@ export function FloorplanCanvas(props: Props) {
 
     function onUp(event: PointerEvent) {
       pointers.current.delete(event.pointerId);
+      paint.current = null;
       const act = interaction.current;
       if (!act) return;
       if (act.kind === "pinch") {
@@ -337,6 +391,16 @@ export function FloorplanCanvas(props: Props) {
       }
       if (act.kind === "drag" && !act.moved && act.collapseTo) latest.current.onSelect([act.collapseTo]);
       if (act.kind === "marquee" && !act.moved && !act.additive) latest.current.onSelect([]);
+      if (act.kind === "draw" && act.moved) {
+        const a = toCanvas(act.startClient.x, act.startClient.y);
+        const b = toCanvas(event.clientX, event.clientY);
+        latest.current.onDrawArea?.({
+          minX: Math.min(a.x, b.x),
+          minY: Math.min(a.y, b.y),
+          maxX: Math.max(a.x, b.x),
+          maxY: Math.max(a.y, b.y)
+        });
+      }
       interaction.current = null;
       setGuides([]);
       setMarquee(null);
@@ -353,6 +417,7 @@ export function FloorplanCanvas(props: Props) {
         latest.current.onCancelGesture();
       }
       if (act.kind === "marquee") latest.current.onSelect(act.base);
+      if (act.kind === "draw") latest.current.onDrawArea?.({ minX: 0, minY: 0, maxX: 0, maxY: 0 });
       interaction.current = null;
       setGuides([]);
       setMarquee(null);
@@ -395,6 +460,10 @@ export function FloorplanCanvas(props: Props) {
       return;
     }
     if (event.button !== 0) return;
+    if (p.drawMode) {
+      interaction.current = { kind: "draw", startClient: { x: event.clientX, y: event.clientY }, moved: false };
+      return;
+    }
     interaction.current = {
       kind: "marquee",
       startClient: { x: event.clientX, y: event.clientY },
@@ -408,6 +477,12 @@ export function FloorplanCanvas(props: Props) {
     const p = latest.current;
     if (interaction.current) return;
     event.stopPropagation();
+    // While its seats are being edited, a block stays put; chairs handle their own clicks.
+    if (p.seatEdit?.id === id) return;
+    if (p.drawMode && event.button === 0 && !p.panActive) {
+      interaction.current = { kind: "draw", startClient: { x: event.clientX, y: event.clientY }, moved: false };
+      return;
+    }
     if (event.button === 1 || p.panActive) {
       interaction.current = { kind: "pan", startClient: { x: event.clientX, y: event.clientY }, startPan: p.view.pan };
       return;
@@ -557,20 +632,67 @@ export function FloorplanCanvas(props: Props) {
       const band = seatingNameBand(obj);
       const name = obj.name?.trim();
       const count = seatingSeatCount(obj);
+      const editing = props.seatEdit?.id === obj.id ? props.seatEdit : null;
+      const startPaint = (event: ReactPointerEvent<SVGElement>, key: string, current: SeatState) => {
+        if (!editing || event.button !== 0) return;
+        event.stopPropagation();
+        event.preventDefault();
+        // Alt / Option swaps the tool for one stroke.
+        const tool = event.altKey ? (editing.tool === "remove" ? "wheelchair" : "remove") : editing.tool;
+        const state: SeatState =
+          tool === "wheelchair" ? (current === "wheelchair" ? "chair" : "wheelchair") : current === "chair" ? "removed" : "chair";
+        strokeCount.current += 1;
+        paint.current = { id: obj.id, state, stroke: strokeCount.current };
+        latest.current.onSeatPaint?.(obj.id, key, state, strokeCount.current);
+      };
+      const continuePaint = (key: string, current: SeatState) => {
+        const stroke = paint.current;
+        if (!stroke || stroke.id !== obj.id || current === stroke.state) return;
+        latest.current.onSeatPaint?.(obj.id, key, stroke.state, stroke.stroke);
+      };
       return (
         <button
           key={obj.id}
           {...common}
-          className={`${common.className} fp-obj--seating`}
+          className={`${common.className} fp-obj--seating${editing ? " fp-obj--editing" : ""}`}
           aria-label={`${name || "Seating block"}, ${count} seats`}
           style={wrapper}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            latest.current.onEditSeats?.(obj.id);
+          }}
         >
           <svg className="fp-seating" width={box.w} height={box.h} viewBox={`0 0 ${box.w} ${box.h}`} aria-hidden="true">
-            {seatingSeats(obj).map((seat) => {
+            {seatingPositions(obj).map((seat) => {
+              if (seat.state === "removed" && !editing) return null;
+              const key = seatKey(seat.row, seat.seat);
               const x = box.w / 2 + seat.x - obj.chairWidth / 2;
               const y = box.h / 2 + seat.y - obj.chairDepth / 2;
+              const handlers = editing
+                ? {
+                    onPointerDown: (event: ReactPointerEvent<SVGGElement>) => startPaint(event, key, seat.state),
+                    onPointerEnter: () => continuePaint(key, seat.state),
+                    style: { pointerEvents: "all" as const, cursor: "pointer" }
+                  }
+                : {};
+              if (seat.state === "removed") {
+                return (
+                  <g key={key} {...handlers}>
+                    <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat-gone" />
+                  </g>
+                );
+              }
+              if (seat.state === "wheelchair") {
+                const size = Math.min(obj.chairWidth, obj.chairDepth);
+                return (
+                  <g key={key} {...handlers}>
+                    <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat-wc" />
+                    <WheelchairMark cx={x + obj.chairWidth / 2} cy={y + obj.chairDepth / 2} size={size * 0.85} />
+                  </g>
+                );
+              }
               return (
-                <g key={`${seat.row}:${seat.seat}`}>
+                <g key={key} {...handlers}>
                   <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat" />
                   <rect x={x} y={y + obj.chairDepth - back} width={obj.chairWidth} height={back} className="fp-seat-back" />
                 </g>
@@ -735,7 +857,7 @@ export function FloorplanCanvas(props: Props) {
   return (
     <div
       ref={viewportRef}
-      className={`editor-canvas${props.panActive ? " editor-canvas--pan" : ""}`}
+      className={`editor-canvas${props.panActive ? " editor-canvas--pan" : ""}${props.drawMode ? " editor-canvas--draw" : ""}`}
       style={{
         backgroundSize: `${gridSize * view.zoom}px ${gridSize * view.zoom}px`,
         backgroundPosition: `${view.pan.x}px ${view.pan.y}px`
@@ -823,7 +945,7 @@ export function FloorplanCanvas(props: Props) {
       ) : null}
       {marquee ? (
         <div
-          className="fp-marquee"
+          className={`fp-marquee${props.drawMode ? " fp-marquee--draw" : ""}`}
           style={{ left: marquee.x0, top: marquee.y0, width: marquee.x1 - marquee.x0, height: marquee.y1 - marquee.y0 }}
         />
       ) : null}

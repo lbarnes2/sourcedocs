@@ -1,7 +1,7 @@
 import type { FloorplanCanvasObject, FloorplanTableObject } from "@/types";
 import { tableSeatCount } from "@/lib/floorplans/geometry";
 import { isFloorAreaFor, isFurnishing, isObstacle, prepare, preparedCollide } from "@/lib/floorplans/collision";
-import { seatingSeatCount } from "@/lib/floorplans/seating";
+import { seatingSeatCount, seatingWheelchairCount } from "@/lib/floorplans/seating";
 import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 
 export interface PlanIssue {
@@ -20,6 +20,7 @@ export interface PlanTotals {
   /** Theatre-style seating blocks and the chairs in them. */
   blocks: number;
   theatreSeats: number;
+  wheelchairSpaces: number;
 }
 
 export function planTotals(objects: FloorplanCanvasObject[], guests: TableGuestMap | null): PlanTotals {
@@ -28,11 +29,13 @@ export function planTotals(objects: FloorplanCanvasObject[], guests: TableGuestM
   let seated = 0;
   let blocks = 0;
   let theatreSeats = 0;
+  let wheelchairSpaces = 0;
   const seen = new Set<string>();
   for (const obj of objects) {
     if (obj.type === "seating") {
       blocks += 1;
       theatreSeats += seatingSeatCount(obj);
+      wheelchairSpaces += seatingWheelchairCount(obj);
       continue;
     }
     if (obj.type !== "table") continue;
@@ -44,7 +47,7 @@ export function planTotals(objects: FloorplanCanvasObject[], guests: TableGuestM
       seated += guests[key]?.count ?? 0;
     }
   }
-  return { tables, seats, guests: guests ? seated : null, blocks, theatreSeats };
+  return { tables, seats, guests: guests ? seated : null, blocks, theatreSeats, wheelchairSpaces };
 }
 
 const OVERLAP_CHECK_LIMIT = 400;

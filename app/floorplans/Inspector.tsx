@@ -33,6 +33,7 @@ import {
   seatGap,
   seatingAisles,
   seatingSeatCount,
+  seatingWheelchairCount,
   seatingSize,
   seatway
 } from "@/lib/floorplans/seating";
@@ -51,6 +52,13 @@ interface Props {
   onPatch: (patch: (obj: FloorplanCanvasObject) => FloorplanCanvasObject, key?: string) => void;
   onDelete: () => void;
   onOrder: (where: "front" | "back") => void;
+  /** Seat editing for a single seating block: null when not editing. */
+  seatEdit?: { id: string; tool: "remove" | "wheelchair" } | null;
+  onSeatEdit?: (tool: "remove" | "wheelchair" | null) => void;
+  /** Fill the selected rectangle with theatre seating. */
+  onFillShape?: () => void;
+  /** Take out the chairs that stand on a pillar, bar or other object. */
+  onClearUnderObjects?: () => void;
 }
 
 function Swatches({
@@ -227,7 +235,21 @@ function titleFor(obj: FloorplanCanvasObject, count: number): string {
   return "Text";
 }
 
-export function Inspector({ primary, selectionCount, tableGuests, totalGuests, gridSize, unitsPerMetre, onPatch, onDelete, onOrder }: Props) {
+export function Inspector({
+  primary,
+  selectionCount,
+  tableGuests,
+  totalGuests,
+  gridSize,
+  unitsPerMetre,
+  onPatch,
+  onDelete,
+  onOrder,
+  seatEdit,
+  onSeatEdit,
+  onClearUnderObjects,
+  onFillShape
+}: Props) {
   const patchTable = (fn: (t: FloorplanTableObject) => FloorplanTableObject, key?: string) =>
     onPatch((o) => (o.type === "table" ? fn(o) : o), key);
 
@@ -265,6 +287,9 @@ export function Inspector({ primary, selectionCount, tableGuests, totalGuests, g
             multiple={selectionCount > 1}
             unitsPerMetre={unitsPerMetre}
             patchSeating={(fn, key) => onPatch((o) => (o.type === "seating" ? fn(o) : o), key)}
+            seatTool={seatEdit?.id === primary.id ? seatEdit.tool : null}
+            onSeatTool={onSeatEdit}
+            onClearUnderObjects={onClearUnderObjects}
           />
         ) : null}
 
@@ -313,6 +338,11 @@ export function Inspector({ primary, selectionCount, tableGuests, totalGuests, g
                 onChange={(fill) => onPatch((o) => (o.type === "rect" ? { ...o, fill } : o))}
               />
             </Field>
+            {onFillShape && selectionCount === 1 ? (
+              <button type="button" className="btn-sm" onClick={onFillShape}>
+                Fill with seating…
+              </button>
+            ) : null}
             <Switch
               label="Exit"
               hint="Counts towards total exit width (its longer side) in the plan measurements."
@@ -681,19 +711,26 @@ function SeatingFields({
   block,
   multiple,
   unitsPerMetre,
-  patchSeating
+  patchSeating,
+  seatTool,
+  onSeatTool,
+  onClearUnderObjects
 }: {
   block: FloorplanSeatingObject;
   multiple: boolean;
   unitsPerMetre: number | null;
   patchSeating: (fn: (s: FloorplanSeatingObject) => FloorplanSeatingObject, key?: string) => void;
+  seatTool: "remove" | "wheelchair" | null;
+  onSeatTool?: (tool: "remove" | "wheelchair" | null) => void;
+  onClearUnderObjects?: () => void;
 }) {
   const [rowMode, setRowMode] = useState<"seatway" | "pitch">("seatway");
   const upm = unitsPerMetre;
   const k = upm ?? DEFAULT_UNITS_PER_METRE;
   const aisles = seatingAisles(block);
   const count = seatingSeatCount(block);
-  const removed = block.rows * block.seatsPerRow - count;
+  const wheelchair = seatingWheelchairCount(block);
+  const removed = block.rows * block.seatsPerRow - count - wheelchair;
   const size = seatingSize(block);
   const metres = (units: number) => (upm ? `${(units / upm).toFixed(2)} m` : `${Math.round(units)} units`);
   const preset = CHAIR_PRESETS.find((p) => p.id === block.chairPreset);
@@ -751,11 +788,60 @@ function SeatingFields({
       </div>
       <p className="field-hint" style={{ margin: 0 }}>
         <strong>{count}</strong> seat{count === 1 ? "" : "s"} · {metres(size.w)} × {metres(size.h)}
+        {wheelchair > 0 ? ` · ${wheelchair} wheelchair space${wheelchair === 1 ? "" : "s"}` : ""}
         {removed > 0 ? ` · ${removed} taken out` : ""}
       </p>
-      {removed > 0 ? (
-        <button type="button" className="btn-sm" onClick={() => patchSeating((s) => ({ ...s, removed: undefined }))}>
-          Put back removed seats
+      {!multiple && onSeatTool ? (
+        seatTool ? (
+          <div className="seat-edit stack stack--sm">
+            <Field label="Clicking a chair" as="div">
+              <Segmented
+                value={seatTool}
+                options={[
+                  { value: "remove", label: "Takes it out" },
+                  { value: "wheelchair", label: "Wheelchair space" }
+                ]}
+                onChange={(tool) => onSeatTool(tool)}
+              />
+            </Field>
+            <p className="field-hint" style={{ margin: 0 }}>
+              Click again to put a chair back. Drag across chairs to change a row at once; hold ⌥ Option for the other
+              choice. Esc when done.
+            </p>
+            <button type="button" className="btn-sm btn-primary" onClick={() => onSeatTool(null)}>
+              Done editing seats
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <button
+              type="button"
+              className="btn-sm"
+              title="Or double-click the block"
+              onClick={() => onSeatTool("remove")}
+            >
+              Edit seats…
+            </button>
+            {onClearUnderObjects ? (
+              <button
+                type="button"
+                className="btn-sm"
+                title="Take out chairs that stand on a pillar, bar, AV desk or other object"
+                onClick={onClearUnderObjects}
+              >
+                Clear seats under objects
+              </button>
+            ) : null}
+          </div>
+        )
+      ) : null}
+      {removed > 0 || wheelchair > 0 ? (
+        <button
+          type="button"
+          className="btn-sm"
+          onClick={() => patchSeating((s) => ({ ...s, removed: undefined, wheelchair: undefined }))}
+        >
+          Put back all chairs
         </button>
       ) : null}
 

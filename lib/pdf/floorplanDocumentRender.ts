@@ -31,7 +31,15 @@ import {
   type OccupancyStatus
 } from "@/lib/floorplans/geometry";
 import { planTotals } from "@/lib/floorplans/checks";
-import { seatingNameBand, seatingSeats } from "@/lib/floorplans/seating";
+import { seatingNameBand, seatingPositions, seatingSeats } from "@/lib/floorplans/seating";
+
+/** The wheelchair symbol (same drawing as on the canvas), in a 24-unit box. */
+const WHEELCHAIR_PATHS = [
+  "M18 19 19 12 13 13",
+  "M5 8 8 5 13.5 8 11.14 11.5",
+  "M4.24 14.5a5 5 0 0 0 6.88 6",
+  "M13.76 17.5a5 5 0 0 0-6.88-6"
+];
 import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 
 const LIB_FONTS = path.join(process.cwd(), "lib", "fonts");
@@ -530,6 +538,30 @@ export async function renderFloorplanDocumentPdf(
         });
         page.drawSvgPath(backs.join(" "), { x: 0, y: 0, color: rgb(0.5, 0.57, 0.66) });
       }
+      // Wheelchair spaces: a blue square with the symbol, kept upright.
+      const wheelchair = seatingPositions(item).filter((p) => p.state === "wheelchair");
+      if (wheelchair.length) {
+        page.drawSvgPath(
+          wheelchair
+            .map((seat) =>
+              quad(seat.x - item.chairWidth / 2, seat.y - item.chairDepth / 2, seat.x + item.chairWidth / 2, seat.y + item.chairDepth / 2)
+            )
+            .join(" "),
+          { x: 0, y: 0, color: rgb(0.11, 0.37, 0.66) }
+        );
+        const size = Math.min(item.chairWidth, item.chairDepth) * 0.85 * scale;
+        const white = rgb(1, 1, 1);
+        for (const seat of wheelchair) {
+          const c = rotatePoint({ x: seat.x, y: seat.y }, box.rotation);
+          const px = toX(box.cx + c.x) - size / 2;
+          const py = toY(box.cy + c.y) + size / 2;
+          const k = size / 24;
+          for (const d of WHEELCHAIR_PATHS) {
+            page.drawSvgPath(d, { x: px, y: py, scale: k, borderColor: white, borderWidth: 2.2 * k });
+          }
+          page.drawCircle({ x: px + 16 * k, y: py - 4 * k, size: 1.4 * k, color: white });
+        }
+      }
       const name = item.name?.trim();
       const band = seatingNameBand(item);
       if (name && band) {
@@ -609,6 +641,9 @@ export async function renderFloorplanDocumentPdf(
       parts.push(`${totals.tables} table${totals.tables === 1 ? "" : "s"}`, `${totals.seats} seats`);
     }
     if (totals.blocks) parts.push(`${totals.theatreSeats} theatre seat${totals.theatreSeats === 1 ? "" : "s"}`);
+    if (totals.wheelchairSpaces) {
+      parts.push(`${totals.wheelchairSpaces} wheelchair space${totals.wheelchairSpaces === 1 ? "" : "s"}`);
+    }
     if (totals.guests != null) parts.push(`${totals.guests} guests`);
     drawLegend(page, { body: bodyFont, bold: bodyBold }, layout, {
       summary: parts.join("  ·  "),
