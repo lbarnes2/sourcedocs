@@ -1,5 +1,6 @@
 import type { FloorplanCanvasObject, FloorplanTableObject } from "@/types";
-import { objectPrintBounds, tableSeatCount } from "@/lib/floorplans/geometry";
+import { tableSeatCount } from "@/lib/floorplans/geometry";
+import { isFloorAreaFor, isObstacle, prepare, preparedCollide } from "@/lib/floorplans/collision";
 import { guestCountFor, naturalTableCompare, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 
 export interface PlanIssue {
@@ -102,24 +103,44 @@ export function buildPlanIssues(objects: FloorplanCanvasObject[], guests: TableG
   }
 
   if (tables.length <= OVERLAP_CHECK_LIMIT) {
-    const boxes = tables.map((t) => ({ t, b: objectPrintBounds(t) }));
-    const overlapping: string[] = [];
-    for (let i = 0; i < boxes.length; i += 1) {
-      for (let j = i + 1; j < boxes.length; j += 1) {
-        const a = boxes[i].b;
-        const b = boxes[j].b;
-        if (a.minX < b.maxX - 0.5 && b.minX < a.maxX - 0.5 && a.minY < b.maxY - 0.5 && b.minY < a.maxY - 0.5) {
-          overlapping.push(boxes[i].t.id, boxes[j].t.id);
+    // Shape-accurate: round tables and chairs are circles, so diagonal neighbours and rotated tables
+    // aren't flagged just because their bounding boxes meet.
+    const prepped = tables.map(prepare);
+    const overlapping = new Set<string>();
+    for (let i = 0; i < prepped.length; i += 1) {
+      for (let j = i + 1; j < prepped.length; j += 1) {
+        if (preparedCollide(prepped[i], prepped[j])) {
+          overlapping.add(tables[i].id);
+          overlapping.add(tables[j].id);
         }
       }
     }
-    if (overlapping.length) {
-      const ids = Array.from(new Set(overlapping));
+    if (overlapping.size) {
       issues.push({
         id: "overlap",
         severity: "warning",
-        message: `${ids.length} tables overlap or have chairs touching.`,
-        objectIds: ids
+        message: `${overlapping.size} tables overlap or have chairs touching.`,
+        objectIds: Array.from(overlapping)
+      });
+    }
+
+    const obstacles = objects.filter(isObstacle).map(prepare);
+    const blockedTables = new Set<string>();
+    const blockingObjects = new Set<string>();
+    for (const t of prepped) {
+      for (const o of obstacles) {
+        if (!preparedCollide(t, o) || isFloorAreaFor(o.obj, t.obj)) continue;
+        blockedTables.add(t.obj.id);
+        blockingObjects.add(o.obj.id);
+      }
+    }
+    if (blockedTables.size) {
+      const n = blockedTables.size;
+      issues.push({
+        id: "obstacle",
+        severity: "warning",
+        message: `${n} table${n === 1 ? "" : "s"} run${n === 1 ? "s" : ""} into a pillar, stage, bar or other object.`,
+        objectIds: [...Array.from(blockedTables), ...Array.from(blockingObjects)]
       });
     }
   }

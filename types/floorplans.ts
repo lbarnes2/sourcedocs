@@ -113,6 +113,13 @@ export interface FloorplanAutoLayoutSettings {
   staggerAxis?: "horizontal" | "vertical";
   numbering: "straight" | "snaked";
   startCorner: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+  /* The rest of the generator form, saved so a plan reopens with the settings it was made with. */
+  tableCount?: number;
+  tableStyle?: "round" | "cabaret" | "long";
+  roundSize?: "6ft" | "5ft";
+  seatsPerTable?: number;
+  topTable?: boolean;
+  useGuestNumbers?: boolean;
 }
 
 export interface FloorplanDocument {

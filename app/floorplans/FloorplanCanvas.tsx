@@ -73,6 +73,8 @@ interface Props {
   unitsPerMetre: number | null;
   /** Called once, just before the first live change of a drag / resize / rotate. */
   onBeginGesture: () => void;
+  /** Escape during a drag / resize / rotate that has changed something: undo it back to the start. */
+  onCancelGesture: () => void;
   onLive: (objects: FloorplanCanvasObject[]) => void;
   emptyHint: ReactNode;
 }
@@ -199,7 +201,10 @@ export function FloorplanCanvas(props: Props) {
         const hit = p.objects
           .filter((o) => {
             const bb = objectBodyBounds(o);
-            return bb.minX < box.maxX && bb.maxX > box.minX && bb.minY < box.maxY && bb.maxY > box.minY;
+            const touches = bb.minX < box.maxX && bb.maxX > box.minX && bb.minY < box.maxY && bb.maxY > box.minY;
+            // A box drawn entirely inside a room, stage or dance floor is aimed at what's on it, not at the floor itself.
+            const encloses = bb.minX <= box.minX && bb.maxX >= box.maxX && bb.minY <= box.minY && bb.maxY >= box.maxY;
+            return touches && !encloses;
           })
           .map((o) => o.id);
         p.onSelect(act.additive ? Array.from(new Set([...act.base, ...hit])) : hit);
@@ -295,7 +300,11 @@ export function FloorplanCanvas(props: Props) {
           act.moved = true;
           p.onBeginGesture();
         }
-        const snap = p.snapToGrid && !event.shiftKey ? Math.max(1, p.gridSize / 2) : 0;
+        // With a scale, sizes snap to 0.1 m (diameter for round shapes); otherwise to half a grid square.
+        const roundShape =
+          act.startObj.type === "circle" || (act.startObj.type === "table" && tableShape(act.startObj) === "round");
+        const step = p.unitsPerMetre ? p.unitsPerMetre * (roundShape ? 0.05 : 0.1) : Math.max(1, p.gridSize / 2);
+        const snap = p.snapToGrid && !event.shiftKey ? step : 0;
         replaceObjects(new Map([[act.id, resizeFromCorner(act.startObj, act.handle, pt, snap)]]));
         return;
       }
@@ -328,10 +337,28 @@ export function FloorplanCanvas(props: Props) {
       setMarquee(null);
     }
 
+    // Escape cancels the gesture in progress. Capture phase, so the page's own Escape (clear selection)
+    // doesn't also run.
+    function onKeyDown(event: KeyboardEvent) {
+      const act = interaction.current;
+      if (event.key !== "Escape" || !act) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if ((act.kind === "drag" || act.kind === "resize" || act.kind === "rotate") && act.moved) {
+        latest.current.onCancelGesture();
+      }
+      if (act.kind === "marquee") latest.current.onSelect(act.base);
+      interaction.current = null;
+      setGuides([]);
+      setMarquee(null);
+    }
+
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
@@ -477,6 +504,12 @@ export function FloorplanCanvas(props: Props) {
       const inner = Math.min(box.w, box.h);
       const numberSize = Math.max(8, Math.min(16, inner * 0.3));
       const counter = box.rotation ? { transform: `rotate(${-box.rotation}deg)` } : undefined;
+      // Show the printed name ("Top table") when there is one, shrunk to fit across the table.
+      const caption = obj.label?.trim() || obj.tableNumber;
+      // The label is counter-rotated to stay level, so on a table turned on its side it runs along the depth.
+      const sideways = Math.abs(Math.sin((box.rotation * Math.PI) / 180)) > 0.7;
+      const across = tableShape(obj) === "round" ? box.w * 0.8 : (sideways ? box.h : box.w) * 0.92;
+      const captionSize = Math.max(5, Math.min(numberSize, across / (Math.max(1, caption.length) * 0.62)));
       return (
         <button
           key={obj.id}
@@ -501,7 +534,7 @@ export function FloorplanCanvas(props: Props) {
             style={{ background: fill, borderRadius: tableShape(obj) === "round" ? "50%" : 3 }}
           />
           <span className="fp-label" style={{ ...counter, fontSize: numberSize }}>
-            <span>{obj.tableNumber}</span>
+            <span style={{ fontSize: captionSize }}>{caption}</span>
             {count != null ? (
               <span className="fp-sublabel" style={{ fontSize: Math.max(6, numberSize * 0.7) }}>
                 {count}/{seats}
@@ -515,10 +548,15 @@ export function FloorplanCanvas(props: Props) {
     if (obj.type === "rect" || obj.type === "circle") {
       const fill = obj.fill === "none" ? "transparent" : (obj.fill ?? (obj.type === "rect" ? DEFAULT_FILLS.rect : DEFAULT_FILLS.circle));
       const counter = box.rotation ? { transform: `rotate(${-box.rotation}deg)` } : undefined;
+      // An outline-only rectangle (e.g. the room) is grabbed by its edges, so the floor inside stays
+      // free for drawing a selection box.
+      const outlineOnly = obj.type === "rect" && obj.fill === "none";
+      const edge = 8 * inv;
       return (
         <button
           key={obj.id}
           {...common}
+          className={`${common.className}${outlineOnly ? " fp-obj--outline" : ""}`}
           aria-label={obj.label || (obj.type === "rect" ? "Rectangle" : "Circle")}
           style={wrapper}
         >
@@ -526,6 +564,14 @@ export function FloorplanCanvas(props: Props) {
             className="fp-body"
             style={{ background: fill, borderRadius: obj.type === "circle" ? "50%" : 2, borderColor: OUTLINE_COLOR }}
           />
+          {outlineOnly
+            ? [
+                { left: -edge / 2, top: -edge / 2, width: box.w + edge, height: edge },
+                { left: -edge / 2, top: box.h - edge / 2, width: box.w + edge, height: edge },
+                { left: -edge / 2, top: -edge / 2, width: edge, height: box.h + edge },
+                { left: box.w - edge / 2, top: -edge / 2, width: edge, height: box.h + edge }
+              ].map((style, i) => <span key={i} className="fp-edge" style={style} />)
+            : null}
           {obj.label ? (
             <span className="fp-label fp-label--shape" style={{ ...counter, fontSize: Math.max(7, Math.min(16, Math.min(box.w, box.h) * 0.4)) }}>
               {obj.label}

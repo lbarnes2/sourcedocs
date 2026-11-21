@@ -32,10 +32,14 @@ import { LogoPicker } from "@/app/components/LogoPicker";
 import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts } from "@/app/components/ui";
 import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
 import { Inspector } from "@/app/floorplans/Inspector";
+import { NumericInput } from "@/app/floorplans/NumericInput";
+import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
+import { findFreeCentre } from "@/lib/floorplans/collision";
 import {
   DEFAULT_UNITS_PER_METRE,
+  MAX_TABLE_SEATS,
   ROUND_TABLE_SIZES,
   type RoundTableSize,
   FIXED_SCALE_OPTIONS,
@@ -87,6 +91,19 @@ const STYLE_OPTIONS: Array<{ value: TableStyle; label: string; title: string }> 
 
 const AUTOSAVE_KEY = "floorplan-autosave-v1";
 const MAX_HISTORY = 100;
+const MAX_GRID = MAX_FLOORPLAN_GRID;
+const MAX_GENERATED_TABLES = 400;
+const UNTITLED = "Untitled floorplan";
+/** Ids Auto layout gives its tables ("table-12", "table-top"); anything else was placed by hand. */
+const GENERATED_ID = /^table-/;
+
+/** The smallest grid (keeping the column count where possible) that fits `count` tables, or null if it already fits. */
+function growGridToFit(count: number, rows: number, columns: number): { rows: number; columns: number } | null {
+  if (count <= rows * columns) return null;
+  let cols = columns;
+  if (Math.ceil(count / cols) > MAX_GRID) cols = Math.min(MAX_GRID, Math.ceil(count / MAX_GRID));
+  return { rows: Math.min(MAX_GRID, Math.ceil(count / cols)), columns: cols };
+}
 
 type Library = { loaded: boolean; configured: boolean; items: Array<{ key: string; label: string; assetUrl: string }> };
 const EMPTY_LIBRARY: Library = { loaded: false, configured: false, items: [] };
@@ -136,17 +153,19 @@ export default function FloorplansPage() {
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const [outputFormat, setOutputFormat] = useState<"pdf" | "png">("pdf");
   const [listOpen, setListOpen] = useState(false);
+  const [listQuery, setListQuery] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [venueLogoLibrary, setVenueLogoLibrary] = useState<Library>(EMPTY_LIBRARY);
   const [clientLogoLibrary, setClientLogoLibrary] = useState<Library>(EMPTY_LIBRARY);
 
   // Auto layout form
-  const [tableCount, setTableCount] = useState(12);
-  const [roundSize, setRoundSize] = useState<RoundTableSize>("6ft");
-  const [seatsPerTable, setSeatsPerTable] = useState<number>(ROUND_TABLE_SIZES["6ft"].seats);
-  const [tableStyle, setTableStyle] = useState<TableStyle>("round");
-  const [withTopTable, setWithTopTable] = useState(false);
-  const [useGuestNumbers, setUseGuestNumbers] = useState(true);
+  // Saved with the plan (doc.autoLayout); older plans fall back to these defaults.
+  const tableCount = draft.autoLayout.tableCount ?? 12;
+  const roundSize: RoundTableSize = draft.autoLayout.roundSize ?? "6ft";
+  const seatsPerTable = draft.autoLayout.seatsPerTable ?? ROUND_TABLE_SIZES[roundSize].seats;
+  const tableStyle: TableStyle = draft.autoLayout.tableStyle ?? "round";
+  const withTopTable = draft.autoLayout.topTable ?? false;
+  const useGuestNumbers = draft.autoLayout.useGuestNumbers ?? true;
 
   // Guest list link
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
@@ -154,6 +173,7 @@ export default function FloorplansPage() {
   const [guestsLoading, setGuestsLoading] = useState(false);
 
   const [recovered, setRecovered] = useState<Autosave | null>(null);
+  const [generatePrompt, setGeneratePrompt] = useState(false);
   const clipboardRef = useRef<{ objects: FloorplanCanvasObject[]; pastes: number } | null>(null);
 
   /* ---------- derived ---------- */
@@ -197,7 +217,21 @@ export default function FloorplansPage() {
     return list;
   }, [objects, tableGuests, fit, wantedScale, print.fixedScale, draft.canvas.paperSize, draft.canvas.orientation]);
 
+  const guestTableNumbers = useMemo(
+    () => (tableGuests ? Object.keys(tableGuests).sort(naturalTableCompare) : []),
+    [tableGuests]
+  );
+  const usingGuestNumbers = useGuestNumbers && guestTableNumbers.length > 0;
+  const plannedCount = usingGuestNumbers ? guestTableNumbers.length : tableCount;
+  const gridCapacity = draft.autoLayout.rows * draft.autoLayout.columns;
+  const gridOverflow = growGridToFit(plannedCount, draft.autoLayout.rows, draft.autoLayout.columns);
+
   const isSaved = items.some((item) => item.id === draft.id);
+  const filteredItems = useMemo(() => {
+    const q = listQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((item) => `${item.name} ${item.title}`.toLowerCase().includes(q));
+  }, [items, listQuery]);
   const canAlign = validSelected.length >= 2;
   const canDistribute = validSelected.length >= 3;
 
@@ -216,6 +250,8 @@ export default function FloorplansPage() {
     pastRef.current.push(draftRef.current);
     if (pastRef.current.length > MAX_HISTORY) pastRef.current.shift();
     futureRef.current = [];
+    // A new step starts here, so the next keyed edit must not fold into the one before it.
+    coalesceRef.current = { key: null, at: 0 };
     syncHistory();
   }, [syncHistory]);
 
@@ -255,6 +291,14 @@ export default function FloorplansPage() {
     coalesceRef.current = { key: null, at: 0 };
     setDoc(next);
     setDirty(true);
+    syncHistory();
+  }, [setDoc, syncHistory]);
+
+  /** Escape mid-drag: put back the state saved when the gesture began, and drop that undo step. */
+  const cancelGesture = useCallback(() => {
+    const before = pastRef.current.pop();
+    if (before) setDoc(before);
+    coalesceRef.current = { key: null, at: 0 };
     syncHistory();
   }, [setDoc, syncHistory]);
 
@@ -359,7 +403,15 @@ export default function FloorplansPage() {
       if (!clash) break;
       centre = { x: centre.x + step, y: centre.y + step };
     }
-    const obj = preset.build(centre, existing, unitsPerMetre ?? DEFAULT_UNITS_PER_METRE);
+    let obj = preset.build(centre, existing, unitsPerMetre ?? DEFAULT_UNITS_PER_METRE);
+    // Tables and furniture go to the nearest clear spot instead of landing on top of what's in the middle.
+    // Floor pieces (room, stage, dance floor) and text labels still go exactly where the view is centred.
+    if (!preset.behind && obj.type !== "text") {
+      const clearance = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.3;
+      const box = objectBox(obj);
+      const spot = findFreeCentre(obj, existing, { x: box.cx, y: box.cy }, step, clearance, withCentre);
+      obj = withCentre(obj, spot.x, spot.y);
+    }
     commitObjects((list) => (preset.behind ? [obj, ...list] : [...list, obj]));
     setSelectedIds([obj.id]);
   }
@@ -515,9 +567,7 @@ export default function FloorplansPage() {
       row.sort((a, b) => a.x - b.x);
       for (const t of row) next.set(t.id, String(n++));
     }
-    commitObjects((list) =>
-      list.map((o) => (o.type === "table" && next.has(o.id) ? { ...o, tableNumber: next.get(o.id)! } : o))
-    );
+    applyNumbers(next);
   }
 
   function closeNumberGaps() {
@@ -526,6 +576,29 @@ export default function FloorplansPage() {
       .sort((a, b) => naturalTableCompare(a.tableNumber, b.tableNumber));
     const next = new Map<string, string>();
     tables.forEach((t, i) => next.set(t.id, String(i + 1)));
+    applyNumbers(next);
+  }
+
+  /**
+   * Apply new table numbers. Guests are matched to tables by number, so when a guest list is linked,
+   * say how many guests would end up at a different table and ask first.
+   */
+  function applyNumbers(next: Map<string, string>) {
+    const changed = objects.filter(
+      (o): o is FloorplanTableObject => o.type === "table" && next.has(o.id) && next.get(o.id) !== o.tableNumber
+    );
+    if (!changed.length) return;
+    if (tableGuests) {
+      const moved = changed.reduce((sum, t) => sum + (guestCountFor(t.tableNumber, tableGuests) ?? 0), 0);
+      if (moved > 0) {
+        const tables = `${changed.length} table${changed.length === 1 ? "" : "s"}`;
+        const guests = `${moved} guest${moved === 1 ? "" : "s"}`;
+        const ok = window.confirm(
+          `This changes the number on ${tables}. The linked guest list seats guests by table number, so ${guests} will move to a different table on the plan. Renumber anyway? You can undo this.`
+        );
+        if (!ok) return;
+      }
+    }
     commitObjects((list) =>
       list.map((o) => (o.type === "table" && next.has(o.id) ? { ...o, tableNumber: next.get(o.id)! } : o))
     );
@@ -538,16 +611,43 @@ export default function FloorplansPage() {
         if (o.type !== "table") return o;
         const count = guestCountFor(o.tableNumber, tableGuests) ?? 0;
         if (count === 0 || count === tableSeatCount(o)) return o;
-        return { ...o, seats: Math.min(60, count) };
+        return { ...o, seats: Math.min(MAX_TABLE_SEATS, count) };
       })
     );
   }
 
+  function setAuto(patch: Partial<FloorplanDocument["autoLayout"]>, key?: string) {
+    commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, ...patch } }), key);
+  }
+
+  /** Tables Auto layout didn't make (added from the panel, pasted or duplicated). */
+  const handPlacedTables = objects.filter((o) => o.type === "table" && !GENERATED_ID.test(o.id));
+
   function generateTables() {
-    const guestTables = tableGuests ? Object.keys(tableGuests).sort(naturalTableCompare) : null;
-    const numbers = useGuestNumbers && guestTables?.length ? guestTables : undefined;
-    const count = numbers ? numbers.length : tableCount;
-    const generated = buildTablesFromAutoLayout(draft.autoLayout, count, {
+    if (handPlacedTables.length) {
+      setGeneratePrompt(true);
+      return;
+    }
+    runGenerate(false);
+  }
+
+  function runGenerate(keepHandPlaced: boolean) {
+    setGeneratePrompt(false);
+    const kept = keepHandPlaced ? handPlacedTables : [];
+    const taken = new Set(kept.map((t) => (t.type === "table" ? t.tableNumber.trim() : "")));
+    let numbers: string[];
+    if (usingGuestNumbers) {
+      numbers = guestTableNumbers.filter((n) => !taken.has(n));
+    } else {
+      // Same number of tables as asked for, skipping numbers the kept tables already use.
+      numbers = [];
+      for (let n = 1; numbers.length < tableCount; n += 1) if (!taken.has(String(n))) numbers.push(String(n));
+    }
+    // Grow the grid rather than silently dropping the tables that don't fit.
+    const grow = growGridToFit(numbers.length, draft.autoLayout.rows, draft.autoLayout.columns);
+    const autoLayout = grow ? { ...draft.autoLayout, ...grow } : draft.autoLayout;
+    const keptIds = new Set(kept.map((t) => t.id));
+    const generated = buildTablesFromAutoLayout(autoLayout, numbers.length, {
       tableNumbers: numbers,
       seats: seatsPerTable,
       roundSize,
@@ -561,7 +661,8 @@ export default function FloorplansPage() {
         title: doc.metadata.title || doc.themeSnapshot.eventName,
         subtitle: doc.metadata.subtitle || doc.themeSnapshot.eventSubtitle || ""
       },
-      objects: [...doc.objects.filter((o) => o.type !== "table"), ...generated]
+      autoLayout,
+      objects: [...doc.objects.filter((o) => o.type !== "table" || keptIds.has(o.id)), ...generated]
     }));
     setSelectedIds([]);
     fitSoon();
@@ -630,17 +731,28 @@ export default function FloorplansPage() {
     setBusy(true);
     setError("");
     try {
+      const sent = draftRef.current;
+      const name = sent.name.trim() || UNTITLED;
       const response = await fetch("/api/floorplans/saved", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draftRef.current)
+        body: JSON.stringify({ ...sent, name })
       });
       if (!response.ok) throw new Error(await readResponseError(response, "Save failed."));
       const payload = await response.json();
+      // Edits made while the request was in flight aren't in the saved copy: keep them unsaved.
+      const unchanged = draftRef.current === sent;
       // The id is the only thing that has to change; keep it out of undo history.
-      setDoc({ ...draftRef.current, id: payload.id as string, savedAt: payload.savedAt as string });
-      setDirty(false);
-      clearAutosave();
+      setDoc({
+        ...draftRef.current,
+        ...(unchanged ? { name } : {}),
+        id: payload.id as string,
+        savedAt: payload.savedAt as string
+      });
+      if (unchanged) {
+        setDirty(false);
+        clearAutosave();
+      }
       await refreshList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
@@ -673,6 +785,23 @@ export default function FloorplansPage() {
     setGuestRecords(null);
     clearAutosave();
     setView({ zoom: 1, pan: { x: 0, y: 0 } });
+  }
+
+  /** Delete a saved plan from the Open list. If it's the one being edited, it stays open as an unsaved plan. */
+  async function deleteSaved(item: FloorplanListItem) {
+    if (!window.confirm(`Delete the saved floorplan “${item.name}”? This can't be undone.`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/floorplans/saved/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(await readResponseError(response, "Delete failed."));
+      if (item.id === draftRef.current.id) setDirty(true);
+      await refreshList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteCurrent() {
@@ -828,7 +957,7 @@ export default function FloorplansPage() {
   // Keyboard shortcuts. The handler is re-bound each render so it always sees fresh state.
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (event: KeyboardEvent) => {
-    if (listOpen || previewUrl) return;
+    if (listOpen || previewUrl || generatePrompt) return;
     const meta = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (meta && key === "s") {
@@ -898,11 +1027,15 @@ export default function FloorplansPage() {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") setSpaceDown(false);
     };
+    // A Space released while another window has focus never reaches us; don't leave pan mode stuck on.
+    const onBlur = () => setSpaceDown(false);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -941,6 +1074,7 @@ export default function FloorplansPage() {
               type="button"
               onClick={() => {
                 void refreshList().catch((err) => setError(err instanceof Error ? err.message : "Failed to list floorplans."));
+                setListQuery("");
                 setListOpen(true);
               }}
             >
@@ -1013,37 +1147,98 @@ export default function FloorplansPage() {
               No saved floorplans yet.
             </p>
           ) : (
-            <ul className="list">
-              {items.map((item) => (
-                <li key={item.id} className={item.id === draft.id ? "list-item list-item--active" : "list-item"}>
-                  <div className="list-item-main">
-                    <button
-                      type="button"
-                      className="list-item-title"
-                      disabled={busy}
-                      onClick={() => {
-                        void loadItem(item.id);
-                        setListOpen(false);
-                      }}
-                    >
-                      {item.name}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn-sm"
-                    disabled={busy}
-                    onClick={() => {
-                      void loadItem(item.id);
-                      setListOpen(false);
-                    }}
-                  >
-                    Open
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="stack">
+              {items.length > 5 ? (
+                <input
+                  type="search"
+                  autoFocus
+                  value={listQuery}
+                  onChange={(e) => setListQuery(e.target.value)}
+                  placeholder="Search by name or title"
+                  aria-label="Search saved floorplans"
+                />
+              ) : null}
+              {filteredItems.length === 0 ? (
+                <p className="text-muted" style={{ margin: 0 }}>
+                  No floorplans match “{listQuery}”.
+                </p>
+              ) : (
+                <ul className="list">
+                  {filteredItems.map((item) => (
+                    <li key={item.id} className={item.id === draft.id ? "list-item list-item--active" : "list-item"}>
+                      <div className="list-item-main">
+                        <button
+                          type="button"
+                          className="list-item-title"
+                          disabled={busy}
+                          onClick={() => {
+                            void loadItem(item.id);
+                            setListOpen(false);
+                          }}
+                        >
+                          {item.name}
+                        </button>
+                        <span className="list-item-meta text-muted">
+                          {[item.title && item.title !== item.name ? item.title : null, `Saved ${formatTime(item.savedAt)}`]
+                            .filter(Boolean)
+                            .join(" · ")}
+                          {item.id === draft.id ? " · Open now" : ""}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        disabled={busy}
+                        onClick={() => {
+                          void loadItem(item.id);
+                          setListOpen(false);
+                        }}
+                      >
+                        Open
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn icon-btn--sm btn-danger"
+                        disabled={busy}
+                        onClick={() => void deleteSaved(item)}
+                        aria-label={`Delete ${item.name}`}
+                        title="Delete"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
+        </Modal>
+      ) : null}
+
+      {generatePrompt ? (
+        <Modal
+          title="Replace tables?"
+          size="sm"
+          onClose={() => setGeneratePrompt(false)}
+          footer={
+            <>
+              <button type="button" onClick={() => setGeneratePrompt(false)}>
+                Cancel
+              </button>
+              <button type="button" onClick={() => runGenerate(true)}>
+                Keep them
+              </button>
+              <button type="button" className="btn-primary" onClick={() => runGenerate(false)}>
+                Replace all tables
+              </button>
+            </>
+          }
+        >
+          <p style={{ margin: 0 }}>
+            {handPlacedTables.length} table{handPlacedTables.length === 1 ? " was" : "s were"} added by hand rather than by
+            Auto layout. Generating replaces every table on the plan; you can keep the hand-placed ones instead, and new
+            tables will skip their numbers. Shapes and labels are kept either way, and you can undo.
+          </p>
         </Modal>
       ) : null}
 
@@ -1082,6 +1277,16 @@ export default function FloorplansPage() {
                 aria-label="Delete selection"
               >
                 <Trash2 size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn btn-danger"
+                disabled={!objects.length}
+                onClick={clearCanvas}
+                title="Clear canvas"
+                aria-label="Clear canvas"
+              >
+                <Eraser size={16} />
               </button>
             </div>
             <div className="btn-group">
@@ -1169,9 +1374,6 @@ export default function FloorplansPage() {
                 <Maximize size={16} />
               </button>
             </div>
-            <button type="button" className="icon-btn btn-danger" onClick={clearCanvas} title="Clear canvas" aria-label="Clear canvas">
-              <Eraser size={16} />
-            </button>
           </div>
           <FloorplanCanvas
             objects={objects}
@@ -1189,13 +1391,14 @@ export default function FloorplansPage() {
             colorByOccupancy={print.colorByOccupancy}
             unitsPerMetre={unitsPerMetre}
             onBeginGesture={pushHistory}
+            onCancelGesture={cancelGesture}
             onLive={(next) => {
               setDoc({ ...draftRef.current, objects: next });
               setDirty(true);
             }}
             emptyHint={
               <span>
-                Add tables from the panel on the right, or generate a grid with <strong>Auto layout</strong>.
+                Add tables from <strong>Add to plan</strong>, or generate a grid with <strong>Auto layout</strong>.
               </span>
             }
           />
@@ -1206,6 +1409,17 @@ export default function FloorplansPage() {
         </section>
 
         <aside className="editor-side">
+
+          <Section title="Add to plan" collapsible defaultOpen>
+            <div className="preset-grid">
+              {OBJECT_PRESETS.map((preset) => (
+                <button key={preset.id} type="button" className="btn-sm" onClick={() => addPreset(preset.id)}>
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </Section>
+
           {primary ? (
             <Inspector
               primary={primary}
@@ -1219,16 +1433,6 @@ export default function FloorplansPage() {
               onOrder={reorderSelected}
             />
           ) : null}
-
-          <Section title="Add to plan" collapsible defaultOpen>
-            <div className="preset-grid">
-              {OBJECT_PRESETS.map((preset) => (
-                <button key={preset.id} type="button" className="btn-sm" onClick={() => addPreset(preset.id)}>
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </Section>
 
           <Section
             title="Checks"
@@ -1293,6 +1497,70 @@ export default function FloorplansPage() {
                   Match seats to guest counts
                 </button>
               ) : null}
+            </div>
+          </Section>
+
+          <Section
+            title="Grid and scale"
+            collapsible
+            defaultOpen={false}
+            summary={metresPerSquare ? `1 square = ${Math.round(metresPerSquare * 100) / 100} m` : "No scale set"}
+          >
+            <div className="stack">
+              <Field
+                label="Grid square"
+                hint={
+                  metresPerSquare
+                    ? `Snapping step. At this scale one square is ${Math.round(metresPerSquare * 100) / 100} m; changing it doesn't resize anything.`
+                    : "Snapping step, in plan units."
+                }
+              >
+                <NumericInput
+                  min={4}
+                  max={200}
+                  integer
+                  value={draft.canvas.gridSize}
+                  onCommit={(gridSize) => {
+                    if (gridSize == null) return;
+                    // unitsPerMetre is left alone, so tables keep their real-world size.
+                    commit((doc) => ({ ...doc, canvas: { ...doc.canvas, gridSize } }), "grid");
+                  }}
+                />
+              </Field>
+              <Field
+                label="Scale: one grid square is"
+                hint={
+                  metresPerSquare
+                    ? "Sets what a metre means on the plan, so changing it changes the real size of everything. Sizes show in metres and the scale bar is drawn."
+                    : "Leave blank for an unscaled plan. 1 m per square makes the default 6 ft round table 1.8 m."
+                }
+              >
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <NumericInput
+                    min={0.05}
+                    // unitsPerMetre must stay ≥ 1, so a square can be at most gridSize metres.
+                    max={draft.canvas.gridSize}
+                    step={0.1}
+                    allowEmpty
+                    value={metresPerSquare}
+                    placeholder="—"
+                    onCommit={(value) => {
+                      const m = value ?? 0;
+                      commit(
+                        (doc) => ({
+                          ...doc,
+                          canvas: {
+                            ...doc.canvas,
+                            unitsPerMetre: m > 0 ? doc.canvas.gridSize / m : null
+                          }
+                        }),
+                        "scale"
+                      );
+                    }}
+                  />
+                  <span className="text-muted">m</span>
+                </div>
+              </Field>
             </div>
           </Section>
 
@@ -1369,38 +1637,11 @@ export default function FloorplansPage() {
                 disabled={guestFeaturesOff}
                 onChange={(guestListPage) => setPrint({ guestListPage })}
               />
-              <Field
-                label="Scale: one grid square is"
-                hint={
-                  metresPerSquare
-                    ? "Sets what a metre means on the plan: sizes show in metres and the scale bar is drawn."
-                    : "Leave blank for an unscaled plan. 1 m per square makes the default 6 ft round table 1.8 m."
-                }
-              >
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input
-                    type="number"
-                    min={0.1}
-                    step={0.1}
-                    value={metresPerSquare ? Math.round(metresPerSquare * 100) / 100 : ""}
-                    placeholder="—"
-                    onChange={(e) => {
-                      const m = Number(e.target.value);
-                      commit(
-                        (doc) => ({
-                          ...doc,
-                          canvas: {
-                            ...doc.canvas,
-                            unitsPerMetre: m > 0 ? doc.canvas.gridSize / m : null
-                          }
-                        }),
-                        "scale"
-                      );
-                    }}
-                  />
-                  <span className="text-muted">m</span>
-                </div>
-              </Field>
+              {!unitsPerMetre ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Set a scale under <strong>Grid and scale</strong> to print at a true scale or add a scale bar.
+                </p>
+              ) : null}
               {unitsPerMetre ? (
                 <>
                   <Field
@@ -1426,45 +1667,45 @@ export default function FloorplansPage() {
                   <Switch label="Scale bar" checked={print.scaleBar} onChange={(scaleBar) => setPrint({ scaleBar })} />
                 </>
               ) : null}
-              {venueLogoLibrary.loaded && venueLogoLibrary.configured && clientLogoLibrary.loaded && clientLogoLibrary.configured ? (
-                <>
-                  <LogoPicker
-                    title="Client logo"
-                    items={clientLogoLibrary.items}
-                    value={draft.selectedClientLogoKey ?? ""}
-                    onChange={(key) => {
-                      if (!key) {
-                        commit((doc) => ({
-                          ...doc,
-                          selectedClientLogoKey: null,
-                          themeSnapshot: { ...doc.themeSnapshot, clientLogoDataUrl: undefined }
-                        }));
-                        return;
-                      }
-                      const item = clientLogoLibrary.items.find((entry) => entry.key === key);
-                      if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
-                    }}
-                    emptyOption={{ label: "No client logo", value: "" }}
-                  />
-                  <LogoPicker
-                    title="Venue logo"
-                    items={venueLogoLibrary.items}
-                    value={draft.selectedVenueLogoKey ?? ""}
-                    onChange={(key) => {
-                      if (!key) {
-                        commit((doc) => ({
-                          ...doc,
-                          selectedVenueLogoKey: null,
-                          themeSnapshot: { ...doc.themeSnapshot, venueLogoDataUrl: undefined }
-                        }));
-                        return;
-                      }
-                      const item = venueLogoLibrary.items.find((entry) => entry.key === key);
-                      if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
-                    }}
-                    emptyOption={{ label: "No venue logo", value: "" }}
-                  />
-                </>
+              {clientLogoLibrary.loaded && clientLogoLibrary.configured ? (
+                <LogoPicker
+                  title="Client logo"
+                  items={clientLogoLibrary.items}
+                  value={draft.selectedClientLogoKey ?? ""}
+                  onChange={(key) => {
+                    if (!key) {
+                      commit((doc) => ({
+                        ...doc,
+                        selectedClientLogoKey: null,
+                        themeSnapshot: { ...doc.themeSnapshot, clientLogoDataUrl: undefined }
+                      }));
+                      return;
+                    }
+                    const item = clientLogoLibrary.items.find((entry) => entry.key === key);
+                    if (item) void applyLogoFromLibrary(item, "clientLogoDataUrl");
+                  }}
+                  emptyOption={{ label: "No client logo", value: "" }}
+                />
+              ) : null}
+              {venueLogoLibrary.loaded && venueLogoLibrary.configured ? (
+                <LogoPicker
+                  title="Venue logo"
+                  items={venueLogoLibrary.items}
+                  value={draft.selectedVenueLogoKey ?? ""}
+                  onChange={(key) => {
+                    if (!key) {
+                      commit((doc) => ({
+                        ...doc,
+                        selectedVenueLogoKey: null,
+                        themeSnapshot: { ...doc.themeSnapshot, venueLogoDataUrl: undefined }
+                      }));
+                      return;
+                    }
+                    const item = venueLogoLibrary.items.find((entry) => entry.key === key);
+                    if (item) void applyLogoFromLibrary(item, "venueLogoDataUrl");
+                  }}
+                  emptyOption={{ label: "No venue logo", value: "" }}
+                />
               ) : null}
             </div>
             <div className="card-foot card-foot--inset">
@@ -1515,7 +1756,7 @@ export default function FloorplansPage() {
           >
             <div className="stack">
               <Field label="Table type" as="div">
-                <Segmented value={tableStyle} options={STYLE_OPTIONS} onChange={setTableStyle} />
+                <Segmented value={tableStyle} options={STYLE_OPTIONS} onChange={(value) => setAuto({ tableStyle: value })} />
               </Field>
               {tableStyle !== "long" ? (
                 <Field label="Round table size" as="div">
@@ -1527,56 +1768,64 @@ export default function FloorplansPage() {
                       title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
                     }))}
                     onChange={(value) => {
-                      setRoundSize(value);
-                      setSeatsPerTable(ROUND_TABLE_SIZES[value].seats);
+                      setAuto({ roundSize: value, seatsPerTable: ROUND_TABLE_SIZES[value].seats });
                     }}
                   />
                 </Field>
               ) : null}
               <div className="form-grid">
                 <Field label="Tables">
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1}
-                    max={400}
-                    value={tableCount}
-                    disabled={useGuestNumbers && Boolean(tableGuests)}
-                    onChange={(e) => setTableCount(Math.max(1, Number(e.target.value) || 1))}
+                    max={MAX_GENERATED_TABLES}
+                    integer
+                    value={plannedCount}
+                    disabled={usingGuestNumbers}
+                    onCommit={(n) => {
+                      if (n != null) setAuto({ tableCount: n }, "tableCount");
+                    }}
                   />
                 </Field>
                 <Field label="Seats each">
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1}
-                    max={30}
+                    max={MAX_TABLE_SEATS}
+                    integer
                     value={seatsPerTable}
-                    onChange={(e) => setSeatsPerTable(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+                    onCommit={(n) => {
+                      if (n != null) setAuto({ seatsPerTable: n }, "seatsPerTable");
+                    }}
                   />
                 </Field>
                 <Field label="Rows">
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1}
-                    max={24}
+                    max={MAX_GRID}
+                    integer
                     value={draft.autoLayout.rows}
-                    onChange={(e) => {
-                      const rows = Math.max(1, Math.min(24, Number(e.target.value) || 1));
-                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, rows } }), "rows");
+                    onCommit={(rows) => {
+                      if (rows != null) commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, rows } }), "rows");
                     }}
                   />
                 </Field>
                 <Field label="Columns">
-                  <input
-                    type="number"
+                  <NumericInput
                     min={1}
-                    max={24}
+                    max={MAX_GRID}
+                    integer
                     value={draft.autoLayout.columns}
-                    onChange={(e) => {
-                      const columns = Math.max(1, Math.min(24, Number(e.target.value) || 1));
-                      commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, columns } }), "columns");
+                    onCommit={(columns) => {
+                      if (columns != null)
+                        commit((doc) => ({ ...doc, autoLayout: { ...doc.autoLayout, columns } }), "columns");
                     }}
                   />
                 </Field>
+                {gridOverflow ? (
+                  <p className="field-hint span-all" style={{ margin: 0 }}>
+                    A {draft.autoLayout.rows} × {draft.autoLayout.columns} grid holds {gridCapacity} tables. Generating{" "}
+                    {plannedCount} will make it {gridOverflow.rows} × {gridOverflow.columns}.
+                  </p>
+                ) : null}
                 <Field label="Numbering">
                   <select
                     value={draft.autoLayout.numbering}
@@ -1602,28 +1851,6 @@ export default function FloorplansPage() {
                     <option value="bottomLeft">Bottom left</option>
                     <option value="bottomRight">Bottom right</option>
                   </select>
-                </Field>
-                <Field label="Grid snap">
-                  <input
-                    type="number"
-                    min={4}
-                    max={200}
-                    value={draft.canvas.gridSize}
-                    onChange={(e) => {
-                      const gridSize = Math.max(4, Number(e.target.value) || 24);
-                      commit(
-                        (doc) => {
-                          const m = doc.canvas.unitsPerMetre && doc.canvas.unitsPerMetre > 0 ? doc.canvas.gridSize / doc.canvas.unitsPerMetre : null;
-                          return {
-                            ...doc,
-                            // Keep "one square = N metres" true when the grid size changes.
-                            canvas: { ...doc.canvas, gridSize, unitsPerMetre: m ? gridSize / m : doc.canvas.unitsPerMetre }
-                          };
-                        },
-                        "grid"
-                      );
-                    }}
-                  />
                 </Field>
                 <Field
                   label="Arrangement"
@@ -1664,13 +1891,13 @@ export default function FloorplansPage() {
                   </Field>
                 ) : null}
               </div>
-              <Switch label="Add a top table" checked={withTopTable} onChange={setWithTopTable} />
+              <Switch label="Add a top table" checked={withTopTable} onChange={(topTable) => setAuto({ topTable })} />
               {tableGuests ? (
                 <Switch
                   label="Use table numbers from guest list"
                   hint={`${Object.keys(tableGuests).length} tables in the linked event.`}
                   checked={useGuestNumbers}
-                  onChange={setUseGuestNumbers}
+                  onChange={(on) => setAuto({ useGuestNumbers: on })}
                 />
               ) : null}
               <button type="button" onClick={generateTables}>

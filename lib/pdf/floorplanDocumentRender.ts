@@ -86,15 +86,17 @@ async function embedLogoFromDataUrl(
   doc: PDFDocument,
   page: import("pdf-lib").PDFPage,
   logoDataUrl: string | undefined,
-  options: { x: number; centerY: number; width: number }
+  options: { x: number; centerY: number; maxWidth: number; maxHeight: number; align: "left" | "right" }
 ) {
   const image = await embedRasterDataUrl(doc, logoDataUrl);
   if (!image) return;
   try {
-    const width = options.width;
-    const height = (image.height / image.width) * width;
+    // Fit inside the box so square or tall logos don't run off the top of the page.
+    const fit = Math.min(options.maxWidth / image.width, options.maxHeight / image.height);
+    const width = image.width * fit;
+    const height = image.height * fit;
     page.drawImage(image, {
-      x: options.x,
+      x: options.align === "left" ? options.x : options.x + options.maxWidth - width,
       y: options.centerY - height / 2,
       width,
       height
@@ -110,6 +112,9 @@ export interface FloorplanRenderOptions {
 }
 
 type Rgb = ReturnType<typeof rgb>;
+
+const LOGO_MAX_HEIGHT = 60;
+const LOGO_TOP_GAP = 8;
 
 const FRAME_BORDER: Rgb = rgb(0.58, 0.64, 0.72);
 const OUTLINE: Rgb = hexToRgb(OUTLINE_COLOR, "#8092a8");
@@ -168,35 +173,64 @@ function drawLegend(
     color: FRAME_BORDER
   });
   const textColor = rgb(0.2, 0.26, 0.33);
-  page.drawText(opts.summary, { x: left, y: base, size: 9.5, font: fonts.bold, color: textColor });
-  let cursor = left + fonts.bold.widthOfTextAtSize(opts.summary, 9.5) + 22;
+  const statuses = opts.occupancyKey ? (Object.keys(OCCUPANCY_COLORS) as Array<keyof typeof OCCUPANCY_COLORS>) : [];
+  const summaryW = fonts.bold.widthOfTextAtSize(opts.summary, 9.5);
+  const keyW = statuses.reduce((w, status) => w + 13 + fonts.body.widthOfTextAtSize(OCCUPANCY_LABELS[status], 8.5) + 12, 0);
+  const scaleW = scaleMarksWidth(fonts, opts.scaleBar, opts.scaleNote);
+  // One line when everything fits; otherwise totals and key on top, the scale underneath on the right.
+  const oneLine = summaryW + (keyW ? 22 + keyW : 0) + (scaleW ? 22 + scaleW : 0) <= right - left;
+  const topBase = oneLine ? base : base + 6.5;
+  const scaleBase = oneLine ? base : base - 7;
 
-  if (opts.occupancyKey) {
-    (Object.keys(OCCUPANCY_COLORS) as Array<keyof typeof OCCUPANCY_COLORS>).forEach((status) => {
-      page.drawRectangle({
-        x: cursor,
-        y: base - 1.5,
-        width: 9,
-        height: 9,
-        color: hexToRgb(OCCUPANCY_COLORS[status], "#cccccc"),
-        borderColor: OUTLINE,
-        borderWidth: 0.5
-      });
-      const label = OCCUPANCY_LABELS[status];
-      page.drawText(label, { x: cursor + 13, y: base, size: 8.5, font: fonts.body, color: textColor });
-      cursor += 13 + fonts.body.widthOfTextAtSize(label, 8.5) + 12;
+  page.drawText(opts.summary, { x: left, y: topBase, size: 9.5, font: fonts.bold, color: textColor });
+  let cursor = left + summaryW + 22;
+  statuses.forEach((status) => {
+    page.drawRectangle({
+      x: cursor,
+      y: topBase - 1.5,
+      width: 9,
+      height: 9,
+      color: hexToRgb(OCCUPANCY_COLORS[status], "#cccccc"),
+      borderColor: OUTLINE,
+      borderWidth: 0.5
     });
-  }
+    const label = OCCUPANCY_LABELS[status];
+    page.drawText(label, { x: cursor + 13, y: topBase, size: 8.5, font: fonts.body, color: textColor });
+    cursor += 13 + fonts.body.widthOfTextAtSize(label, 8.5) + 12;
+  });
 
+  drawScaleMarks(page, fonts, right, scaleBase, opts.scaleBar, opts.scaleNote);
+}
+
+function scaleMarksWidth(
+  fonts: { body: PDFFont; bold: PDFFont },
+  scaleBar: { points: number; label: string } | null,
+  scaleNote: string | null
+): number {
+  let w = scaleNote ? fonts.bold.widthOfTextAtSize(scaleNote, 8.5) : 0;
+  if (scaleBar) w += (scaleNote ? 14 : 0) + scaleBar.points + 8 + fonts.body.widthOfTextAtSize(scaleBar.label, 8.5);
+  return w;
+}
+
+/** Scale bar and "1:N" note, right-aligned to `right` on baseline `base`. */
+function drawScaleMarks(
+  page: PDFPage,
+  fonts: { body: PDFFont; bold: PDFFont },
+  right: number,
+  base: number,
+  scaleBar: { points: number; label: string } | null,
+  scaleNote: string | null
+) {
+  const textColor = rgb(0.2, 0.26, 0.33);
   let rightEdge = right;
-  if (opts.scaleNote) {
-    const noteW = fonts.bold.widthOfTextAtSize(opts.scaleNote, 8.5);
-    page.drawText(opts.scaleNote, { x: right - noteW, y: base, size: 8.5, font: fonts.bold, color: textColor });
+  if (scaleNote) {
+    const noteW = fonts.bold.widthOfTextAtSize(scaleNote, 8.5);
+    page.drawText(scaleNote, { x: right - noteW, y: base, size: 8.5, font: fonts.bold, color: textColor });
     rightEdge = right - noteW - 14;
   }
 
-  if (opts.scaleBar) {
-    const { points, label } = opts.scaleBar;
+  if (scaleBar) {
+    const { points, label } = scaleBar;
     const labelW = fonts.body.widthOfTextAtSize(label, 8.5);
     const x1 = rightEdge - labelW - 8;
     const x0 = x1 - points;
@@ -357,15 +391,21 @@ export async function renderFloorplanDocumentPdf(
     subtitleRaw && subtitleBaselineY < titleBaselineY
       ? (titleBaselineY + titleFit.size * 0.35 + subtitleBaselineY + 2) / 2
       : titleBaselineY - titleFit.size * 0.15;
+  // Keep at least LOGO_TOP_GAP between the logo and the top of the page.
+  const logoMaxHeight = Math.min(LOGO_MAX_HEIGHT, 2 * (height - LOGO_TOP_GAP - titleCenterY));
   await embedLogoFromDataUrl(pdf, page, docInput.themeSnapshot.clientLogoDataUrl, {
     x: logoXInset,
     centerY: titleCenterY,
-    width: logoWidth
+    maxWidth: logoWidth,
+    maxHeight: logoMaxHeight,
+    align: "left"
   });
   await embedLogoFromDataUrl(pdf, page, docInput.themeSnapshot.venueLogoDataUrl, {
     x: width - logoXInset - logoWidth,
     centerY: titleCenterY,
-    width: logoWidth
+    maxWidth: logoWidth,
+    maxHeight: logoMaxHeight,
+    align: "right"
   });
 
   page.drawRectangle({
@@ -503,24 +543,29 @@ export async function renderFloorplanDocumentPdf(
     });
   }
 
+  let scaleNote: string | null = null;
+  if (unitsPerMetre && (print.scaleBar || print.fixedScale)) {
+    if (wantedScale != null && fit.fits) scaleNote = `1:${print.fixedScale}`;
+    else {
+      const approx = Math.round(ratioForScale(scale, unitsPerMetre) / 5) * 5 || 1;
+      scaleNote = wantedScale != null ? `approx. 1:${approx} (too big for 1:${print.fixedScale})` : `approx. 1:${approx}`;
+    }
+  }
+  const scaleBar = print.scaleBar && unitsPerMetre ? pickScaleBar(unitsPerMetre, scale) : null;
+
   if (print.legend) {
     const totals = planTotals(docInput.objects, guests);
     const parts = [`${totals.tables} table${totals.tables === 1 ? "" : "s"}`, `${totals.seats} seats`];
     if (totals.guests != null) parts.push(`${totals.guests} guests`);
-    let scaleNote: string | null = null;
-    if (unitsPerMetre) {
-      if (wantedScale != null && fit.fits) scaleNote = `1:${print.fixedScale}`;
-      else {
-        const approx = Math.round(ratioForScale(scale, unitsPerMetre) / 5) * 5 || 1;
-        scaleNote = wantedScale != null ? `approx. 1:${approx} (too big for 1:${print.fixedScale})` : `approx. 1:${approx}`;
-      }
-    }
     drawLegend(page, { body: bodyFont, bold: bodyBold }, layout, {
       summary: parts.join("  ·  "),
       occupancyKey: print.colorByOccupancy && guests != null,
-      scaleBar: print.scaleBar && unitsPerMetre ? pickScaleBar(unitsPerMetre, scale) : null,
-      scaleNote: print.scaleBar || print.fixedScale ? scaleNote : null
+      scaleBar,
+      scaleNote
     });
+  } else if (scaleBar || scaleNote) {
+    // No footer band: sit the scale in the frame's bottom padding, bottom-right.
+    drawScaleMarks(page, { body: bodyFont, bold: bodyBold }, width - margin - 14, margin + 8, scaleBar, scaleNote);
   }
 
   if (print.guestListPage && guests && Object.keys(guests).length) {

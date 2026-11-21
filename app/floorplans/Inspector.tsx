@@ -1,8 +1,9 @@
 "use client";
 
 import { BringToFront, SendToBack, Trash2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Field, Section, Segmented, Switch } from "@/app/components/ui";
+import { NumericInput } from "@/app/floorplans/NumericInput";
 import {
   DEFAULT_FILLS,
   DEFAULT_UNITS_PER_METRE,
@@ -12,8 +13,9 @@ import {
   chairMetrics,
   seatOffsets,
   FILL_SWATCHES,
-  recommendedRadius,
+  MAX_TABLE_SEATS,
   recommendedRectSize,
+  roundRadiusForSeats,
   tableSeatCount,
   tableShape
 } from "@/lib/floorplans/geometry";
@@ -105,15 +107,14 @@ function NumberField({
 }) {
   return (
     <Field label={label} hint={hint}>
-      <input
-        type="number"
+      <NumericInput
         min={min}
         max={max}
         step={step}
-        value={Number.isFinite(value) ? Math.round(value * 10) / 10 : ""}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n)) onChange(n);
+        decimals={1}
+        value={Number.isFinite(value) ? value : null}
+        onCommit={(n) => {
+          if (n != null) onChange(n);
         }}
       />
     </Field>
@@ -155,17 +156,49 @@ function LengthField({
   const shown = (units * factor) / upm;
   return (
     <Field label={label} hint={hint}>
-      <input
-        type="number"
-        min={(min * factor) / upm}
+      <NumericInput
+        min={Math.ceil(((min * factor) / upm) * 100) / 100}
         step={0.1}
-        value={Math.round(shown * 100) / 100}
-        onChange={(e) => {
-          const m = Number(e.target.value);
-          if (Number.isFinite(m) && m > 0) onChange(Math.max(min, (m * upm) / factor));
+        value={shown}
+        onCommit={(m) => {
+          if (m != null && m > 0) onChange(Math.max(min, (m * upm) / factor));
         }}
       />
     </Field>
+  );
+}
+
+/** Table number: the field can be emptied while retyping; an empty value is never saved. */
+function TableNumberInput({
+  value,
+  disabled,
+  onChange
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(value);
+  }, [value]);
+  return (
+    <input
+      value={text}
+      disabled={disabled}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        if (e.target.value.trim()) onChange(e.target.value);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        if (!text.trim()) setText(value);
+      }}
+    />
   );
 }
 
@@ -333,8 +366,8 @@ function RotationField({ value, onChange }: { value: number; onChange: (value: n
   return (
     <NumberField
       label="Rotation °"
-      min={0}
-      max={359}
+      min={-360}
+      max={360}
       step={15}
       value={value}
       onChange={(v) => onChange(((Math.round(v) % 360) + 360) % 360)}
@@ -366,13 +399,15 @@ function TableFields({
     const k = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) / DEFAULT_UNITS_PER_METRE;
     return { width: size.width * k, height: size.height * k };
   };
-  const roundRadius = (n: number) =>
-    recommendedRadius(n) * ((unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) / DEFAULT_UNITS_PER_METRE);
+  // Same rule everywhere: the smallest standard round for the seat count (5 ft to 10, 6 ft to 12, then larger).
+  const roundRadius = (n: number) => roundRadiusForSeats(n, unitsPerMetre ?? DEFAULT_UNITS_PER_METRE);
 
   const setSeats = (n: number) =>
     patchTable((t) => ({ ...t, seats: Math.max(0, Math.min(60, Math.round(n))) }), "seats");
 
   const crowded = (() => {
+    // Round chairs scale with the table, so judge rounds by standard spacing rather than by chairs touching.
+    if (shape === "round") return seats > 0 && table.radius < roundRadius(seats) - 0.05;
     const offsets = seatOffsets(table);
     if (offsets.length < 2) return false;
     const { radius } = chairMetrics(table);
@@ -399,13 +434,14 @@ function TableFields({
     <>
       <div className="form-grid">
         <Field label="Table number">
-          <input
+          <TableNumberInput
+            key={table.id}
             value={table.tableNumber}
             disabled={multiple}
-            onChange={(e) => patchTable((t) => ({ ...t, tableNumber: e.target.value || t.tableNumber }), "number")}
+            onChange={(tableNumber) => patchTable((t) => ({ ...t, tableNumber }), "number")}
           />
         </Field>
-        <NumberField label="Seats" min={0} max={60} value={seats} onChange={setSeats} />
+        <NumberField label="Seats" min={0} max={MAX_TABLE_SEATS} step={1} value={seats} onChange={setSeats} />
         <Field label="Label" className="span-all" hint="Printed instead of “Table N”, e.g. Top table.">
           <input
             value={table.label ?? ""}
@@ -417,7 +453,7 @@ function TableFields({
       {crowded ? (
         <div className="stack stack--sm">
           <p className="field-hint" style={{ margin: 0 }}>
-            Chairs overlap at this size.
+            {shape === "round" ? "More seats than this size takes at standard spacing." : "Chairs overlap at this size."}
           </p>
           <button
             type="button"

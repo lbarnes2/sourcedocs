@@ -76,13 +76,23 @@ export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
 
 /** Banqueting floorplan fields plus optional stagger direction for standalone floorplan auto-layout. */
 export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
-  staggerAxis: z.enum(["horizontal", "vertical"]).optional()
+  staggerAxis: z.enum(["horizontal", "vertical"]).optional(),
+  tableCount: z.number().int().min(1).max(400).optional(),
+  tableStyle: z.enum(["round", "cabaret", "long"]).optional(),
+  roundSize: z.enum(["6ft", "5ft"]).optional(),
+  seatsPerTable: z.number().int().min(1).max(60).optional(),
+  topTable: z.boolean().optional(),
+  useGuestNumbers: z.boolean().optional()
 });
 
 export const floorplanDocumentSchema = z.object({
   version: z.literal(1),
   id: floorplanIdSchema,
-  name: z.string().min(1).max(500),
+  // Older saves could store a blank name; load them as untitled rather than refusing them.
+  name: z
+    .string()
+    .max(500)
+    .transform((value) => value.trim() || "Untitled floorplan"),
   savedAt: z.string().min(1),
   metadata: z.object({
     title: z.string().max(limits.MAX_EVENT_NAME_CHARS),
@@ -105,7 +115,7 @@ export const floorplanDocumentSchema = z.object({
 
 export const floorplanSavePayloadSchema = z.object({
   id: floorplanIdSchema.optional().nullable(),
-  name: z.string().min(1).max(500),
+  name: z.string().trim().min(1, "Give the floorplan a name.").max(500),
   metadata: z
     .object({
       title: z.string().max(limits.MAX_EVENT_NAME_CHARS).optional(),
