@@ -134,6 +134,18 @@ export function roundTableRadius(size: RoundTableSize, unitsPerMetre: number): n
   return Math.max(6, Math.round((ROUND_TABLE_SIZES[size].diameterM / 2) * unitsPerMetre * 10) / 10);
 }
 
+/**
+ * Smallest round that seats `seats` at standard spacing: a 5 ft round up to 10, a 6 ft round up to 12,
+ * then a 6 ft round grown in proportion (the same edge length per seat, about 0.48 m).
+ */
+export function roundRadiusForSeats(seats: number, unitsPerMetre: number): number {
+  const n = Math.max(1, Math.round(seats));
+  if (n <= ROUND_TABLE_SIZES["5ft"].seats) return roundTableRadius("5ft", unitsPerMetre);
+  const six = roundTableRadius("6ft", unitsPerMetre);
+  if (n <= ROUND_TABLE_SIZES["6ft"].seats) return six;
+  return Math.round(((six * n) / ROUND_TABLE_SIZES["6ft"].seats) * 10) / 10;
+}
+
 /** Round tables grow with their seat count so chairs don't pile up. */
 export function recommendedRadius(seats: number): number {
   return Math.max(DEFAULT_TABLE_RADIUS, Math.round(seats * 2.6));
@@ -159,8 +171,18 @@ export function chairMetrics(t: FloorplanTableObject): { radius: number; gap: nu
   const { w, h } = tableBodySize(t);
   const base = Math.min(w, h) / 2;
   // Rectangular tables are shallow, so a proportional chair would be tiny; keep them chair-sized.
-  const floor = tableShape(t) === "rect" ? 4 : 2;
-  return { radius: Math.max(floor, base * 0.18), gap: Math.max(floor * 0.75, base * 0.14) };
+  const round = tableShape(t) === "round";
+  const floor = round ? 2 : 4;
+  const gap = Math.max(floor * 0.75, base * 0.14);
+  let radius = Math.max(floor, base * 0.18);
+  if (round) {
+    // With a lot of chairs on the ring, shrink them so neighbours don't overlap (they still show as tight).
+    const n = Math.max(1, tableSeatCount(t));
+    const span = Math.max(30, Math.min(360, t.seatSpan ?? 360));
+    const pitch = ((span / n) * Math.PI) / 180;
+    if (n > 1) radius = Math.min(radius, ((t.radius + gap) * Math.sin(pitch / 2)) / (1 - Math.sin(pitch / 2)) * 0.9);
+  }
+  return { radius: Math.max(1, radius), gap };
 }
 
 /** Chair centres relative to the table centre, with the table's rotation already applied. */
@@ -388,6 +410,11 @@ export function nextTableNumber(objects: FloorplanCanvasObject[]): string {
   return String(highest + 1);
 }
 
+/** Drop float noise from fractional snap steps (2.4 × 9 = 21.599999…). */
+function tidy(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 export function snapValue(value: number, step: number): number {
   return step > 0 ? Math.round(value / step) * step : value;
 }
@@ -408,8 +435,10 @@ export function resizeFromCorner(
 
   if (obj.type === "circle" || (obj.type === "table" && tableShape(obj) === "round")) {
     // The handles sit on the corners of the bounding square, hence the /√2.
-    const radius = Math.max(obj.type === "circle" ? 4 : MIN, Math.round(Math.hypot(local.x, local.y) / Math.SQRT2));
-    return { ...obj, radius: snap > 0 ? Math.max(MIN, snapValue(radius, snap)) : radius } as FloorplanCanvasObject;
+    const raw = Math.hypot(local.x, local.y) / Math.SQRT2;
+    const floor = obj.type === "circle" ? 4 : MIN;
+    const radius = snap > 0 ? Math.max(floor, tidy(snapValue(raw, snap))) : Math.max(floor, Math.round(raw));
+    return { ...obj, radius } as FloorplanCanvasObject;
   }
   if (obj.type !== "rect" && obj.type !== "table") return obj;
 
@@ -417,8 +446,8 @@ export function resizeFromCorner(
   let w = Math.max(MIN, (local.x - anchor.x) * handle.sx);
   let h = Math.max(MIN, (local.y - anchor.y) * handle.sy);
   if (snap > 0) {
-    w = Math.max(MIN, snapValue(w, snap));
-    h = Math.max(MIN, snapValue(h, snap));
+    w = Math.max(MIN, tidy(snapValue(w, snap)));
+    h = Math.max(MIN, tidy(snapValue(h, snap)));
   }
   const centreLocal = { x: anchor.x + (handle.sx * w) / 2, y: anchor.y + (handle.sy * h) / 2 };
   const shift = rotatePoint(centreLocal, box.rotation);

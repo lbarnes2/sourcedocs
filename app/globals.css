@@ -2488,6 +2488,41 @@ input.menu-item-title {
   overflow: hidden;
 }
 
+/* Wide layout: the side panel scrolls on its own so the canvas stays in view while you edit settings. */
+@media (min-width: 1081px) {
+  .editor-side {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
+}
+
+/* Narrow layout: tighter toolbar so the groups stay on one row for as long as possible. */
+@media (max-width: 1080px) {
+  .editor-canvas-card .toolbar {
+    gap: 4px;
+    padding: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .editor-canvas-card .toolbar > * {
+    flex-shrink: 0;
+  }
+
+  .editor-canvas-card .toolbar > .spacer {
+    flex: 1 0 4px;
+  }
+
+  .editor-canvas-card .btn-group button.icon-btn {
+    width: 26px;
+  }
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -2566,6 +2601,16 @@ button.fp-obj {
   cursor: pointer;
   transition: none;
   touch-action: none;
+}
+
+/* Outline-only shapes: only the edge strips take the pointer, so the floor inside can be box-selected. */
+button.fp-obj--outline {
+  pointer-events: none;
+}
+
+.fp-edge {
+  position: absolute;
+  pointer-events: auto;
 }
 
 button.fp-obj:hover:not(:disabled),
