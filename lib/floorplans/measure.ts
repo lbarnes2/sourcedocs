@@ -7,7 +7,9 @@ import { objectBox, rotatePoint, tableSeatCount, type Point } from "@/lib/floorp
 import {
   blockAisleWidth,
   longestRun,
+  rowShape,
   seatingAisleStrips,
+  seatingPositions,
   seatingAisles,
   seatingSeatCount,
   seatingWheelchairCount,
@@ -52,6 +54,14 @@ function boxPolygon(cx: number, cy: number, w: number, h: number, rotation: numb
 }
 
 export function objectPolygon(obj: FloorplanCanvasObject): Point[] {
+  if (obj.type === "seating" && rowShape(obj) !== "straight") {
+    // The chairs' outline, so gaps and distances follow the curve or the wings rather than a box around them.
+    const chairs = seatingPositions(obj).filter((p) => p.state !== "removed");
+    const hull = convexHull(
+      chairs.flatMap((p) => blockLocalPolygon(obj, { cx: p.x, cy: p.y, w: obj.chairWidth, h: obj.chairDepth, angle: p.angle }))
+    );
+    if (hull.length >= 3) return hull;
+  }
   const b = objectBox(obj);
   if (b.round && b.w === b.h) {
     // A 24-sided stand-in for a circle is close enough for distances.
@@ -68,7 +78,26 @@ export function objectPolygon(obj: FloorplanCanvasObject): Point[] {
 function blockLocalPolygon(s: FloorplanSeatingObject, lb: LocalBox): Point[] {
   const rotation = s.rotation ?? 0;
   const c = rotatePoint({ x: lb.cx, y: lb.cy }, rotation);
-  return boxPolygon(s.x + c.x, s.y + c.y, lb.w, lb.h, rotation);
+  return boxPolygon(s.x + c.x, s.y + c.y, lb.w, lb.h, rotation + (lb.angle ?? 0));
+}
+
+/** Convex hull (monotone chain), for the outline of a curved or chevron block. */
+function convexHull(points: Point[]): Point[] {
+  const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (pts.length < 3) return pts;
+  const cross = (o: Point, a: Point, b: Point) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point[] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Point[] = [];
+  for (let i = pts.length - 1; i >= 0; i -= 1) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
 function closestOnSegment(p: Point, a: Point, b: Point): Point {

@@ -40,7 +40,7 @@ export function PlanPanel({ measurements, limits, scaled, seatingBlocks, activeI
       <div className="stack">
         {!scaled ? (
           <p className="field-hint" style={{ margin: 0 }}>
-            Set the scale under <strong>Grid and scale</strong> to see distances.
+            Set the scale in <strong>Plan settings</strong> to see distances.
           </p>
         ) : null}
         <ul className="measure-list">

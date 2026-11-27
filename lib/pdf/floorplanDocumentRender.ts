@@ -506,7 +506,8 @@ export async function renderFloorplanDocumentPdf(
     if (item.type === "seating") {
       // All the chairs in one path, then all the backrests in another: thousands of seats stay quick.
       const back = Math.max(0.6, item.chairDepth * 0.22);
-      const quad = (x0: number, y0: number, x1: number, y1: number) =>
+      // A rectangle in a chair's own frame (centred on the chair, turned by its angle), placed on the page.
+      const quad = (seat: { x: number; y: number; angle: number }, x0: number, y0: number, x1: number, y1: number) =>
         [
           [x0, y0],
           [x1, y0],
@@ -514,19 +515,18 @@ export async function renderFloorplanDocumentPdf(
           [x0, y1]
         ]
           .map(([x, y], i) => {
-            const p = rotatePoint({ x, y }, box.rotation);
+            const t = rotatePoint({ x, y }, seat.angle);
+            const p = rotatePoint({ x: seat.x + t.x, y: seat.y + t.y }, box.rotation);
             return `${i === 0 ? "M" : "L"} ${toX(box.cx + p.x).toFixed(2)} ${(-toY(box.cy + p.y)).toFixed(2)}`;
           })
           .join(" ") + " Z";
       const seats: string[] = [];
       const backs: string[] = [];
+      const hw = item.chairWidth / 2;
+      const hd = item.chairDepth / 2;
       for (const seat of seatingSeats(item)) {
-        const x0 = seat.x - item.chairWidth / 2;
-        const x1 = seat.x + item.chairWidth / 2;
-        const y0 = seat.y - item.chairDepth / 2;
-        const y1 = seat.y + item.chairDepth / 2;
-        seats.push(quad(x0, y0, x1, y1));
-        backs.push(quad(x0, y1 - back, x1, y1));
+        seats.push(quad(seat, -hw, -hd, hw, hd));
+        backs.push(quad(seat, -hw, hd - back, hw, hd));
       }
       if (seats.length) {
         page.drawSvgPath(seats.join(" "), {
@@ -543,9 +543,7 @@ export async function renderFloorplanDocumentPdf(
       if (wheelchair.length) {
         page.drawSvgPath(
           wheelchair
-            .map((seat) =>
-              quad(seat.x - item.chairWidth / 2, seat.y - item.chairDepth / 2, seat.x + item.chairWidth / 2, seat.y + item.chairDepth / 2)
-            )
+            .map((seat) => quad(seat, -hw, -hd, hw, hd))
             .join(" "),
           { x: 0, y: 0, color: rgb(0.11, 0.37, 0.66) }
         );

@@ -3,7 +3,20 @@
  * seating blocks, set out in front of the stage if the plan has one.
  */
 import { objectBodyBounds, rotatePoint, type Point } from "@/lib/floorplans/geometry";
-import { evenAisles, seatingDimensions, seatingNameBand, seatingSize } from "@/lib/floorplans/seating";
+import {
+  CHEVRON_DEFAULT_ANGLE,
+  curvedRunCounts,
+  evenAisles,
+  rowShape,
+  seatingCurveRadius,
+  seatingDimensions,
+  seatingFrontAnchor,
+  seatingNameBand,
+  seatingPositions,
+  seatingSeatCount,
+  seatingSize,
+  seatKey
+} from "@/lib/floorplans/seating";
 import type { FloorplanCanvasObject, FloorplanRectObject, FloorplanSeatingObject, FloorplanTheatreSettings } from "@/types";
 
 export const GENERATED_SEATING_ID = /^seating-gen-/;
@@ -22,7 +35,10 @@ export const THEATRE_DEFAULTS: Required<FloorplanTheatreSettings> = {
   seatwayM: 0.45,
   frontDistanceM: 2,
   facing: "up",
-  maxRun: 14
+  maxRun: 14,
+  rowShape: "straight",
+  curveRadiusM: 0,
+  chevronAngle: CHEVRON_DEFAULT_ANGLE
 };
 
 export function resolveTheatreSettings(s: FloorplanTheatreSettings | undefined): Required<FloorplanTheatreSettings> {
@@ -74,6 +90,88 @@ function chunks(n: number, every: number): number[] {
 }
 
 type SeatingDims = ReturnType<typeof seatingDimensions>;
+
+/** The block shape fields the settings ask for. */
+function shapeFields(s: Required<FloorplanTheatreSettings>, k: number): Partial<FloorplanSeatingObject> {
+  const shape = rowShape(s);
+  if (shape === "curved") return { rowShape: shape, ...(s.curveRadiusM > 0 ? { curveRadius: s.curveRadiusM * k } : {}) };
+  if (shape === "chevron") return { rowShape: shape, chevronAngle: s.chevronAngle };
+  return {};
+}
+
+/**
+ * Curved and chevron layouts: one block per section of rows (each keeps its aisles inside it). Curved
+ * sections share the point they curve round, so a section behind fans out with more seats; chevron
+ * sections sit one behind the other with their wings parallel.
+ */
+function assembleShapedBlocks(
+  perRow: number,
+  rows: number,
+  aislePositions: number[],
+  s: Required<FloorplanTheatreSettings>,
+  dims: SeatingDims,
+  aisleW: number,
+  k: number
+): { blocks: FloorplanSeatingObject[]; width: number; depth: number } {
+  const groups = chunks(rows, Math.round(s.crossAisleEvery));
+  const deep = groupNames(groups.length);
+  const shape = shapeFields(s, k);
+  const first: FloorplanSeatingObject = {
+    id: "",
+    type: "seating",
+    x: 0,
+    y: 0,
+    rows: groups[0],
+    seatsPerRow: perRow,
+    ...dims,
+    ...(aislePositions.length ? { aisles: aislePositions } : {}),
+    ...shape
+  };
+  const blocks: FloorplanSeatingObject[] = [];
+  // Group 0's front sits on y = 0; later groups follow from its anchor (front-row middle).
+  const size0 = seatingSize(first);
+  const anchor0 = seatingFrontAnchor(first);
+  const frontAnchor = { x: anchor0.x, y: size0.h / 2 + anchor0.y };
+  const edge0 = seatingCurveRadius(first) - dims.chairDepth / 2;
+  const focusY = frontAnchor.y - edge0;
+  const cos = Math.cos(((s.chevronAngle ?? 0) * Math.PI) / 180) || 1;
+  let along = 0;
+  let edge = edge0;
+  groups.forEach((groupRows, g) => {
+    let block: FloorplanSeatingObject = { ...first, rows: groupRows };
+    if (g > 0 && shape.rowShape === "curved") {
+      const counts = curvedRunCounts(first, edge);
+      const cuts: number[] = [];
+      counts.slice(0, -1).reduce((sum, n) => {
+        cuts.push(sum + n);
+        return sum + n;
+      }, 0);
+      block = {
+        ...block,
+        seatsPerRow: counts.reduce((a, b) => a + b, 0),
+        aisles: cuts.length ? cuts : undefined,
+        curveRadius: edge + dims.chairDepth / 2
+      };
+    }
+    if (deep[g]) block.name = deep[g];
+    const anchor = seatingFrontAnchor(block);
+    const want = shape.rowShape === "curved" ? { x: frontAnchor.x, y: focusY + edge } : { x: frontAnchor.x, y: frontAnchor.y + along };
+    blocks.push({ ...block, x: want.x - anchor.x, y: want.y - anchor.y });
+    const straightDepth = dims.chairDepth + (groupRows - 1) * dims.rowPitch + seatingNameBand(block);
+    edge += straightDepth + aisleW;
+    along += (straightDepth + aisleW) / cos;
+  });
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let maxY = 0;
+  for (const b of blocks) {
+    const size = seatingSize(b);
+    minX = Math.min(minX, b.x - size.w / 2);
+    maxX = Math.max(maxX, b.x + size.w / 2);
+    maxY = Math.max(maxY, b.y + size.h / 2);
+  }
+  return { blocks, width: maxX - minX, depth: maxY };
+}
 
 /**
  * Blocks for `rows` rows of `perRow` seats with aisles after `aislePositions`, facing up: front edge of
@@ -130,6 +228,21 @@ function assembleBlocks(
   return { blocks, width, depth: top - aisleW };
 }
 
+/** Lay out rows as blocks facing up, front edge on y = 0, in whichever row shape the settings ask for. */
+function assemble(
+  perRow: number,
+  rows: number,
+  aislePositions: number[],
+  s: Required<FloorplanTheatreSettings>,
+  dims: SeatingDims,
+  aisleW: number,
+  k: number
+): { blocks: FloorplanSeatingObject[]; width: number; depth: number } {
+  return rowShape(s) === "straight"
+    ? assembleBlocks(perRow, rows, aislePositions, s, dims, aisleW)
+    : assembleShapedBlocks(perRow, rows, aislePositions, s, dims, aisleW, k);
+}
+
 /** Rotate blocks laid out facing up (about the origin) and move them so the origin lands on `origin`. */
 function placeBlocks(blocks: FloorplanSeatingObject[], rotation: number, origin: Point, prefix: string): FloorplanSeatingObject[] {
   const tidy = (v: number) => Math.round(v * 1000) / 1000;
@@ -157,7 +270,20 @@ export function buildTheatreLayout(
   const aisleW = s.aisleWidthM * k;
   const dims = seatingDimensions(s.chairPreset, k, { seatwayM: s.seatwayM, aisleWidthM: s.aisleWidthM });
   const rotation = FACING_ROTATION[s.facing];
-  const { blocks, depth } = assembleBlocks(perRow, rows, evenAisles(perRow, s.aisles), s, dims, aisleW);
+  const aislePositions = evenAisles(perRow, s.aisles);
+  let laid = assemble(perRow, rows, aislePositions, s, dims, aisleW, k);
+  if (rowShape(s) === "curved") {
+    // Back rows of a curve hold more seats, so use only as many rows as the total needs.
+    const total = (blocks: FloorplanSeatingObject[]) => blocks.reduce((n, b) => n + seatingSeatCount(b), 0);
+    for (let r = 1; r < rows; r += 1) {
+      const trial = assemble(perRow, r, aislePositions, s, dims, aisleW, k);
+      if (total(trial.blocks) >= s.totalSeats) {
+        laid = trial;
+        break;
+      }
+    }
+  }
+  const { blocks, depth } = laid;
 
   // Where the front edge goes: in front of the stage on the side the audience faces it from, or so the
   // whole layout is centred on the view.
@@ -268,20 +394,45 @@ export function fillAreaWithSeating(
 
   // As many rows as fit, counting cross aisles and block names.
   let rows = Math.max(1, Math.floor((depthAvail - dims.chairDepth) / dims.rowPitch) + 1);
-  let laid = assembleBlocks(perRow, rows, aislePositions, s, dims, aisleW);
+  let laid = assemble(perRow, rows, aislePositions, s, dims, aisleW, k);
   while (rows > 1 && laid.depth > depthAvail + 1e-6) {
     rows -= 1;
-    laid = assembleBlocks(perRow, rows, aislePositions, s, dims, aisleW);
+    laid = assemble(perRow, rows, aislePositions, s, dims, aisleW, k);
   }
   if (laid.depth > depthAvail + 1e-6) return empty;
 
   const origin = rotatePoint({ x: 0, y: front }, rotation);
   const placed = placeBlocks(laid.blocks, rotation, { x: area.cx + origin.x, y: area.cy + origin.y }, "seating-fill-");
+  // Curved and chevron rows don't make a rectangle: chairs that would stick out of the area are left out.
+  const shaped = rowShape(s) !== "straight";
+  const half = across / 2;
+  const outside = (block: FloorplanSeatingObject): string[] => {
+    if (!shaped) return [];
+    const rot = block.rotation ?? 0;
+    const out: string[] = [];
+    for (const seat of seatingPositions(block)) {
+      const corners = [
+        [-1, -1],
+        [1, -1],
+        [1, 1],
+        [-1, 1]
+      ].map(([sx, sy]) => {
+        const c = rotatePoint({ x: (sx * block.chairWidth) / 2, y: (sy * block.chairDepth) / 2 }, seat.angle);
+        const p = rotatePoint({ x: seat.x + c.x, y: seat.y + c.y }, rot);
+        return toLocal({ x: block.x + p.x, y: block.y + p.y });
+      });
+      const eps = 1e-6;
+      if (corners.some((c) => c.x < -half - eps || c.x > half + eps || c.y < front - eps || c.y > back + eps)) {
+        out.push(seatKey(seat.row, seat.seat));
+      }
+    }
+    return out;
+  };
   let seats = 0;
   const blocks = placed.map((block) => {
-    const gone = options.blocked(block);
+    const gone = Array.from(new Set([...outside(block), ...options.blocked(block)]));
     const removed = gone.length ? { ...block, removed: gone } : block;
-    seats += block.rows * block.seatsPerRow - gone.length;
+    seats += seatingSeatCount(removed);
     return removed;
   });
   return { blocks, rows, perRow, aisles: aislePositions.length, seats };

@@ -95,6 +95,12 @@ export interface FloorplanSeatingObject extends FloorplanBaseObject {
   wheelchair?: string[];
   /** The chair preset the size came from, if any. */
   chairPreset?: string;
+  /** Straight (default), curved round a point in front, or chevron (two angled wings). */
+  rowShape?: "straight" | "curved" | "chevron";
+  /** Curved rows: distance from the point they curve round to the front-row chair centres (plan units). */
+  curveRadius?: number;
+  /** Chevron rows: how far each wing is turned, in degrees. */
+  chevronAngle?: number;
 }
 
 export type FloorplanCanvasObject =
@@ -148,6 +154,10 @@ export interface FloorplanTheatreSettings {
   facing?: "up" | "down" | "left" | "right";
   /** Filling an area: the most seats allowed between aisles (aisles are added to keep within it). */
   maxRun?: number;
+  rowShape?: "straight" | "curved" | "chevron";
+  /** Curved rows: front-row radius in metres; 0 picks one from the row length. */
+  curveRadiusM?: number;
+  chevronAngle?: number;
 }
 
 /** The user's own figures to compare the plan's measurements against (metres, seats). Nothing is a rule. */

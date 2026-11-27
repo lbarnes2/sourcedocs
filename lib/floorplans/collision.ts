@@ -35,7 +35,7 @@ export function objectShapes(obj: FloorplanCanvasObject): Shape[] {
     // Each run of chairs between aisles, row by row: aisles and seatways are open floor.
     return seatingRunBoxes(obj).map((b) => {
       const c = rotate({ x: b.cx, y: b.cy }, box.rotation);
-      return { kind: "box", cx: box.cx + c.x, cy: box.cy + c.y, hw: b.w / 2, hh: b.h / 2, rotation: box.rotation };
+      return { kind: "box", cx: box.cx + c.x, cy: box.cy + c.y, hw: b.w / 2, hh: b.h / 2, rotation: box.rotation + (b.angle ?? 0) };
     });
   }
   const body: Shape =
@@ -200,7 +200,7 @@ export function seatsBlocked(block: FloorplanSeatingObject, others: FloorplanCan
       cy: block.y + c.y,
       hw: block.chairWidth / 2,
       hh: block.chairDepth / 2,
-      rotation
+      rotation: rotation + seat.angle
     };
     const r = Math.hypot(chair.hw, chair.hh) + gap;
     const bounds = { minX: chair.cx - r, minY: chair.cy - r, maxX: chair.cx + r, maxY: chair.cy + r };

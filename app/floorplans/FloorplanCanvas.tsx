@@ -675,10 +675,20 @@ export function FloorplanCanvas(props: Props) {
                     style: { pointerEvents: "all" as const, cursor: "pointer" }
                   }
                 : {};
+              // Curved and chevron rows: each chair turned about its centre.
+              const turn = seat.angle ? `rotate(${seat.angle} ${x + obj.chairWidth / 2} ${y + obj.chairDepth / 2})` : undefined;
               if (seat.state === "removed") {
                 return (
                   <g key={key} {...handlers}>
-                    <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat-gone" />
+                    <rect
+                      x={x}
+                      y={y}
+                      width={obj.chairWidth}
+                      height={obj.chairDepth}
+                      rx={obj.chairWidth * 0.12}
+                      className="fp-seat-gone"
+                      transform={turn}
+                    />
                   </g>
                 );
               }
@@ -686,13 +696,21 @@ export function FloorplanCanvas(props: Props) {
                 const size = Math.min(obj.chairWidth, obj.chairDepth);
                 return (
                   <g key={key} {...handlers}>
-                    <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat-wc" />
+                    <rect
+                      x={x}
+                      y={y}
+                      width={obj.chairWidth}
+                      height={obj.chairDepth}
+                      rx={obj.chairWidth * 0.12}
+                      className="fp-seat-wc"
+                      transform={turn}
+                    />
                     <WheelchairMark cx={x + obj.chairWidth / 2} cy={y + obj.chairDepth / 2} size={size * 0.85} />
                   </g>
                 );
               }
               return (
-                <g key={key} {...handlers}>
+                <g key={key} {...handlers} transform={turn}>
                   <rect x={x} y={y} width={obj.chairWidth} height={obj.chairDepth} rx={obj.chairWidth * 0.12} className="fp-seat" />
                   <rect x={x} y={y + obj.chairDepth - back} width={obj.chairWidth} height={back} className="fp-seat-back" />
                 </g>

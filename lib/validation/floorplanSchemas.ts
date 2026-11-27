@@ -71,7 +71,10 @@ const seatingObjectSchema = objectBase.extend({
   rotation: rotationSchema.optional(),
   removed: z.array(z.string().max(20)).max(40_000).optional(),
   wheelchair: z.array(z.string().max(20)).max(40_000).optional(),
-  chairPreset: z.string().max(40).optional()
+  chairPreset: z.string().max(40).optional(),
+  rowShape: z.enum(["straight", "curved", "chevron"]).optional(),
+  curveRadius: z.number().positive().max(100_000).optional(),
+  chevronAngle: z.number().min(0).max(45).optional()
 });
 
 const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();
@@ -115,7 +118,10 @@ const theatreSettingsSchema = z.object({
   seatwayM: z.number().min(0).max(5).optional(),
   frontDistanceM: z.number().min(0).max(100).optional(),
   facing: z.enum(["up", "down", "left", "right"]).optional(),
-  maxRun: z.number().int().min(1).max(200).optional()
+  maxRun: z.number().int().min(1).max(200).optional(),
+  rowShape: z.enum(["straight", "curved", "chevron"]).optional(),
+  curveRadiusM: z.number().min(0).max(500).optional(),
+  chevronAngle: z.number().min(0).max(45).optional()
 });
 
 /** Banqueting floorplan fields plus optional stagger direction for standalone floorplan auto-layout. */

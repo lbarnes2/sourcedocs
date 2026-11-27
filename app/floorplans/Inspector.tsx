@@ -22,7 +22,10 @@ import {
 import { guestCountFor, tableKey, type TableGuestMap } from "@/lib/floorplans/guests";
 import {
   CHAIR_PRESETS,
+  CHEVRON_DEFAULT_ANGLE,
+  CHEVRON_MAX_ANGLE,
   MAX_SEATING_ROWS,
+  ROW_SHAPES,
   MAX_SEATS_PER_ROW,
   blockAisleWidth,
   chairPreset,
@@ -31,7 +34,11 @@ import {
   longestRun,
   pruneRemoved,
   seatGap,
+  rowShape,
   seatingAisles,
+  seatingCurveRadius,
+  seatingMinCurveRadius,
+  seatingRowLengths,
   seatingSeatCount,
   seatingWheelchairCount,
   seatingSize,
@@ -730,7 +737,9 @@ function SeatingFields({
   const aisles = seatingAisles(block);
   const count = seatingSeatCount(block);
   const wheelchair = seatingWheelchairCount(block);
-  const removed = block.rows * block.seatsPerRow - count - wheelchair;
+  const positions = seatingRowLengths(block);
+  const removed = positions.reduce((a, b) => a + b, 0) - count - wheelchair;
+  const shape = rowShape(block);
   const size = seatingSize(block);
   const metres = (units: number) => (upm ? `${(units / upm).toFixed(2)} m` : `${Math.round(units)} units`);
   const preset = CHAIR_PRESETS.find((p) => p.id === block.chairPreset);
@@ -773,7 +782,7 @@ function SeatingFields({
           onChange={(v) => change((s) => ({ ...s, rows: Math.round(v) }), "rows")}
         />
         <NumberField
-          label="Seats per row"
+          label={shape === "curved" ? "Seats in front row" : "Seats per row"}
           min={1}
           max={MAX_SEATS_PER_ROW}
           step={1}
@@ -790,7 +799,40 @@ function SeatingFields({
         <strong>{count}</strong> seat{count === 1 ? "" : "s"} · {metres(size.w)} × {metres(size.h)}
         {wheelchair > 0 ? ` · ${wheelchair} wheelchair space${wheelchair === 1 ? "" : "s"}` : ""}
         {removed > 0 ? ` · ${removed} taken out` : ""}
+        {shape === "curved" && positions.length > 1 ? ` · rows of ${positions[0]} to ${positions[positions.length - 1]}` : ""}
       </p>
+      <Field label="Rows are" as="div">
+        <Segmented
+          value={shape}
+          options={ROW_SHAPES}
+          onChange={(next) => change((s) => ({ ...s, rowShape: next === "straight" ? undefined : next }), "rowShape")}
+        />
+      </Field>
+      {shape === "curved" ? (
+        <div className="form-grid">
+          <LengthField
+            label="Curve radius (m)"
+            min={seatingMinCurveRadius(block)}
+            units={seatingCurveRadius(block)}
+            upm={upm}
+            hint={`To the front row. Smaller is tighter; at least ${metres(seatingMinCurveRadius(block))}.`}
+            onChange={(v) => change((s) => ({ ...s, curveRadius: Math.max(seatingMinCurveRadius(s), v) }), "curve")}
+          />
+        </div>
+      ) : null}
+      {shape === "chevron" ? (
+        <div className="form-grid">
+          <NumberField
+            label="Wing angle (°)"
+            min={0}
+            max={CHEVRON_MAX_ANGLE}
+            step={1}
+            value={block.chevronAngle ?? CHEVRON_DEFAULT_ANGLE}
+            hint="How far each side turns in towards the middle. A chevron always has a centre aisle."
+            onChange={(v) => change((s) => ({ ...s, chevronAngle: Math.max(0, Math.min(CHEVRON_MAX_ANGLE, v)) }), "chevron")}
+          />
+        </div>
+      ) : null}
       {!multiple && onSeatTool ? (
         seatTool ? (
           <div className="seat-edit stack stack--sm">
@@ -918,7 +960,7 @@ function SeatingFields({
       <div className="form-grid">
         <NumberField
           label="Aisles"
-          min={0}
+          min={shape === "chevron" ? 1 : 0}
           max={Math.max(0, block.seatsPerRow - 1)}
           step={1}
           value={aisles.length}
@@ -938,7 +980,11 @@ function SeatingFields({
           onChange={(v) => change((s) => ({ ...s, aisleWidth: Math.max(seatGap(s), v) }), "aisleW")}
         />
         {aisles.length ? (
-          <Field label="Aisle after seat" className="span-all" hint="Seat counts from the left, looking at the stage.">
+          <Field
+            label="Aisle after seat"
+            className="span-all"
+            hint={`Seat counts from the left, looking at the stage${shape === "curved" ? ", in the front row" : ""}.`}
+          >
             <AislePositions
               key={block.id}
               value={aisles}
