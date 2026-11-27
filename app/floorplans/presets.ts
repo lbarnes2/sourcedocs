@@ -6,7 +6,8 @@ import {
   roundTableRadius,
   type RoundTableSize
 } from "@/lib/floorplans/geometry";
-import type { FloorplanCanvasObject } from "@/types";
+import { seatingDimensions } from "@/lib/floorplans/seating";
+import type { FloorplanCanvasObject, FloorplanRectObject } from "@/types";
 
 export interface ObjectPreset {
   id: string;
@@ -51,6 +52,11 @@ function rectPreset(
       };
     }
   };
+}
+
+/** Marks the shape as an exit, so it counts towards the plan's exit width. */
+function exitPreset(preset: ObjectPreset): ObjectPreset {
+  return { ...preset, build: (c, existing, upm) => ({ ...(preset.build(c, existing, upm) as FloorplanRectObject), exit: true }) };
 }
 
 function roundTablePreset(id: string, label: string, size: RoundTableSize): ObjectPreset {
@@ -115,11 +121,25 @@ export const OBJECT_PRESETS: ObjectPreset[] = [
       };
     }
   },
+  {
+    id: "seating",
+    label: "Seating block",
+    behind: false,
+    build: (c, _existing, upm) => ({
+      id: crypto.randomUUID(),
+      type: "seating",
+      x: c.x,
+      y: c.y,
+      rows: 6,
+      seatsPerRow: 10,
+      ...seatingDimensions("banquet", upm)
+    })
+  },
   rectPreset("stage", "Stage", 6, 3, "#8a96a3", true),
   rectPreset("dance-floor", "Dance floor", 5, 5, "#d6cbe8", true),
   rectPreset("bar", "Bar", 4, 0.8, "#ecdcb4"),
   rectPreset("buffet", "Buffet", 4.8, 0.9, "#c3dfc9"),
-  rectPreset("entrance", "Entrance", 2, 0.5, "#efc4c4"),
+  exitPreset(rectPreset("entrance", "Entrance", 2, 0.5, "#efc4c4")),
   rectPreset("av-desk", "AV desk", 1.8, 0.8, "#d9dde2"),
   {
     id: "pillar",

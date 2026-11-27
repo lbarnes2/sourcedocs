@@ -3,6 +3,7 @@
  * what gets printed. Everything is in canvas units; nothing here touches the DOM or pdf-lib.
  */
 import { pdfPageDimensions } from "@/lib/paperSizes";
+import { seatingFitTo, seatingNameBand, seatingSize } from "@/lib/floorplans/seating";
 import type {
   FloorplanCanvasObject,
   FloorplanPrintOptions,
@@ -255,6 +256,10 @@ export function objectBox(obj: FloorplanCanvasObject): ObjectBox {
   if (obj.type === "circle") {
     return { cx: obj.x, cy: obj.y, w: obj.radius * 2, h: obj.radius * 2, rotation: 0, round: true };
   }
+  if (obj.type === "seating") {
+    const { w, h } = seatingSize(obj);
+    return { cx: obj.x, cy: obj.y, w, h, rotation: obj.rotation ?? 0, round: false };
+  }
   const { w, h } = estimateTextSize(obj);
   return { cx: obj.x + w / 2, cy: obj.y + h / 2, w, h, rotation: obj.rotation ?? 0, round: false };
 }
@@ -290,7 +295,15 @@ export function objectBodyBounds(obj: FloorplanCanvasObject): Bounds {
 
 /** Bounds including chairs (what the printed plan has to fit). */
 export function objectPrintBounds(obj: FloorplanCanvasObject): Bounds {
-  const body = boxBounds(objectBox(obj));
+  const box = objectBox(obj);
+  if (obj.type === "seating") {
+    // The block's name prints behind the back row.
+    const band = seatingNameBand(obj);
+    if (!band) return boxBounds(box);
+    const shift = rotatePoint({ x: 0, y: band / 2 }, box.rotation);
+    return boxBounds({ ...box, cx: box.cx + shift.x, cy: box.cy + shift.y, h: box.h + band });
+  }
+  const body = boxBounds(box);
   if (obj.type !== "table") return body;
   const { radius } = chairMetrics(obj);
   for (const s of seatOffsets(obj)) {
@@ -440,9 +453,16 @@ export function resizeFromCorner(
     const radius = snap > 0 ? Math.max(floor, tidy(snapValue(raw, snap))) : Math.max(floor, Math.round(raw));
     return { ...obj, radius } as FloorplanCanvasObject;
   }
-  if (obj.type !== "rect" && obj.type !== "table") return obj;
+  if (obj.type !== "rect" && obj.type !== "table" && obj.type !== "seating") return obj;
 
   const anchor = { x: (-handle.sx * box.w) / 2, y: (-handle.sy * box.h) / 2 };
+  if (obj.type === "seating") {
+    // Seating grows and shrinks by whole rows and seats; the opposite corner stays put.
+    const fitted = seatingFitTo(obj, (local.x - anchor.x) * handle.sx, (local.y - anchor.y) * handle.sy, handle.sx < 0, handle.sy < 0);
+    const size = seatingSize(fitted);
+    const centre = rotatePoint({ x: anchor.x + (handle.sx * size.w) / 2, y: anchor.y + (handle.sy * size.h) / 2 }, box.rotation);
+    return { ...fitted, x: tidy(box.cx + centre.x), y: tidy(box.cy + centre.y) };
+  }
   let w = Math.max(MIN, (local.x - anchor.x) * handle.sx);
   let h = Math.max(MIN, (local.y - anchor.y) * handle.sy);
   if (snap > 0) {

@@ -1308,6 +1308,10 @@ button.text-button:hover:not(:disabled) {
   max-width: 720px;
 }
 
+.modal--xl {
+  max-width: 1200px;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -2559,6 +2563,16 @@ input.menu-item-title {
   cursor: grab;
 }
 
+.editor-canvas--draw,
+.editor-canvas--draw button.fp-obj {
+  cursor: crosshair;
+}
+
+.fp-marquee--draw {
+  border: 2px dashed #d97706;
+  background: rgba(232, 145, 30, 0.12);
+}
+
 .editor-canvas--pan:active {
   cursor: grabbing;
 }
@@ -2643,6 +2657,81 @@ button.fp-obj:focus-visible .fp-body {
   pointer-events: none;
 }
 
+.fp-seating {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-seat {
+  fill: #d4e6f2;
+  stroke: #80919f;
+  stroke-width: 0.6;
+}
+
+.fp-seat-back {
+  fill: #80919f;
+}
+
+.fp-seat-gone {
+  fill: transparent;
+  stroke: #98a2b3;
+  stroke-width: 0.6;
+  stroke-dasharray: 1.5 1.2;
+}
+
+.fp-seat-wc {
+  fill: #1d5fa8;
+}
+
+.fp-seat-wc-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fp-seat-wc-mark circle {
+  fill: #fff;
+  stroke: none;
+}
+
+button.fp-obj--editing {
+  cursor: default;
+}
+
+button.fp-obj--editing .fp-seating,
+button.fp-obj--editing:hover .fp-seating {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+button.fp-obj--editing g:hover .fp-seat,
+button.fp-obj--editing g:hover .fp-seat-gone {
+  fill: #fde7c4;
+}
+
+button.fp-obj--seating:hover .fp-seating,
+button.fp-obj--seating:focus-visible .fp-seating {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.fp-seating-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #1a2430;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .fp-label {
   position: absolute;
   inset: 0;
@@ -2705,6 +2794,39 @@ button.fp-obj:focus-visible .fp-body {
   position: absolute;
   background: var(--accent);
   transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.fp-highlight {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-highlight polygon {
+  fill: rgba(232, 145, 30, 0.16);
+  stroke: #d97706;
+}
+
+.fp-highlight-line {
+  stroke: #d97706;
+}
+
+.fp-highlight-end {
+  fill: #d97706;
+}
+
+.fp-highlight-label {
+  position: absolute;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #d97706;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
   pointer-events: none;
 }
 
@@ -2831,6 +2953,57 @@ button.fp-obj:focus-visible .fp-body {
   border-left-color: var(--ink-faint);
 }
 
+.measure-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.measure {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 8px;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  padding: 6px 9px;
+  text-align: left;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: normal;
+  border-left: 3px solid var(--border);
+}
+
+.measure:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.measure-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.measure-detail {
+  grid-column: 1 / -1;
+  color: var(--ink-faint);
+  font-size: 0.74rem;
+}
+
+.measure--past {
+  border-left-color: #d97706;
+  background: #fffaeb;
+}
+
+.measure--active {
+  border-left-color: #d97706;
+  box-shadow: inset 0 0 0 1px #d97706;
+}
+
 .fp-preview-frame {
   width: 100%;
   height: min(70vh, 720px);
@@ -2851,12 +3024,341 @@ button.fp-obj:focus-visible .fp-body {
   pointer-events: none;
 }
 
-.editor-hint {
-  padding: 8px 12px;
+/* Toolbar: text buttons and menu triggers sit flush, like the icon groups. */
+.toolbar-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar button.toolbar-btn {
+  height: 32px;
+  padding: 0 7px;
+  gap: 6px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-2);
+  font-size: 0.84rem;
+  font-weight: 550;
+}
+
+.toolbar button.toolbar-btn:hover:not(:disabled),
+.toolbar button.toolbar-btn[aria-expanded="true"] {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.menu-chevron {
+  margin-left: -2px;
+  color: var(--ink-faint);
+}
+
+/* Dropdown menus (portalled, fixed under their button). */
+.menu {
+  position: fixed;
+  z-index: 950;
+  min-width: 220px;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.1s ease;
+}
+
+.menu button.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 450;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.menu button.menu-item:hover:not(:disabled),
+.menu button.menu-item:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+
+.menu button.menu-item:disabled {
+  opacity: 0.45;
+}
+
+.menu button.menu-item--danger {
+  color: var(--danger);
+}
+
+.menu button.menu-item--danger:hover:not(:disabled),
+.menu button.menu-item--danger:focus-visible {
+  background: var(--danger-soft);
+}
+
+.menu-item-icon {
+  display: inline-flex;
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+.menu-item--danger .menu-item-icon {
+  color: inherit;
+}
+
+.menu-item-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-item-hint {
+  font-size: 0.74rem;
+  color: var(--ink-muted);
+}
+
+.menu-item-kbd {
+  font-family: inherit;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+}
+
+.menu-label {
+  padding: 8px 8px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.menu-panel {
+  padding: 8px;
+}
+
+.menu:has(.shortcut-list) {
+  max-width: min(400px, calc(100vw - 16px));
+}
+
+.shortcut-list {
+  width: 360px;
+  max-width: 100%;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.shortcut-list > div {
+  display: grid;
+  grid-template-columns: 9.5em 1fr;
+  gap: 10px;
+}
+
+.shortcut-list dt {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.shortcut-list dd {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+/* Status bar under the canvas: totals, checks, scale, shortcuts. */
+.fp-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px 12px;
+  min-height: 36px;
+  padding: 4px 8px 4px 12px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.fp-status > * {
+  flex-shrink: 0;
+}
+
+.fp-status > .fp-status-totals {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.fp-status > .spacer {
+  flex: 1 1 0;
+}
+
+@media (max-width: 640px) {
+  .fp-status {
+    flex-wrap: wrap;
+  }
+}
+
+.fp-status button.fp-status-btn {
+  height: 26px;
+  padding: 0 8px;
+  gap: 5px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.fp-status button.fp-status-btn:hover:not(:disabled),
+.fp-status button.fp-status-btn[aria-expanded="true"] {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.fp-status button.fp-status-btn--warn {
+  color: var(--warning);
+}
+
+/* Print and export: settings beside a live preview. */
+.modal--xl .modal-body:has(.print-dialog) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal--xl:has(.print-dialog) {
+  height: min(92vh, 900px);
+  max-height: 92vh;
+}
+
+.print-dialog {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+}
+
+.print-dialog-settings {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+  border-right: 1px solid var(--border);
+}
+
+.print-dialog-preview {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--surface-3);
+}
+
+.print-dialog-preview .fp-preview-frame {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.print-preview-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.print-preview-status {
+  position: absolute;
+  top: 26px;
+  right: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
   font-size: 0.76rem;
   color: var(--ink-muted);
+}
+
+@media (max-width: 860px) {
+  .modal--xl .modal-body:has(.print-dialog) {
+    overflow-y: auto;
+  }
+
+  .print-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .print-dialog-settings {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .print-dialog-preview .fp-preview-frame {
+    flex: none;
+    height: 70vh;
+  }
+}
+
+.dialog-heading {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.dialog-heading:first-child {
+  margin-top: 0;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .editor-side .card {
@@ -3450,4 +3952,21 @@ td.guest-row-actions {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
+}
+
+.btn-group--sm {
+  padding: 1px;
+}
+
+.btn-group--sm button {
+  height: 26px;
+}
+
+.btn-group--sm button.icon-btn {
+  width: 26px;
+}
+
+.btn-group--sm .toolbar-zoom {
+  min-width: 40px;
+  font-size: 0.74rem;
 }
