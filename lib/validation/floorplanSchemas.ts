@@ -77,6 +77,16 @@ const seatingObjectSchema = objectBase.extend({
   chevronAngle: z.number().min(0).max(45).optional()
 });
 
+const roomObjectSchema = objectBase.extend({
+  type: z.literal("room"),
+  name: z.string().max(200).optional(),
+  points: z
+    .array(z.object({ x: z.number().min(-40_000).max(40_000), y: z.number().min(-40_000).max(40_000) }))
+    .min(3)
+    .max(500),
+  locked: z.boolean().optional()
+});
+
 const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();
 
 export const floorplanPrintOptionsSchema = z.object({
@@ -93,7 +103,8 @@ export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
   rectObjectSchema,
   circleObjectSchema,
   textObjectSchema,
-  seatingObjectSchema
+  seatingObjectSchema,
+  roomObjectSchema
 ]);
 
 const optionalLimit = z.number().min(0).max(100_000).nullable().optional();

@@ -3,6 +3,7 @@
  * what gets printed. Everything is in canvas units; nothing here touches the DOM or pdf-lib.
  */
 import { pdfPageDimensions } from "@/lib/paperSizes";
+import { roomLocalBounds } from "@/lib/floorplans/room";
 import { seatingFitTo, seatingNameBand, seatingSize } from "@/lib/floorplans/seating";
 import type {
   FloorplanCanvasObject,
@@ -239,6 +240,17 @@ export function estimateTextSize(obj: Pick<FloorplanTextObject, "text" | "fontSi
 export type ObjectBox = { cx: number; cy: number; w: number; h: number; rotation: number; round: boolean };
 
 export function objectBox(obj: FloorplanCanvasObject): ObjectBox {
+  if (obj.type === "room") {
+    const b = roomLocalBounds(obj);
+    return {
+      cx: obj.x + (b.minX + b.maxX) / 2,
+      cy: obj.y + (b.minY + b.maxY) / 2,
+      w: b.maxX - b.minX,
+      h: b.maxY - b.minY,
+      rotation: 0,
+      round: false
+    };
+  }
   if (obj.type === "table") {
     const { w, h } = tableBodySize(obj);
     return { cx: obj.x, cy: obj.y, w, h, rotation: obj.rotation ?? 0, round: tableShape(obj) === "round" };

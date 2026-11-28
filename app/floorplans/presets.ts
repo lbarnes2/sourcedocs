@@ -6,6 +6,7 @@ import {
   roundTableRadius,
   type RoundTableSize
 } from "@/lib/floorplans/geometry";
+import { rectangularRoom } from "@/lib/floorplans/room";
 import { seatingDimensions } from "@/lib/floorplans/seating";
 import type { FloorplanCanvasObject, FloorplanRectObject } from "@/types";
 
@@ -156,13 +157,9 @@ export const OBJECT_PRESETS: ObjectPreset[] = [
   },
   {
     id: "room",
-    label: "Room outline",
+    label: "Rectangular room",
     behind: true,
-    build: (c, _existing, upm) => {
-      const width = Math.round(18 * upm);
-      const height = Math.round(12 * upm);
-      return { id: crypto.randomUUID(), type: "rect", x: c.x - width / 2, y: c.y - height / 2, width, height, fill: "none" };
-    }
+    build: (c, _existing, upm) => rectangularRoom(c, Math.round(18 * upm), Math.round(12 * upm))
   },
   {
     id: "text",

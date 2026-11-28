@@ -2797,6 +2797,133 @@ button.fp-obj--seating:focus-visible .fp-seating {
   pointer-events: none;
 }
 
+/* Rooms: walls drawn as a path; only the walls take the pointer. */
+.fp-room {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-room-floor {
+  fill: rgba(128, 146, 168, 0.06);
+  stroke: none;
+}
+
+.fp-room-wall {
+  fill: none;
+  stroke: #5b6b7d;
+  stroke-linejoin: miter;
+}
+
+.fp-room-hit {
+  fill: none;
+  stroke: transparent;
+  pointer-events: stroke;
+}
+
+button.fp-obj--room:hover .fp-room-wall {
+  stroke: var(--accent);
+}
+
+.fp-room-name {
+  position: absolute;
+  color: #5b6b7d;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fp-room-overlay,
+.fp-sketch {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-room-overlay path {
+  fill: none;
+  stroke: var(--accent);
+}
+
+.fp-handle--corner {
+  cursor: move;
+}
+
+.fp-handle--add {
+  border-radius: 50%;
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.85);
+  cursor: copy;
+}
+
+.fp-wall-length {
+  position: absolute;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(128, 146, 168, 0.35);
+}
+
+.fp-wall-length--live {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
+}
+
+.fp-wall-length--typed {
+  background: #d97706;
+}
+
+.fp-sketch polyline,
+.fp-sketch line {
+  fill: none;
+  stroke: var(--accent);
+}
+
+.fp-sketch-close {
+  opacity: 0.6;
+}
+
+.fp-sketch circle {
+  fill: #fff;
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.fp-sketch circle.fp-sketch-first {
+  fill: var(--accent);
+}
+
+.fp-sketch circle.fp-sketch-cursor {
+  fill: var(--accent);
+  stroke: none;
+}
+
+.fp-draw-hint {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(31, 41, 55, 0.88);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-align: center;
+  pointer-events: none;
+}
+
 .fp-highlight {
   position: absolute;
   left: 0;
@@ -3969,4 +4096,32 @@ td.guest-row-actions {
 .btn-group--sm .toolbar-zoom {
   min-width: 40px;
   font-size: 0.74rem;
+}
+
+/* Room inspector: one row per wall. */
+.fp-wall-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fp-wall-list li {
+  display: grid;
+  grid-template-columns: 1.6em 1fr auto auto auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.fp-wall-index {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.fp-wall-unit {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
 }

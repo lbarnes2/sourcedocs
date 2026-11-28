@@ -1,6 +1,6 @@
 "use client";
 
-import { BringToFront, SendToBack, Trash2 } from "lucide-react";
+import { BringToFront, SendToBack, SplitSquareHorizontal, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Field, Section, Segmented, Switch } from "@/app/components/ui";
 import { NumericInput } from "@/app/floorplans/NumericInput";
@@ -44,7 +44,17 @@ import {
   seatingSize,
   seatway
 } from "@/lib/floorplans/seating";
-import type { FloorplanCanvasObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
+import {
+  cleanCorners,
+  insertCorner,
+  normaliseRoom,
+  polygonArea,
+  polygonPerimeter,
+  removeCorner,
+  setWallLength,
+  wallLengths
+} from "@/lib/floorplans/room";
+import type { FloorplanCanvasObject, FloorplanRoomObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
 interface Props {
   /** The object being edited (last one selected). */
@@ -239,6 +249,7 @@ function titleFor(obj: FloorplanCanvasObject, count: number): string {
   if (obj.type === "rect") return obj.label || "Rectangle";
   if (obj.type === "circle") return obj.label || "Circle";
   if (obj.type === "seating") return obj.name?.trim() || "Seating block";
+  if (obj.type === "room") return obj.name?.trim() || "Room";
   return "Text";
 }
 
@@ -297,6 +308,16 @@ export function Inspector({
             seatTool={seatEdit?.id === primary.id ? seatEdit.tool : null}
             onSeatTool={onSeatEdit}
             onClearUnderObjects={onClearUnderObjects}
+          />
+        ) : null}
+
+        {primary.type === "room" ? (
+          <RoomFields
+            room={primary}
+            unitsPerMetre={unitsPerMetre}
+            totalGuests={tableGuests ? totalGuests : 0}
+            patchRoom={(fn, key) => onPatch((o) => (o.type === "room" ? fn(o) : o), key)}
+            onFill={selectionCount === 1 ? onFillShape : undefined}
           />
         ) : null}
 
@@ -429,7 +450,9 @@ export function Inspector({
                 ? "label"
                 : primary.type === "seating"
                   ? "seating block"
-                  : "shape"}{" "}
+                  : primary.type === "room"
+                    ? "room"
+                    : "shape"}{" "}
             of the
             same kind. Grid snap is {gridSize} units.
           </p>
@@ -1005,6 +1028,97 @@ function SeatingFields({
           Longest run {longestRun(block)} seats · seatway {metres(seatway(block))}
           {aisles.length ? ` · aisles ${metres(blockAisleWidth(block))}` : ""}
         </p>
+      ) : null}
+    </>
+  );
+}
+
+/** A room: its name, lock, area and each wall's length (editable). */
+function RoomFields({
+  room,
+  unitsPerMetre,
+  totalGuests,
+  patchRoom,
+  onFill
+}: {
+  room: FloorplanRoomObject;
+  unitsPerMetre: number | null;
+  totalGuests: number;
+  patchRoom: (fn: (r: FloorplanRoomObject) => FloorplanRoomObject, key?: string) => void;
+  onFill?: () => void;
+}) {
+  const lengths = wallLengths(room.points);
+  const upm = unitsPerMetre;
+  const area = polygonArea(room.points);
+  const reshape = (fn: (points: FloorplanRoomObject["points"]) => FloorplanRoomObject["points"], key?: string) =>
+    patchRoom((r) => normaliseRoom({ ...r, points: fn(r.points) }), key);
+  return (
+    <>
+      <Field label="Name">
+        <input
+          value={room.name ?? ""}
+          placeholder="e.g. The Orangery"
+          onChange={(e) => patchRoom((r) => ({ ...r, name: e.target.value || undefined }), "room-name")}
+        />
+      </Field>
+      <p className="field-hint" style={{ margin: 0 }}>
+        {upm
+          ? `Area ${(area / (upm * upm)).toFixed(1)} m² · walls ${(polygonPerimeter(room.points) / upm).toFixed(1)} m`
+          : `${room.points.length} walls`}
+        {upm && totalGuests > 0 ? ` · ${(area / (upm * upm) / totalGuests).toFixed(2)} m² per guest` : ""}
+      </p>
+      <Switch
+        label="Locked"
+        hint="A locked room can't be moved or reshaped on the plan, so it stays put while you arrange furniture."
+        checked={Boolean(room.locked)}
+        onChange={(locked) => patchRoom((r) => ({ ...r, locked: locked || undefined }))}
+      />
+      <Field label="Walls" as="div" hint="Changing a wall moves the walls after it; the next wall running the same way takes up the difference.">
+        <ol className="fp-wall-list">
+          {lengths.map((len, i) => (
+            <li key={i}>
+              <span className="fp-wall-index">{i + 1}</span>
+              <NumericInput
+                min={upm ? 0.1 : 1}
+                step={upm ? 0.1 : 1}
+                decimals={2}
+                disabled={room.locked}
+                aria-label={`Wall ${i + 1} length${upm ? " in metres" : ""}`}
+                value={upm ? len / upm : len}
+                onCommit={(v) => {
+                  if (v == null || v <= 0) return;
+                  reshape((pts) => setWallLength(pts, i, upm ? v * upm : v), `wall-${i}`);
+                }}
+              />
+              <span className="fp-wall-unit">{upm ? "m" : ""}</span>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                title="Split this wall (adds a corner in the middle)"
+                aria-label={`Split wall ${i + 1}`}
+                disabled={room.locked}
+                onClick={() => reshape((pts) => insertCorner(pts, i))}
+              >
+                <SplitSquareHorizontal size={14} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn--sm"
+                title="Take out the corner at the end of this wall"
+                aria-label={`Remove the corner after wall ${i + 1}`}
+                disabled={room.locked || room.points.length <= 3}
+                onClick={() => reshape((pts) => cleanCorners(removeCorner(pts, (i + 1) % pts.length)))}
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ol>
+      </Field>
+      {onFill ? (
+        <button type="button" className="btn-sm" onClick={onFill}>
+          Fill with seating…
+        </button>
       ) : null}
     </>
   );

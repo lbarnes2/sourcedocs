@@ -1,7 +1,7 @@
 import type { PaperOrientation, PaperSize } from "./paper";
 import type { ThemeSettings } from "./index";
 
-export type FloorplanObjectType = "table" | "rect" | "circle" | "text" | "seating";
+export type FloorplanObjectType = "table" | "rect" | "circle" | "text" | "seating" | "room";
 
 export interface FloorplanBaseObject {
   id: string;
@@ -103,7 +103,21 @@ export interface FloorplanSeatingObject extends FloorplanBaseObject {
   chevronAngle?: number;
 }
 
+/**
+ * A room: its walls as a closed outline of corners. `x`/`y` is the origin the corners are measured
+ * from (kept at the top-left of their bounding box); corners run round the room in order, and wall `i`
+ * runs from corner `i` to corner `i + 1` (the last wall closes back to corner 0).
+ */
+export interface FloorplanRoomObject extends FloorplanBaseObject {
+  type: "room";
+  name?: string;
+  points: Array<{ x: number; y: number }>;
+  /** Locked rooms can't be moved or reshaped on the canvas (they can still be selected). */
+  locked?: boolean;
+}
+
 export type FloorplanCanvasObject =
+  | FloorplanRoomObject
   | FloorplanTableObject
   | FloorplanRectObject
   | FloorplanCircleObject

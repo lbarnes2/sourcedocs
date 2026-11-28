@@ -10,6 +10,7 @@ import { hexToRgb } from "@/lib/pdf/color";
 import type { PDFFont, PDFPage } from "pdf-lib";
 import {
   DEFAULT_FILLS,
+  DEFAULT_UNITS_PER_METRE,
   OCCUPANCY_COLORS,
   OCCUPANCY_LABELS,
   OUTLINE_COLOR,
@@ -19,6 +20,7 @@ import {
   fixedPointsPerUnit,
   ratioForScale,
   objectBox,
+  objectBodyBounds,
   objectsPrintBounds,
   occupancyStatus,
   printFit,
@@ -31,6 +33,7 @@ import {
   type OccupancyStatus
 } from "@/lib/floorplans/geometry";
 import { planTotals } from "@/lib/floorplans/checks";
+import { roomWorldPoints } from "@/lib/floorplans/room";
 import { seatingNameBand, seatingPositions, seatingSeats } from "@/lib/floorplans/seating";
 
 /** The wheelchair symbol (same drawing as on the canvas), in a 24-unit box. */
@@ -569,6 +572,27 @@ export async function renderFloorplanDocumentPdf(
         const maxSize = Math.max(6, Math.min(14, band * scale * 0.75));
         const size = fitTextSingleLine(bodyBold, name, usable, maxSize, 4.5).size;
         drawCentered(page, bodyBold, name, toX(box.cx + at.x), toY(box.cy + at.y) - size * 0.35, usable, maxSize, 4.5, textColor);
+      }
+      continue;
+    }
+
+    if (item.type === "room") {
+      // Walls as a thick outline over a faint floor tint; the name sits inside the top-left corner.
+      const wall = Math.max(1.2, (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.12 * scale);
+      const pts = roomWorldPoints(item).map((p) => ({ x: toX(p.x), y: toY(p.y) }));
+      drawPolygon(page, pts, { color: rgb(0.965, 0.97, 0.98), borderColor: rgb(0.36, 0.42, 0.49), borderWidth: wall });
+      const name = item.name?.trim();
+      if (name) {
+        const b = objectBodyBounds(item);
+        const fitted = fitTextSingleLine(bodyBold, name, Math.max(20, (b.maxX - b.minX) * scale - 12), 11, 6);
+        const size = fitted.size;
+        page.drawText(fitted.line, {
+          x: toX(b.minX) + wall / 2 + 5,
+          y: toY(b.minY) - wall / 2 - 4 - size,
+          size,
+          font: bodyBold,
+          color: rgb(0.36, 0.42, 0.49)
+        });
       }
       continue;
     }

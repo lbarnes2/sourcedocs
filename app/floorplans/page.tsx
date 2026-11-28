@@ -38,7 +38,9 @@ import {
   Save,
   SendToBack,
   Settings2,
+  PencilRuler,
   Shapes,
+  Square,
   SquareDashedMousePointer,
   Trash2,
   TriangleAlert,
@@ -60,7 +62,8 @@ import { NumericInput } from "@/app/floorplans/NumericInput";
 import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
-import { findFreeCentre, seatsBlocked } from "@/lib/floorplans/collision";
+import { findFreeCentre, seatsBlocked, seatsOutsideRoom } from "@/lib/floorplans/collision";
+import { migrateRoomOutlines, roomFromWorldPoints } from "@/lib/floorplans/room";
 import { CHAIR_PRESETS, CHEVRON_MAX_ANGLE, ROW_SHAPES, seatingRowLengths, withSeatState, type RowShape, type SeatState } from "@/lib/floorplans/seating";
 import {
   GENERATED_SEATING_ID,
@@ -110,6 +113,7 @@ import type {
   FloorplanDocument,
   FloorplanListItem,
   FloorplanPrintOptions,
+  FloorplanRoomObject,
   FloorplanTableObject,
   GuestRecord,
   ProjectListItem
@@ -128,7 +132,7 @@ const STYLE_OPTIONS: Array<{ value: TableStyle; label: string; title: string }> 
 
 /** Which add menu each preset lives in; the seating block and text label have their own places. */
 const TABLE_PRESET_IDS = ["round-6ft", "round-5ft", "rect-table", "top-table"];
-const ROOM_PRESET_IDS = ["room", "stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
+const ROOM_PRESET_IDS = ["stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
 
 const SHORTCUTS: Array<[string, string]> = [
   ["Drag", "Move (Shift-drag moves off the grid)"],
@@ -140,7 +144,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["⌘C / ⌘V / ⌘D", "Copy / paste / duplicate"],
   ["⌘A", "Select everything"],
   ["Delete", "Delete the selection"],
-  ["V / H / F", "Select, hand, fill an area"],
+  ["V / H / F / R", "Select, hand, fill an area, draw a room"],
   ["A", "Auto layout"],
   ["⌘S / ⌘P", "Save / print and export"],
   ["Esc", "Deselect, or stop what you're doing"]
@@ -217,6 +221,11 @@ export default function FloorplansPage() {
   const [panTool, setPanTool] = useState(false);
   /** Drawing a rectangle to fill with seating. */
   const [drawMode, setDrawMode] = useState(false);
+  /** Drawing a room corner by corner. */
+  const [roomDraw, setRoomDraw] = useState(false);
+  useEffect(() => {
+    if (drawMode || panTool) setRoomDraw(false);
+  }, [drawMode, panTool]);
   const [fillPrompt, setFillPrompt] = useState<{
     area: FillArea;
     marginM: number;
@@ -417,7 +426,9 @@ export default function FloorplansPage() {
       pastRef.current = [];
       futureRef.current = [];
       coalesceRef.current = { key: null, at: 0 };
-      setDoc(doc);
+      // Old plans: their "Room outline" rectangles become rooms.
+      const objects = migrateRoomOutlines(doc.objects);
+      setDoc(objects === doc.objects ? doc : { ...doc, objects });
       setSelectedIds([]);
       setDirty(markDirty);
       syncHistory();
@@ -538,6 +549,23 @@ export default function FloorplansPage() {
     setFillPrompt({ area, marginM, facing: facingFor(area), shapeId });
   }
 
+  function startRoomDraw() {
+    setRoomDraw(true);
+    setDrawMode(false);
+    setPanTool(false);
+    setSeatEdit(null);
+    setSelectedIds([]);
+  }
+
+  function onRoomDrawn(points: { x: number; y: number }[] | null) {
+    setRoomDraw(false);
+    if (!points || points.length < 3) return;
+    const room = roomFromWorldPoints(points);
+    // Rooms go underneath everything, so what's in them stays clickable.
+    commitObjects((list) => [room, ...list]);
+    setSelectedIds([room.id]);
+  }
+
   function onDrawArea(b: Bounds) {
     setDrawMode(false);
     const minSize = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.5;
@@ -546,10 +574,10 @@ export default function FloorplansPage() {
   }
 
   function fillSelectedShape() {
-    if (!primary || primary.type !== "rect") return;
+    if (!primary || (primary.type !== "rect" && primary.type !== "room")) return;
     const box = objectBox(primary);
-    // A room outline gets a gangway round the walls to start with; any other shape is filled to its edges.
-    openFill({ cx: box.cx, cy: box.cy, w: box.w, h: box.h, rotation: box.rotation }, primary.fill === "none" ? 1 : 0, primary.id);
+    // A room gets a gangway round the walls to start with; any other shape is filled to its edges.
+    openFill({ cx: box.cx, cy: box.cy, w: box.w, h: box.h, rotation: box.rotation }, primary.type === "room" ? 1 : 0, primary.id);
   }
 
   function runFill(blocks: FloorplanCanvasObject[], patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>) {
@@ -1310,6 +1338,7 @@ export default function FloorplansPage() {
       setDrawMode(false);
       return;
     }
+    if (roomDraw) return;
     if (event.key === "Delete" || event.key === "Backspace") {
       // Editing seats: the block itself isn't what's being worked on.
       if (seatEdit) return;
@@ -1332,8 +1361,9 @@ export default function FloorplansPage() {
       if (event.key === "ArrowDown") nudge(0, step);
       return;
     }
-    if (!event.altKey && !event.shiftKey && (key === "v" || key === "h" || key === "f" || key === "a")) {
+    if (!event.altKey && !event.shiftKey && (key === "v" || key === "h" || key === "f" || key === "a" || key === "r")) {
       if (key === "a") setAutoOpen(true);
+      else if (key === "r") startRoomDraw();
       else {
         setPanTool(key === "h");
         setDrawMode(key === "f");
@@ -1596,6 +1626,7 @@ export default function FloorplansPage() {
           initialFacing={fillPrompt.facing}
           settings={theatre}
           objects={fillPrompt.shapeId ? objects.filter((o) => o.id !== fillPrompt.shapeId) : objects}
+          room={objects.find((o): o is FloorplanRoomObject => o.id === fillPrompt.shapeId && o.type === "room")}
           unitsPerMetre={unitsPerMetre ?? DEFAULT_UNITS_PER_METRE}
           clearance={seatClearance}
           scaled={Boolean(unitsPerMetre)}
@@ -2124,7 +2155,12 @@ export default function FloorplansPage() {
                   Fill an area…
                 </MenuItem>
               </MenuButton>
-              <MenuButton className="toolbar-btn" icon={<Shapes size={15} aria-hidden />} label="Room" title="Add room features">
+              <MenuButton className="toolbar-btn" icon={<Shapes size={15} aria-hidden />} label="Room" title="Draw the room and add room features">
+                <MenuItem icon={<PencilRuler size={15} />} hint="Click round the walls corner by corner" shortcut="R" onSelect={startRoomDraw}>
+                  Draw a room…
+                </MenuItem>
+                {presetItem("room", <Square size={15} />, "18 × 12 m, then drag its corners")}
+                <MenuSeparator />
                 {ROOM_PRESET_IDS.map((id) => presetItem(id))}
               </MenuButton>
               <button type="button" className="toolbar-btn" onClick={() => addPreset("text")} title="Add a text label">
@@ -2205,11 +2241,12 @@ export default function FloorplansPage() {
             <div className="btn-group" role="group" aria-label="Tools">
               <button
                 type="button"
-                className={`icon-btn${!panTool && !drawMode ? " icon-btn--on" : ""}`}
-                aria-pressed={!panTool && !drawMode}
+                className={`icon-btn${!panTool && !drawMode && !roomDraw ? " icon-btn--on" : ""}`}
+                aria-pressed={!panTool && !drawMode && !roomDraw}
                 onClick={() => {
                   setPanTool(false);
                   setDrawMode(false);
+                  setRoomDraw(false);
                 }}
                 title="Select and move (V)"
                 aria-label="Select tool"
@@ -2223,6 +2260,7 @@ export default function FloorplansPage() {
                 onClick={() => {
                   setPanTool((v) => !v);
                   setDrawMode(false);
+                  setRoomDraw(false);
                 }}
                 title="Hand: drag to pan (H, or hold Space)"
                 aria-label="Hand tool"
@@ -2236,11 +2274,22 @@ export default function FloorplansPage() {
                 onClick={() => {
                   setDrawMode((v) => !v);
                   setPanTool(false);
+                  setRoomDraw(false);
                 }}
                 title="Fill an area with seating: drag a rectangle on the plan (F)"
                 aria-label="Fill an area with seating"
               >
                 <SquareDashedMousePointer size={16} />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn${roomDraw ? " icon-btn--on" : ""}`}
+                aria-pressed={roomDraw}
+                onClick={() => (roomDraw ? setRoomDraw(false) : startRoomDraw())}
+                title="Draw a room: click round the walls corner by corner (R)"
+                aria-label="Draw a room"
+              >
+                <PencilRuler size={16} />
               </button>
             </div>
           </div>
@@ -2270,6 +2319,8 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
             }
             drawMode={drawMode}
             onDrawArea={onDrawArea}
+            roomDraw={roomDraw}
+            onRoomDrawn={onRoomDrawn}
             seatEdit={seatEdit}
             onEditSeats={editSeats}
             onSeatPaint={paintSeat}
@@ -2418,8 +2469,8 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
                 <button type="button" className="btn-primary" onClick={() => setAutoOpen(true)}>
                   <WandSparkles size={15} aria-hidden /> Auto layout…
                 </button>
-                <button type="button" onClick={() => addPreset("room")}>
-                  <Shapes size={15} aria-hidden /> Draw the room outline
+                <button type="button" onClick={startRoomDraw}>
+                  <PencilRuler size={15} aria-hidden /> Draw the room
                 </button>
                 <button type="button" onClick={() => setSettingsOpen(true)}>
                   <Settings2 size={15} aria-hidden /> Link a guest list or set the scale
@@ -2687,6 +2738,7 @@ function FillPrompt({
   initialFacing,
   settings,
   objects,
+  room,
   unitsPerMetre,
   clearance,
   scaled,
@@ -2694,6 +2746,8 @@ function FillPrompt({
   onFill
 }: {
   area: FillArea;
+  /** Filling a room: chairs outside its walls, or within the margin of one, are left out. */
+  room?: FloorplanRoomObject;
   initialMargin: number;
   initialFacing: TheatreFacing;
   settings: ReturnType<typeof resolveTheatreSettings>;
@@ -2718,9 +2772,12 @@ function FillPrompt({
         marginM: margin,
         maxRun: form.maxRun,
         objects,
-        blocked: (block) => seatsBlocked(block, objects, clearance)
+        blocked: (block) => {
+          const blocked = seatsBlocked(block, objects, clearance);
+          return room ? [...blocked, ...seatsOutsideRoom(block, room, margin * unitsPerMetre)] : blocked;
+        }
       }),
-    [area, form, margin, unitsPerMetre, objects, clearance]
+    [area, form, margin, unitsPerMetre, objects, clearance, room]
   );
   const total = result.blocks.reduce((n, b) => n + (b.type === "seating" ? seatingRowLengths(b).reduce((x, y) => x + y, 0) : 0), 0);
   const takenOut = total - result.seats;
