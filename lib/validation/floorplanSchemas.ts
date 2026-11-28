@@ -84,7 +84,23 @@ const roomObjectSchema = objectBase.extend({
     .array(z.object({ x: z.number().min(-40_000).max(40_000), y: z.number().min(-40_000).max(40_000) }))
     .min(3)
     .max(500),
-  locked: z.boolean().optional()
+  locked: z.boolean().optional(),
+  openings: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(100),
+        kind: z.enum(["door", "double-door", "window", "opening"]),
+        wall: z.number().int().min(0).max(500),
+        offset: z.number().min(0).max(100_000),
+        width: z.number().min(1).max(10_000),
+        swing: z.enum(["in", "out"]).optional(),
+        hinge: z.enum(["start", "end"]).optional(),
+        exit: z.boolean().optional(),
+        label: z.string().max(200).optional()
+      })
+    )
+    .max(200)
+    .optional()
 });
 
 const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();

@@ -11,6 +11,7 @@ import {
   type Point
 } from "@/lib/floorplans/geometry";
 import { seatKey, seatingRunBoxes, seatingSeats } from "@/lib/floorplans/seating";
+import { doorSwingBoxes } from "@/lib/floorplans/openings";
 import { pointInPolygon, roomWorldPoints } from "@/lib/floorplans/room";
 import type { FloorplanCanvasObject, FloorplanRoomObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
@@ -31,8 +32,10 @@ function rotate(p: Point, degrees: number): Point {
 
 /** The shapes that make up an object: a table's top plus each chair, or a shape's outline. */
 export function objectShapes(obj: FloorplanCanvasObject): Shape[] {
-  // Rooms are the floor everything stands on, not something in the way (walls come into it later).
-  if (obj.type === "room") return [];
+  // A room is the floor everything stands on; only the floor its doors swing through is in the way.
+  if (obj.type === "room") {
+    return doorSwingBoxes(obj).map((b) => ({ kind: "box", cx: b.cx, cy: b.cy, hw: b.w / 2, hh: b.h / 2, rotation: b.rotation }));
+  }
   const box = objectBox(obj);
   if (obj.type === "seating") {
     // Each run of chairs between aisles, row by row: aisles and seatways are open floor.
@@ -117,11 +120,12 @@ export function objectsCollide(a: FloorplanCanvasObject, b: FloorplanCanvasObjec
 }
 
 /**
- * Things a table shouldn't stand on: pillars, stages, bars, dance floors… Outline-only shapes (the room)
- * and text labels are not obstacles.
+ * Things a table shouldn't stand on: pillars, stages, bars, dance floors, the swing of a door…
+ * Outline-only shapes and text labels are not obstacles; a room is one only where its doors swing in.
  */
 export function isObstacle(obj: FloorplanCanvasObject): boolean {
-  if (obj.type === "text" || obj.type === "room" || isFurnishing(obj)) return false;
+  if (obj.type === "room") return doorSwingBoxes(obj).length > 0;
+  if (obj.type === "text" || isFurnishing(obj)) return false;
   return obj.fill !== "none";
 }
 
@@ -139,6 +143,8 @@ function area(b: Bounds): number {
  * not something the table is in the way of.
  */
 export function isFloorAreaFor(obstacle: FloorplanCanvasObject, table: FloorplanCanvasObject): boolean {
+  // A room's only obstacles are its door swings, which always count.
+  if (obstacle.type === "room") return false;
   const o = objectPrintBounds(obstacle);
   const t = objectPrintBounds(table);
   const contains = o.minX <= t.minX && o.minY <= t.minY && o.maxX >= t.maxX && o.maxY >= t.maxY;
@@ -227,6 +233,7 @@ function segmentDistance(p: Point, a: Point, b: Point): number {
  */
 export function seatsOutsideRoom(block: FloorplanSeatingObject, room: FloorplanRoomObject, gap: number): string[] {
   const walls = roomWorldPoints(room);
+  const swings: Box[] = doorSwingBoxes(room).map((b) => ({ kind: "box", cx: b.cx, cy: b.cy, hw: b.w / 2, hh: b.h / 2, rotation: b.rotation }));
   const rotation = block.rotation ?? 0;
   const out: string[] = [];
   for (const seat of seatingSeats(block)) {
@@ -244,8 +251,10 @@ export function seatsOutsideRoom(block: FloorplanSeatingObject, room: FloorplanR
       corners.some((p) => !pointInPolygon(p, walls)) ||
       // A corner of the room poking into the chair (an inside corner of an L).
       walls.some((w) => shapesHit({ kind: "circle", x: w.x, y: w.y, r: 0.01 }, chair, gap)) ||
+      // The floor a door swings through.
+      swings.some((sw) => shapesHit(chair, sw, 0)) ||
       (gap > 0 &&
-        corners.some((p) => walls.some((a, i) => segmentDistance(p, a, walls[(i + 1) % walls.length]) < gap)));
+        corners.some((p) => walls.some((a, i) => segmentDistance(p, a, walls[(i + 1) % walls.length]) < gap - TOLERANCE)));
     if (outside) out.push(seatKey(seat.row, seat.seat));
   }
   return out;

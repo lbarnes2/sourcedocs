@@ -2822,6 +2822,36 @@ button.fp-obj--seating:focus-visible .fp-seating {
   pointer-events: stroke;
 }
 
+.fp-opening-jamb,
+.fp-door,
+.fp-window,
+.fp-window-glass {
+  fill: none;
+  stroke: #5b6b7d;
+}
+
+.fp-door {
+  stroke-linejoin: round;
+}
+
+.fp-window {
+  fill: #fff;
+}
+
+.fp-opening--exit .fp-door,
+.fp-opening--exit .fp-opening-jamb {
+  stroke: #1f8a4c;
+}
+
+.fp-opening-label {
+  fill: #5b6b7d;
+  font-weight: 700;
+}
+
+.fp-opening--exit .fp-opening-label {
+  fill: #1f8a4c;
+}
+
 button.fp-obj--room:hover .fp-room-wall {
   stroke: var(--accent);
 }
@@ -2857,6 +2887,16 @@ button.fp-obj--room:hover .fp-room-wall {
   border-style: dashed;
   background: rgba(255, 255, 255, 0.85);
   cursor: copy;
+}
+
+.fp-handle--opening {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.fp-handle--opening-on {
+  background: rgba(232, 145, 30, 0.35);
+  border-color: #d97706;
 }
 
 .fp-wall-length {
@@ -4124,4 +4164,57 @@ td.guest-row-actions {
 .fp-wall-unit {
   color: var(--ink-muted);
   font-size: 0.8rem;
+}
+
+/* Room inspector: doors and windows. */
+.fp-opening-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fp-opening-list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fp-opening-item {
+  border: 1px solid var(--line, #e3e7ec);
+  border-radius: 6px;
+}
+
+.fp-opening-item--on {
+  border-color: #d97706;
+  padding-bottom: 8px;
+}
+
+.fp-opening-item > .stack {
+  padding: 0 8px;
+}
+
+button.fp-opening-summary {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 600;
+  text-align: left;
+}
+
+.fp-exit-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #1f8a4c;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
 }

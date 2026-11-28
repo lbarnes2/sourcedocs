@@ -114,6 +114,31 @@ export interface FloorplanRoomObject extends FloorplanBaseObject {
   points: Array<{ x: number; y: number }>;
   /** Locked rooms can't be moved or reshaped on the canvas (they can still be selected). */
   locked?: boolean;
+  /** Doors, windows and openings in the walls. */
+  openings?: FloorplanOpening[];
+}
+
+export type FloorplanOpeningKind = "door" | "double-door" | "window" | "opening";
+
+/**
+ * A door, window or opening in a room's wall. It belongs to a wall by index and sits `offset` along it
+ * (from the wall's start corner to the opening's centre), so it stays on its wall when the room is
+ * reshaped. Lengths are plan units.
+ */
+export interface FloorplanOpening {
+  id: string;
+  kind: FloorplanOpeningKind;
+  wall: number;
+  offset: number;
+  width: number;
+  /** Doors: which way they open. Default "in". */
+  swing?: "in" | "out";
+  /** Single doors: which jamb the hinge is on, the wall's start or end. Default "start". */
+  hinge?: "start" | "end";
+  /** Counts towards the plan's total exit width. */
+  exit?: boolean;
+  /** e.g. "Fire exit 2", "Main doors". */
+  label?: string;
 }
 
 export type FloorplanCanvasObject =

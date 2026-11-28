@@ -296,6 +296,12 @@ export default function FloorplansPage() {
     () => objects.find((o) => o.id === validSelected[validSelected.length - 1]) ?? null,
     [objects, validSelected]
   );
+  // The door or window being edited: only while its room is the one thing selected.
+  const [openingIdRaw, setOpeningId] = useState<string | null>(null);
+  const openingId =
+    primary?.type === "room" && validSelected.length === 1 && primary.openings?.some((o) => o.id === openingIdRaw)
+      ? openingIdRaw
+      : null;
   const print = resolvePrintOptions(draft.print);
   const unitsPerMetre = draft.canvas.unitsPerMetre && draft.canvas.unitsPerMetre > 0 ? draft.canvas.unitsPerMetre : null;
   const tableGuests: TableGuestMap | null = useMemo(
@@ -1342,6 +1348,14 @@ export default function FloorplansPage() {
     if (event.key === "Delete" || event.key === "Backspace") {
       // Editing seats: the block itself isn't what's being worked on.
       if (seatEdit) return;
+      // A door or window is selected: take that out, not the room.
+      if (openingId && primary?.type === "room") {
+        event.preventDefault();
+        const id = openingId;
+        patchSelected((o) => (o.type === "room" ? { ...o, openings: o.openings?.filter((x) => x.id !== id) } : o));
+        setOpeningId(null);
+        return;
+      }
       if (validSelected.length) {
         event.preventDefault();
         deleteSelection();
@@ -1349,7 +1363,8 @@ export default function FloorplansPage() {
       return;
     }
     if (event.key === "Escape") {
-      setSelectedIds([]);
+      if (openingId) setOpeningId(null);
+      else setSelectedIds([]);
       return;
     }
     if (event.key.startsWith("Arrow") && validSelected.length) {
@@ -2321,6 +2336,8 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
             onDrawArea={onDrawArea}
             roomDraw={roomDraw}
             onRoomDrawn={onRoomDrawn}
+            openingId={openingId}
+            onSelectOpening={setOpeningId}
             seatEdit={seatEdit}
             onEditSeats={editSeats}
             onSeatPaint={paintSeat}
@@ -2419,6 +2436,8 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
               seatEdit={seatEdit}
               onClearUnderObjects={clearSeatsUnderObjects}
               onFillShape={fillSelectedShape}
+              openingId={openingId}
+              onOpeningId={setOpeningId}
               onSeatEdit={(next) => setSeatEdit(next && primary ? { id: primary.id, tool: next } : null)}
               onDelete={deleteSelection}
               onOrder={reorderSelected}

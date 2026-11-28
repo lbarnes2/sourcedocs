@@ -17,6 +17,7 @@ import {
   seatway,
   type LocalBox
 } from "@/lib/floorplans/seating";
+import { openingPolygon, roomOpenings } from "@/lib/floorplans/openings";
 import { polygonArea, roomWorldPoints } from "@/lib/floorplans/room";
 import { findStage } from "@/lib/floorplans/theatre";
 import type { FloorplanCanvasObject, FloorplanLimits, FloorplanRoomObject, FloorplanSeatingObject } from "@/types";
@@ -300,20 +301,29 @@ export function buildMeasurements(
     }
   }
 
-  // Exits: shapes marked as exits; the longer side is the opening.
+  // Exits: doors and openings marked as exits (their width), and shapes marked as exits (their longer side).
   const exits = objects.filter((o) => o.type === "rect" && o.exit);
-  if (exits.length || L.minExitWidthM != null) {
-    const width = exits.reduce((sum, o) => sum + (o.type === "rect" ? Math.max(o.width, o.height) : 0), 0);
+  const exitDoors = objects.flatMap((o) =>
+    o.type === "room" ? roomOpenings(o).filter((g) => g.opening.exit).map((g) => ({ room: o, g })) : []
+  );
+  const exitCount = exits.length + exitDoors.length;
+  if (exitCount || L.minExitWidthM != null) {
+    const width =
+      exits.reduce((sum, o) => sum + (o.type === "rect" ? Math.max(o.width, o.height) : 0), 0) +
+      exitDoors.reduce((sum, e) => sum + e.g.width, 0);
     const metres = m(width);
+    const depth = (upm ?? 24) * 0.4;
     out.push({
       id: "exits",
       label: "Exits",
-      value: exits.length ? `${exits.length} · ${fmt(metres)}` : "None marked",
-      detail: exits.length ? "Total width of the shapes marked as exits" : "Mark a shape as an exit in its settings",
+      value: exitCount ? `${exitCount} · ${fmt(metres)}` : "None marked",
+      detail: exitCount ? "Total width of the doors and shapes marked as exits" : "Mark a door or shape as an exit in its settings",
       past: L.minExitWidthM != null && (metres ?? 0) < L.minExitWidthM - 1e-6,
       limit: L.minExitWidthM != null ? `min ${L.minExitWidthM} m` : undefined,
-      highlight: exits.length ? { polygons: exits.map(objectPolygon) } : undefined,
-      objectIds: exits.map((o) => o.id)
+      highlight: exitCount
+        ? { polygons: [...exits.map(objectPolygon), ...exitDoors.map((e) => openingPolygon(e.g, depth))] }
+        : undefined,
+      objectIds: Array.from(new Set([...exits.map((o) => o.id), ...exitDoors.map((e) => e.room.id)]))
     });
   }
 

@@ -54,7 +54,15 @@ import {
   setWallLength,
   wallLengths
 } from "@/lib/floorplans/room";
-import type { FloorplanCanvasObject, FloorplanRoomObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
+import { OPENING_KINDS, clampOffset, isDoor, newOpening, openingKindLabel, remapOpenings } from "@/lib/floorplans/openings";
+import type {
+  FloorplanCanvasObject,
+  FloorplanOpening,
+  FloorplanOpeningKind,
+  FloorplanRoomObject,
+  FloorplanSeatingObject,
+  FloorplanTableObject
+} from "@/types";
 
 interface Props {
   /** The object being edited (last one selected). */
@@ -76,6 +84,9 @@ interface Props {
   onFillShape?: () => void;
   /** Take out the chairs that stand on a pillar, bar or other object. */
   onClearUnderObjects?: () => void;
+  /** The door or window being edited in the selected room. */
+  openingId?: string | null;
+  onOpeningId?: (id: string | null) => void;
 }
 
 function Swatches({
@@ -266,7 +277,9 @@ export function Inspector({
   seatEdit,
   onSeatEdit,
   onClearUnderObjects,
-  onFillShape
+  onFillShape,
+  openingId,
+  onOpeningId
 }: Props) {
   const patchTable = (fn: (t: FloorplanTableObject) => FloorplanTableObject, key?: string) =>
     onPatch((o) => (o.type === "table" ? fn(o) : o), key);
@@ -318,6 +331,8 @@ export function Inspector({
             totalGuests={tableGuests ? totalGuests : 0}
             patchRoom={(fn, key) => onPatch((o) => (o.type === "room" ? fn(o) : o), key)}
             onFill={selectionCount === 1 ? onFillShape : undefined}
+            openingId={selectionCount === 1 ? (openingId ?? null) : null}
+            onOpeningId={onOpeningId}
           />
         ) : null}
 
@@ -1039,19 +1054,23 @@ function RoomFields({
   unitsPerMetre,
   totalGuests,
   patchRoom,
-  onFill
+  onFill,
+  openingId,
+  onOpeningId
 }: {
   room: FloorplanRoomObject;
   unitsPerMetre: number | null;
   totalGuests: number;
   patchRoom: (fn: (r: FloorplanRoomObject) => FloorplanRoomObject, key?: string) => void;
   onFill?: () => void;
+  openingId: string | null;
+  onOpeningId?: (id: string | null) => void;
 }) {
   const lengths = wallLengths(room.points);
   const upm = unitsPerMetre;
   const area = polygonArea(room.points);
   const reshape = (fn: (points: FloorplanRoomObject["points"]) => FloorplanRoomObject["points"], key?: string) =>
-    patchRoom((r) => normaliseRoom({ ...r, points: fn(r.points) }), key);
+    patchRoom((r) => remapOpenings(r, normaliseRoom({ ...r, points: fn(r.points) })), key);
   return (
     <>
       <Field label="Name">
@@ -1115,11 +1134,197 @@ function RoomFields({
           ))}
         </ol>
       </Field>
+      <OpeningsFields room={room} unitsPerMetre={upm} patchRoom={patchRoom} openingId={openingId} onOpeningId={onOpeningId} />
       {onFill ? (
         <button type="button" className="btn-sm" onClick={onFill}>
           Fill with seating…
         </button>
       ) : null}
     </>
+  );
+}
+
+const OPENING_KIND_OPTIONS = OPENING_KINDS.map((k) => ({ value: k.value, label: k.label }));
+
+/** Doors, windows and openings: add one, and edit the one picked here or on the plan. */
+function OpeningsFields({
+  room,
+  unitsPerMetre,
+  patchRoom,
+  openingId,
+  onOpeningId
+}: {
+  room: FloorplanRoomObject;
+  unitsPerMetre: number | null;
+  patchRoom: (fn: (r: FloorplanRoomObject) => FloorplanRoomObject, key?: string) => void;
+  openingId: string | null;
+  onOpeningId?: (id: string | null) => void;
+}) {
+  const upm = unitsPerMetre;
+  const lengths = wallLengths(room.points);
+  const openings = room.openings ?? [];
+  const fmt = (units: number) => (upm ? `${(units / upm).toFixed(2).replace(/\.?0+$/, "")} m` : `${Math.round(units)}`);
+
+  const add = (kind: FloorplanOpeningKind) => {
+    const o = newOpening(room, kind, upm ?? DEFAULT_UNITS_PER_METRE);
+    patchRoom((r) => ({ ...r, openings: [...(r.openings ?? []), o] }));
+    onOpeningId?.(o.id);
+  };
+  /** Change one opening, keeping it on its wall. */
+  const patch = (id: string, fn: (o: FloorplanOpening) => FloorplanOpening, key?: string) =>
+    patchRoom(
+      (r) => ({
+        ...r,
+        openings: (r.openings ?? []).map((o) => {
+          if (o.id !== id) return o;
+          const next = fn(o);
+          const len = wallLengths(r.points)[next.wall] ?? 0;
+          const width = Math.min(next.width, len);
+          return { ...next, width, offset: clampOffset(len, width, next.offset) };
+        })
+      }),
+      key ? `${key}-${id}` : undefined
+    );
+  const remove = (id: string) => {
+    patchRoom((r) => ({ ...r, openings: (r.openings ?? []).filter((o) => o.id !== id) }));
+    onOpeningId?.(null);
+  };
+
+  return (
+    <Field label="Doors and windows" as="div">
+      <div className="fp-opening-add">
+        {OPENING_KINDS.map((k) => (
+          <button key={k.value} type="button" className="btn-sm" disabled={room.locked} onClick={() => add(k.value)}>
+            + {k.label}
+          </button>
+        ))}
+      </div>
+      {openings.length ? (
+        <ul className="fp-opening-list">
+          {openings.map((o) => {
+            const on = o.id === openingId;
+            const len = lengths[o.wall] ?? 0;
+            return (
+              <li key={o.id} className={on ? "fp-opening-item fp-opening-item--on" : "fp-opening-item"}>
+                <button type="button" className="fp-opening-summary" onClick={() => onOpeningId?.(on ? null : o.id)} aria-expanded={on}>
+                  <span>
+                    {o.label?.trim() || openingKindLabel(o.kind)}
+                    {o.exit ? <span className="fp-exit-tag">Exit</span> : null}
+                  </span>
+                  <span className="field-hint">
+                    Wall {o.wall + 1} · {fmt(o.width)}
+                  </span>
+                </button>
+                {on ? (
+                  <div className="stack">
+                    <Segmented
+                      size="sm"
+                      aria-label="Kind"
+                      value={o.kind}
+                      options={OPENING_KIND_OPTIONS}
+                      onChange={(kind) =>
+                        patch(o.id, (x) => {
+                          // A width still at the old kind's usual size moves to the new kind's.
+                          const was = OPENING_KINDS.find((k) => k.value === x.kind)?.widthM;
+                          const now = OPENING_KINDS.find((k) => k.value === kind)?.widthM;
+                          const k = upm ?? DEFAULT_UNITS_PER_METRE;
+                          const usual = was != null && Math.abs(x.width - was * k) < 0.01 * k;
+                          return { ...x, kind, width: usual && now != null ? now * k : x.width };
+                        })
+                      }
+                    />
+                    <div className="form-grid">
+                      <Field label="Wall">
+                        <select
+                          value={o.wall}
+                          disabled={room.locked}
+                          onChange={(e) => {
+                            const wall = Number(e.target.value);
+                            patch(o.id, (x) => ({ ...x, wall, offset: (lengths[wall] ?? 0) / 2 }));
+                          }}
+                        >
+                          {lengths.map((l, i) => (
+                            <option key={i} value={i}>
+                              Wall {i + 1} ({fmt(l)})
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <LengthField
+                        label="Width (m)"
+                        units={o.width}
+                        upm={upm}
+                        min={1}
+                        onChange={(width) => patch(o.id, (x) => ({ ...x, width }), "opening-width")}
+                      />
+                      <LengthField
+                        label="From the corner (m)"
+                        units={Math.max(0, clampOffset(len, Math.min(o.width, len), o.offset) - Math.min(o.width, len) / 2)}
+                        upm={upm}
+                        min={0}
+                        hint={`From the start of wall ${o.wall + 1} to the near side`}
+                        onChange={(v) => patch(o.id, (x) => ({ ...x, offset: v + Math.min(x.width, len) / 2 }), "opening-offset")}
+                      />
+                    </div>
+                    {isDoor(o) ? (
+                      <div className="form-grid">
+                        <Field label="Opens" as="div">
+                          <Segmented
+                            size="sm"
+                            aria-label="Opens"
+                            value={o.swing ?? "in"}
+                            options={[
+                              { value: "in", label: "Inwards" },
+                              { value: "out", label: "Outwards" }
+                            ]}
+                            onChange={(swing) => patch(o.id, (x) => ({ ...x, swing: swing === "in" ? undefined : swing }))}
+                          />
+                        </Field>
+                        {o.kind === "door" ? (
+                          <Field label="Hinge" as="div">
+                            <Segmented
+                              size="sm"
+                              aria-label="Hinge side"
+                              value={o.hinge ?? "start"}
+                              options={[
+                                { value: "start", label: `Corner ${o.wall + 1} side` },
+                                { value: "end", label: `Corner ${((o.wall + 1) % lengths.length) + 1} side` }
+                              ]}
+                              onChange={(hinge) => patch(o.id, (x) => ({ ...x, hinge: hinge === "start" ? undefined : hinge }))}
+                            />
+                          </Field>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <Field label="Label">
+                      <input
+                        value={o.label ?? ""}
+                        placeholder={o.exit ? "Exit" : "e.g. Main doors"}
+                        onChange={(e) => patch(o.id, (x) => ({ ...x, label: e.target.value || undefined }), "opening-label")}
+                      />
+                    </Field>
+                    {o.kind !== "window" ? (
+                      <Switch
+                        label="Exit"
+                        hint="Counts towards total exit width in the plan measurements."
+                        checked={Boolean(o.exit)}
+                        onChange={(exit) => patch(o.id, (x) => ({ ...x, exit: exit || undefined }))}
+                      />
+                    ) : null}
+                    <button type="button" className="btn-sm btn-danger" onClick={() => remove(o.id)}>
+                      <Trash2 size={14} aria-hidden /> Remove {openingKindLabel(o.kind).toLowerCase()}
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="field-hint" style={{ margin: "4px 0 0" }}>
+          New ones go in the middle of the longest wall; drag them along the walls on the plan.
+        </p>
+      )}
+    </Field>
   );
 }

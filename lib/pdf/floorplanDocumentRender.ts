@@ -33,6 +33,7 @@ import {
   type OccupancyStatus
 } from "@/lib/floorplans/geometry";
 import { planTotals } from "@/lib/floorplans/checks";
+import { doorLeafPath, outsideReach, roomOpenings, roomWalls, wallRunsPath } from "@/lib/floorplans/openings";
 import { roomWorldPoints } from "@/lib/floorplans/room";
 import { seatingNameBand, seatingPositions, seatingSeats } from "@/lib/floorplans/seating";
 
@@ -579,8 +580,58 @@ export async function renderFloorplanDocumentPdf(
     if (item.type === "room") {
       // Walls as a thick outline over a faint floor tint; the name sits inside the top-left corner.
       const wall = Math.max(1.2, (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.12 * scale);
+      const wallColor = rgb(0.36, 0.42, 0.49);
+      const exitColor = rgb(0.12, 0.54, 0.3);
       const pts = roomWorldPoints(item).map((p) => ({ x: toX(p.x), y: toY(p.y) }));
-      drawPolygon(page, pts, { color: rgb(0.965, 0.97, 0.98), borderColor: rgb(0.36, 0.42, 0.49), borderWidth: wall });
+      // Floor, then the walls as runs between the doors and windows.
+      drawPolygon(page, pts, { color: rgb(0.965, 0.97, 0.98), borderColor: wallColor, borderWidth: 0 });
+      const walls = roomWalls(item);
+      // pdf-lib draws SVG paths with y flipped about the origin, so plan points go to (x, -y) on the page.
+      const toSvg = (q: { x: number; y: number }) => ({ x: toX(q.x), y: -toY(q.y) });
+      page.drawSvgPath(wallRunsPath(item, walls, toSvg), { x: 0, y: 0, borderColor: wallColor, borderWidth: wall });
+      for (const g of roomOpenings(item, walls)) {
+        const color = g.opening.exit ? exitColor : wallColor;
+        const n = { x: g.wall.nx, y: g.wall.ny };
+        const half = wall / 2 / scale;
+        for (const q of [g.start, g.end]) {
+          page.drawLine({
+            start: { x: toX(q.x - n.x * half), y: toY(q.y - n.y * half) },
+            end: { x: toX(q.x + n.x * half), y: toY(q.y + n.y * half) },
+            thickness: Math.max(0.5, wall * 0.35),
+            color
+          });
+        }
+        if (g.opening.kind === "window") {
+          drawPolygon(
+            page,
+            [
+              { x: g.start.x - n.x * half, y: g.start.y - n.y * half },
+              { x: g.end.x - n.x * half, y: g.end.y - n.y * half },
+              { x: g.end.x + n.x * half, y: g.end.y + n.y * half },
+              { x: g.start.x + n.x * half, y: g.start.y + n.y * half }
+            ].map((q) => ({ x: toX(q.x), y: toY(q.y) })),
+            { color: rgb(1, 1, 1), borderColor: wallColor, borderWidth: Math.max(0.3, wall * 0.15) }
+          );
+          page.drawLine({
+            start: { x: toX(g.start.x), y: toY(g.start.y) },
+            end: { x: toX(g.end.x), y: toY(g.end.y) },
+            thickness: Math.max(0.3, wall * 0.15),
+            color: wallColor
+          });
+        }
+        for (const leaf of g.leaves) {
+          // toX/toY flip the page vertically, and the (x, -y) for pdf-lib flips it back: net, no mirror.
+          page.drawSvgPath(doorLeafPath(leaf, toSvg, scale), { x: 0, y: 0, borderColor: color, borderWidth: Math.max(0.4, wall * 0.25) });
+        }
+        const label = g.opening.label?.trim() || (g.opening.exit ? "Exit" : "");
+        if (label) {
+          const away = (wall + 8) / scale + outsideReach(g);
+          const p = { x: toX(g.centre.x - n.x * away), y: toY(g.centre.y - n.y * away) };
+          const size = 7;
+          const w = bodyBold.widthOfTextAtSize(label, size);
+          page.drawText(label, { x: p.x - w / 2, y: p.y - size * 0.35, size, font: bodyBold, color });
+        }
+      }
       const name = item.name?.trim();
       if (name) {
         const b = objectBodyBounds(item);

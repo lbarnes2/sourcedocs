@@ -39,6 +39,19 @@ import {
   snapAngle,
   wallLengths
 } from "@/lib/floorplans/room";
+import {
+  clampOffset,
+  doorLeafPath,
+  nearestWall,
+  outsideReach,
+  remapOpenings,
+  roomOpenings,
+  roomWalls,
+  wallLabelOffsets,
+  wallRunsPath,
+  wallThickness,
+  type OpeningGeometry
+} from "@/lib/floorplans/openings";
 import type { FloorplanCanvasObject, FloorplanRoomObject } from "@/types";
 
 export type CanvasView = { zoom: number; pan: Point };
@@ -70,6 +83,8 @@ type Interaction =
   | { kind: "rotate"; id: string; startObj: FloorplanCanvasObject; moved: boolean }
   /** Dragging one corner of a room (`startObj` already has the corner, if it's a new one). */
   | { kind: "corner"; id: string; index: number; startObj: FloorplanRoomObject; moved: boolean }
+  /** Sliding a door or window along the walls. */
+  | { kind: "opening"; id: string; openingId: string; startObj: FloorplanRoomObject; startClient: Point; moved: boolean }
   | { kind: "pinch"; startDistance: number; startMid: Point; startView: CanvasView };
 
 const DRAG_THRESHOLD_PX = 3;
@@ -110,6 +125,9 @@ interface Props {
   roomDraw?: boolean;
   /** The finished room's corners on the plan, or null when drawing was cancelled. */
   onRoomDrawn?: (points: Point[] | null) => void;
+  /** The door or window selected in the selected room, if any. */
+  openingId?: string | null;
+  onSelectOpening?: (openingId: string | null) => void;
   /** Double-click on a seating block. */
   onEditSeats?: (id: string) => void;
   /** Set chair positions in a block; `stroke` is the same for every call in one press-and-drag. */
@@ -254,21 +272,52 @@ export function FloorplanCanvas(props: Props) {
       }
     }
     const points = room.points.map((q, i) => (i === index ? { x: pt.x - room.x, y: pt.y - room.y } : q));
-    return normaliseRoom({ ...room, points });
+    return remapOpenings(room, normaliseRoom({ ...room, points }));
+  }
+
+  /** Slide an opening to the nearest wall position to `raw` (snapped to 5 cm unless `free`). */
+  function movedOpening(room: FloorplanRoomObject, openingId: string, raw: Point, free: boolean): FloorplanRoomObject {
+    const walls = roomWalls(room);
+    const near = nearestWall(walls, raw);
+    const step = latest.current.unitsPerMetre ? latest.current.unitsPerMetre * 0.05 : 1;
+    const openings = (room.openings ?? []).map((o) => {
+      if (o.id !== openingId) return o;
+      const len = walls[near.wall].len;
+      const width = Math.min(o.width, len);
+      const offset = clampOffset(len, width, free ? near.offset : snapTo(near.offset - width / 2, step) + width / 2);
+      return { ...o, wall: near.wall, offset };
+    });
+    return { ...room, openings };
+  }
+
+  function startOpening(event: ReactPointerEvent<HTMLElement>, room: FloorplanRoomObject, openingId: string) {
+    if (interaction.current || event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    latest.current.onSelectOpening?.(openingId);
+    if (room.locked) return;
+    interaction.current = {
+      kind: "opening",
+      id: room.id,
+      openingId,
+      startObj: room,
+      startClient: { x: event.clientX, y: event.clientY },
+      moved: false
+    };
   }
 
   function startCorner(event: ReactPointerEvent<HTMLElement>, room: FloorplanRoomObject, index: number, insert: boolean) {
     if (interaction.current || event.button !== 0) return;
     event.stopPropagation();
     event.preventDefault();
-    const startObj = insert ? { ...room, points: insertCorner(room.points, index) } : room;
+    const startObj = insert ? remapOpenings(room, { ...room, points: insertCorner(room.points, index) }) : room;
     interaction.current = { kind: "corner", id: room.id, index: insert ? index + 1 : index, startObj, moved: false };
   }
 
   function deleteCorner(room: FloorplanRoomObject, index: number) {
     if (room.points.length <= 3) return;
     latest.current.onBeginGesture();
-    replaceObjects(new Map([[room.id, normaliseRoom({ ...room, points: removeCorner(room.points, index) })]]));
+    replaceObjects(new Map([[room.id, remapOpenings(room, normaliseRoom({ ...room, points: removeCorner(room.points, index) }))]]));
   }
 
   // Wheel pans; ctrl/⌘ + wheel (and trackpad pinch) zooms about the cursor.
@@ -313,6 +362,16 @@ export function FloorplanCanvas(props: Props) {
       }
       if (!act) return;
       const p = latest.current;
+
+      if (act.kind === "opening") {
+        if (!act.moved && Math.hypot(event.clientX - act.startClient.x, event.clientY - act.startClient.y) < DRAG_THRESHOLD_PX) return;
+        if (!act.moved) {
+          act.moved = true;
+          p.onBeginGesture();
+        }
+        replaceObjects(new Map([[act.id, movedOpening(act.startObj, act.openingId, toCanvas(event.clientX, event.clientY), event.shiftKey)]]));
+        return;
+      }
 
       if (act.kind === "corner") {
         if (!act.moved) {
@@ -550,7 +609,7 @@ export function FloorplanCanvas(props: Props) {
       if (event.key !== "Escape" || !act) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if ((act.kind === "drag" || act.kind === "resize" || act.kind === "rotate" || act.kind === "corner") && act.moved) {
+      if ((act.kind === "drag" || act.kind === "resize" || act.kind === "rotate" || act.kind === "corner" || act.kind === "opening") && act.moved) {
         latest.current.onCancelGesture();
       }
       if (act.kind === "marquee") latest.current.onSelect(act.base);
@@ -746,6 +805,8 @@ export function FloorplanCanvas(props: Props) {
         : single.type === "room"
           ? `${dims} · ${(polygonArea(single.points) / (unitsPerMetre * unitsPerMetre)).toFixed(0)} m²`
           : dims;
+    // A room's readout sits in the middle of its floor, clear of any doors on the bottom wall.
+    if (single.type === "room") return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, text };
     return { x: (b.minX + b.maxX) / 2, y: b.maxY, text };
   }, [single, unitsPerMetre]);
   const handleSize = 10 * inv;
@@ -779,8 +840,11 @@ export function FloorplanCanvas(props: Props) {
       const ox = obj.x - (box.cx - box.w / 2);
       const oy = obj.y - (box.cy - box.h / 2);
       const d = `M ${obj.points.map((p) => `${p.x + ox} ${p.y + oy}`).join(" L ")} Z`;
-      const wall = Math.max(1.5, (unitsPerMetre ?? 24) * 0.12);
+      const wall = wallThickness(unitsPerMetre);
       const name = obj.name?.trim();
+      const walls = roomWalls(obj);
+      const local = { x: -(box.cx - box.w / 2), y: -(box.cy - box.h / 2) };
+      const openings = roomOpenings(obj, walls);
       return (
         <button
           key={obj.id}
@@ -791,7 +855,10 @@ export function FloorplanCanvas(props: Props) {
         >
           <svg className="fp-room" width={box.w} height={box.h} viewBox={`0 0 ${box.w} ${box.h}`} aria-hidden="true">
             <path d={d} className="fp-room-floor" />
-            <path d={d} className="fp-room-wall" strokeWidth={wall} />
+            <path d={wallRunsPath(obj, walls, (q) => ({ x: q.x + local.x, y: q.y + local.y }))} className="fp-room-wall" strokeWidth={wall} />
+            {openings.map((g) => (
+              <OpeningMark key={g.opening.id} g={g} wall={wall} inv={inv} offset={local} />
+            ))}
             <path d={d} className="fp-room-hit" strokeWidth={Math.max(wall, 10 * inv)} />
           </svg>
           {name ? (
@@ -1017,6 +1084,7 @@ export function FloorplanCanvas(props: Props) {
   function renderRoomOverlay(room: FloorplanRoomObject) {
     const world = roomWorldPoints(room);
     const lengths = wallLengths(world);
+    const labelOffsets = wallLabelOffsets(room, 24 * inv);
     const hs = handleSize;
     const editable = !room.locked;
     return (
@@ -1024,14 +1092,17 @@ export function FloorplanCanvas(props: Props) {
         <svg className="fp-room-overlay" width={1} height={1} aria-hidden="true">
           <path d={`M ${world.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`} strokeWidth={1.5 * inv} />
         </svg>
-        {world.map((a, i) => {
-          const b = world[(i + 1) % world.length];
-          const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        {roomWalls(room).map((w, i) => {
+          // Clear of any doors and windows on the wall, so neither hides the other.
+          const along = labelOffsets[i];
+          const mid = { x: w.a.x + w.ux * along, y: w.a.y + w.uy * along };
+          // The length sits just outside the wall; the add-a-corner dot just inside.
+          const out = 14 * inv;
           return (
             <div key={`len-${i}`}>
               <div
                 className="fp-wall-length"
-                style={{ left: mid.x, top: mid.y, transform: `translate(-50%, -50%) scale(${inv})` }}
+                style={{ left: mid.x - w.nx * out, top: mid.y - w.ny * out, transform: `translate(-50%, -50%) scale(${inv})` }}
               >
                 {formatLength(lengths[i], unitsPerMetre)}
               </div>
@@ -1039,11 +1110,38 @@ export function FloorplanCanvas(props: Props) {
                 <div
                   className="fp-handle fp-handle--add"
                   title="Drag to add a corner"
-                  style={{ width: hs * 0.8, height: hs * 0.8, borderWidth: inv, left: mid.x - hs * 0.4, top: mid.y - hs * 0.4 + 14 * inv }}
+                  style={{
+                    width: hs * 0.8,
+                    height: hs * 0.8,
+                    borderWidth: inv,
+                    left: mid.x + w.nx * out - hs * 0.4,
+                    top: mid.y + w.ny * out - hs * 0.4
+                  }}
                   onPointerDown={(e) => startCorner(e, room, i, true)}
                 />
               ) : null}
             </div>
+          );
+        })}
+        {roomOpenings(room).map((g) => {
+          const selected = props.openingId === g.opening.id;
+          const along = (Math.atan2(g.wall.uy, g.wall.ux) * 180) / Math.PI;
+          return (
+            <div
+              key={`opening-${g.opening.id}`}
+              className={`fp-handle fp-handle--opening${selected ? " fp-handle--opening-on" : ""}`}
+              title={editable ? "Click to edit · drag along the walls to move" : "Click to edit"}
+              style={{
+                width: Math.max(hs * 1.4, g.width),
+                height: hs * 0.9,
+                borderWidth: inv,
+                left: g.centre.x - Math.max(hs * 1.4, g.width) / 2,
+                top: g.centre.y - hs * 0.45,
+                transform: `rotate(${along}deg)`,
+                cursor: editable ? "grab" : "pointer"
+              }}
+              onPointerDown={(e) => startOpening(e, room, g.opening.id)}
+            />
           );
         })}
         {editable
@@ -1326,5 +1424,60 @@ function HighlightLabel({ highlight, inv }: { highlight: Highlight; inv: number 
     >
       {highlight.label}
     </div>
+  );
+}
+
+/** A door (leaf and swing), window or opening drawn in the gap in a room's wall. */
+function OpeningMark({ g, wall, inv, offset }: { g: OpeningGeometry; wall: number; inv: number; offset: Point }) {
+  const o = g.opening;
+  const p = (q: Point) => ({ x: q.x + offset.x, y: q.y + offset.y });
+  const a = p(g.start);
+  const b = p(g.end);
+  const n = { x: g.wall.nx, y: g.wall.ny };
+  const cls = `fp-opening${o.exit ? " fp-opening--exit" : ""}`;
+  const label = o.label?.trim() || (o.exit ? "Exit" : "");
+  // Labels go outside the room, beyond the wall.
+  const away = wall + 9 * inv + outsideReach(g);
+  const labelAt = p({ x: g.centre.x - n.x * away, y: g.centre.y - n.y * away });
+  return (
+    <g className={cls}>
+      {/* Jambs: short ticks across the wall at each side of the gap. */}
+      {[a, b].map((q, i) => (
+        <line
+          key={i}
+          x1={q.x - (n.x * wall) / 2}
+          y1={q.y - (n.y * wall) / 2}
+          x2={q.x + (n.x * wall) / 2}
+          y2={q.y + (n.y * wall) / 2}
+          className="fp-opening-jamb"
+          strokeWidth={Math.max(0.8, wall * 0.35)}
+        />
+      ))}
+      {o.kind === "window" ? (
+        <>
+          <polygon
+            points={[
+              { x: a.x - (n.x * wall) / 2, y: a.y - (n.y * wall) / 2 },
+              { x: b.x - (n.x * wall) / 2, y: b.y - (n.y * wall) / 2 },
+              { x: b.x + (n.x * wall) / 2, y: b.y + (n.y * wall) / 2 },
+              { x: a.x + (n.x * wall) / 2, y: a.y + (n.y * wall) / 2 }
+            ]
+              .map((q) => `${q.x},${q.y}`)
+              .join(" ")}
+            className="fp-window"
+            strokeWidth={Math.max(0.5, wall * 0.15)}
+          />
+          <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="fp-window-glass" strokeWidth={Math.max(0.5, wall * 0.15)} />
+        </>
+      ) : null}
+      {g.leaves.map((leaf, i) => (
+        <path key={i} d={doorLeafPath(leaf, p)} className="fp-door" strokeWidth={Math.max(0.6, wall * 0.25)} />
+      ))}
+      {label ? (
+        <text x={labelAt.x} y={labelAt.y} className="fp-opening-label" fontSize={10 * inv} textAnchor="middle" dominantBaseline="middle">
+          {label}
+        </text>
+      ) : null}
+    </g>
   );
 }
