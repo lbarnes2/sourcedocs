@@ -18,7 +18,7 @@ import type {
   ThemeSettings
 } from "@/types";
 import { defaultTableCardSettings } from "@/lib/defaults";
-import { buildKitchenSummary } from "@/lib/docs/kitchenSummary";
+import { buildKitchenSummary, type KitchenSummaryData } from "@/lib/docs/kitchenSummary";
 import { tablesInOrder } from "@/lib/event/model";
 import { buildFloorplanPlacedCells } from "@/lib/docs/floorplanLayout";
 import { sortedTableNumbers } from "@/lib/event/model";
@@ -29,7 +29,7 @@ import { buildPlaceCardDocument, type PlaceCardData } from "@/lib/docs/placeCard
 import { buildServicePlanDocument, SERVICE_COURSE_LABEL } from "@/lib/docs/servicePlan";
 import { fitTextToFont, fontCanDraw, titleFontFor } from "@/lib/pdf/fontText";
 import { formatTableLabel } from "@/lib/event/tableLabel";
-import type { PDFFont } from "pdf-lib";
+import type { PDFFont, PDFPage } from "pdf-lib";
 
 function mmToPt(mm: number): number {
   return (mm * 72) / 25.4;
@@ -2381,6 +2381,8 @@ export async function renderKitchenSummaryPdf(model: EventModel, theme: ThemeSet
   const eventName = theme.eventName.trim() || "Event";
   const titleFont = titleFontFor([eventName], title, bold);
 
+  drawKitchenOverview({ doc, data, font, bold, titleFont, theme, eventName, width, height, margin });
+
   let page = doc.addPage([width, height]);
   let y = height - margin;
   let pageNumber = 0;
@@ -2494,4 +2496,171 @@ export async function renderKitchenSummaryPdf(model: EventModel, theme: ThemeSet
   });
 
   return doc.save();
+}
+
+/**
+ * The kitchen overview that leads the summary: how many of each dish per course (left), and each
+ * dietary group with what it is eating on every course (right). Continues onto more pages if needed.
+ */
+function drawKitchenOverview(args: {
+  doc: PDFDocument;
+  data: KitchenSummaryData;
+  font: PDFFont;
+  bold: PDFFont;
+  titleFont: PDFFont;
+  theme: ThemeSettings;
+  eventName: string;
+  width: number;
+  height: number;
+  margin: number;
+}) {
+  const { doc, data, font, bold, titleFont, theme, eventName, width, height, margin } = args;
+  const ink = rgb(0.1, 0.12, 0.17);
+  const muted = rgb(0.36, 0.41, 0.5);
+  const lineColor = rgb(0.72, 0.76, 0.84);
+  const dietaryInk = rgb(0.66, 0.2, 0.06);
+  const headFill = rgb(0.95, 0.96, 0.98);
+  const accent = hexToRgb(theme.accentColor, "#acc1cb");
+  const onAccent = textOnColor(theme.accentColor, "#acc1cb");
+  const fullW = width - margin * 2;
+  const leftW = 232;
+  const gap = 22;
+  const rightX = margin + leftW + gap;
+  const rightW = fullW - leftW - gap;
+  const contentTop = height - margin - 34;
+
+  const pages: PDFPage[] = [];
+  const pageAt = (index: number) => {
+    while (pages.length <= index) {
+      const page = doc.addPage([width, height]);
+      const n = pages.length;
+      const heading = fitLine(
+        fitTextToFont(`${eventName} - Kitchen Overview${n > 0 ? " (cont.)" : ""}`, titleFont),
+        titleFont,
+        16,
+        fullW - 200,
+        10
+      );
+      page.drawText(heading.text, { x: margin, y: height - margin - 14, font: titleFont, size: heading.size, color: inkOnWhite(theme.primaryColor, "#012f43") });
+      const meta = [theme.eventDate?.trim(), `${data.totalGuests} guests`, `${data.rows.length} tables`, `${data.totalDietary} dietary`]
+        .filter(Boolean)
+        .join("  ·  ");
+      page.drawText(meta, { x: width - margin - font.widthOfTextAtSize(meta, 9.5), y: height - margin - 12, font, size: 9.5, color: muted });
+      pages.push(page);
+    }
+    return pages[index];
+  };
+  const sectionTitle = (page: PDFPage, text: string, x: number, y: number) => {
+    page.drawText(text, { x, y: y - 11, font: bold, size: 11, color: ink });
+    return y - 18;
+  };
+
+  // Left: dish totals by course.
+  {
+    let pageIndex = 0;
+    let page = pageAt(0);
+    let y = sectionTitle(page, "How many of each dish", margin, contentTop);
+    const rowH = 15;
+    const ensure = (needed: number) => {
+      if (y - needed >= margin) return;
+      pageIndex += 1;
+      page = pageAt(pageIndex);
+      y = contentTop;
+    };
+    data.courses.forEach((course) => {
+      ensure(18 + rowH * Math.min(2, course.dishes.length));
+      page.drawRectangle({ x: margin, y: y - 16, width: leftW, height: 16, color: accent });
+      page.drawText(course.courseLabel, { x: margin + 6, y: y - 11.5, font: bold, size: 9.5, color: onAccent });
+      const total = String(course.total);
+      page.drawText(total, { x: margin + leftW - 6 - bold.widthOfTextAtSize(total, 9.5), y: y - 11.5, font: bold, size: 9.5, color: onAccent });
+      y -= 16;
+      course.dishes.forEach((dish) => {
+        ensure(rowH);
+        const count = String(dish.total);
+        const countW = bold.widthOfTextAtSize(count, 11);
+        const note = dish.dietary ? fitTextToFont(`incl. ${dish.dietary} dietary`, font) : "";
+        const noteW = note ? font.widthOfTextAtSize(note, 7.5) + 8 : 0;
+        const name = fitLine(fitTextToFont(dish.dish, font), font, 9.5, leftW - 18 - countW - noteW, 7);
+        page.drawText(name.text, { x: margin + 6, y: y - 11, font, size: name.size, color: ink });
+        if (note) page.drawText(note, { x: margin + leftW - 12 - countW - noteW + 4, y: y - 10.5, font, size: 7.5, color: dietaryInk });
+        page.drawText(count, { x: margin + leftW - 6 - countW, y: y - 11.5, font: bold, size: 11, color: ink });
+        page.drawLine({ start: { x: margin, y: y - rowH }, end: { x: margin + leftW, y: y - rowH }, thickness: 0.5, color: lineColor });
+        y -= rowH;
+      });
+      y -= 8;
+    });
+  }
+
+  // Right: one row per dietary group, with its dish for each course.
+  {
+    let pageIndex = 0;
+    let page = pageAt(0);
+    let y = sectionTitle(page, "Dietary requirements by course", rightX, contentTop);
+    if (!data.dietaryGroups.length) {
+      page.drawText("No dietary requirements on this event.", { x: rightX, y: y - 12, font, size: 9.5, color: muted });
+      return;
+    }
+    // "Table 1, Table 2" reads as "1, 2" under a Tables heading; other names are kept whole.
+    const shortTables = (tables: string[]) =>
+      tables.every((t) => /^Table\s+\S/.test(t)) ? tables.map((t) => t.replace(/^Table\s+/, "")).join(", ") : tables.join(", ");
+    const reqW = 118;
+    const paxW = 30;
+    const tablesW = 78;
+    const courseW = (rightW - reqW - paxW - tablesW) / Math.max(1, data.courses.length);
+    const cols = [
+      { label: "Requirement", w: reqW },
+      { label: "Pax", w: paxW },
+      ...data.courses.map((c) => ({ label: c.courseLabel, w: courseW })),
+      { label: "Tables", w: tablesW }
+    ];
+    const colX = cols.map((_, i) => rightX + cols.slice(0, i).reduce((sum, c) => sum + c.w, 0));
+    const size = 8.5;
+    const lineH = 10.5;
+    const headH = 16;
+    const drawHead = () => {
+      page.drawRectangle({ x: rightX, y: y - headH, width: rightW, height: headH, color: headFill });
+      cols.forEach((col, i) => page.drawText(col.label, { x: colX[i] + 5, y: y - 11, font: bold, size: 8.5, color: ink }));
+      y -= headH;
+    };
+    drawHead();
+    data.dietaryGroups.forEach((group) => {
+      const cells = [
+        { lines: wrapTextToWidthClamped(fitTextToFont(group.requirement, bold), bold, size, reqW - 10), f: bold, color: dietaryInk },
+        { lines: [String(group.pax)], f: bold, color: ink },
+        ...data.courses.map((c) => {
+          const dishes = group.courses[c.course] ?? [];
+          const lines = dishes.length
+            ? dishes.flatMap((d) =>
+                wrapTextToWidthClamped(
+                  fitTextToFont(dishes.length === 1 && d.count === group.pax ? d.dish : `${d.count} x ${d.dish}`, font),
+                  font,
+                  size,
+                  courseW - 10
+                )
+              )
+            : ["-"];
+          return { lines, f: font, color: ink };
+        }),
+        { lines: wrapTextToWidthClamped(fitTextToFont(shortTables(group.tables), font), font, 7.5, tablesW - 10), f: font, color: muted }
+      ];
+      const rowH = Math.max(18, Math.max(...cells.map((c) => c.lines.length)) * lineH + 8);
+      if (y - rowH < margin) {
+        pageIndex += 1;
+        page = pageAt(pageIndex);
+        y = sectionTitle(page, "Dietary requirements by course (cont.)", rightX, contentTop);
+        drawHead();
+      }
+      cells.forEach((cell, i) => {
+        let ly = y - 5 - size;
+        const cellSize = i === cells.length - 1 ? 7.5 : size;
+        cell.lines.forEach((line) => {
+          page.drawText(line, { x: colX[i] + 5, y: ly, font: cell.f, size: cellSize, color: cell.color });
+          ly -= lineH;
+        });
+      });
+      page.drawLine({ start: { x: rightX, y: y - rowH }, end: { x: rightX + rightW, y: y - rowH }, thickness: 0.5, color: lineColor });
+      [...colX, rightX + rightW].forEach((x) => page.drawLine({ start: { x, y }, end: { x, y: y - rowH }, thickness: 0.5, color: lineColor }));
+      y -= rowH;
+    });
+  }
 }
