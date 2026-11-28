@@ -1,8 +1,11 @@
 "use client";
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlignCenterHorizontal,
+  Building2,
+  LibraryBig,
   AlignCenterVertical,
   AlignEndHorizontal,
   AlignEndVertical,
@@ -56,6 +59,7 @@ import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts }
 import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
 import { Inspector } from "@/app/floorplans/Inspector";
 import { PlanPanel } from "@/app/floorplans/PlanPanel";
+import { RoomThumb, templateSizeText } from "@/app/floorplans/RoomThumb";
 import { MenuButton, MenuItem, MenuLabel, MenuPanel, MenuSeparator } from "@/app/floorplans/Menu";
 import { buildMeasurements, type Measurement } from "@/lib/floorplans/measure";
 import { NumericInput } from "@/app/floorplans/NumericInput";
@@ -63,7 +67,16 @@ import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
 import { findFreeCentre, seatsBlocked, seatsOutsideRoom } from "@/lib/floorplans/collision";
-import { migrateRoomOutlines, roomFromWorldPoints } from "@/lib/floorplans/room";
+import { migrateRoomOutlines, pointInPolygon, roomFromWorldPoints, roomLocalBounds, roomWorldPoints } from "@/lib/floorplans/room";
+import {
+  ROOM_TEMPLATE_UNITS_PER_METRE,
+  applyRoomUpdate,
+  fixturesInside,
+  objectsFromTemplate,
+  pendingRoomUpdates,
+  templateContentFromPlan,
+  type RoomUpdate
+} from "@/lib/floorplans/roomTemplates";
 import { CHAIR_PRESETS, CHEVRON_MAX_ANGLE, ROW_SHAPES, seatingRowLengths, withSeatState, type RowShape, type SeatState } from "@/lib/floorplans/seating";
 import {
   GENERATED_SEATING_ID,
@@ -114,7 +127,9 @@ import type {
   FloorplanListItem,
   FloorplanPrintOptions,
   FloorplanRoomObject,
+  FloorplanRoomTemplate,
   FloorplanTableObject,
+  FloorplanVenue,
   GuestRecord,
   ProjectListItem
 } from "@/types";
@@ -132,7 +147,7 @@ const STYLE_OPTIONS: Array<{ value: TableStyle; label: string; title: string }> 
 
 /** Which add menu each preset lives in; the seating block and text label have their own places. */
 const TABLE_PRESET_IDS = ["round-6ft", "round-5ft", "rect-table", "top-table"];
-const ROOM_PRESET_IDS = ["stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
+const ROOM_PRESET_IDS = ["keep-clear", "stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
 
 const SHORTCUTS: Array<[string, string]> = [
   ["Drag", "Move (Shift-drag moves off the grid)"],
@@ -276,6 +291,20 @@ export default function FloorplansPage() {
   const [seatEdit, setSeatEdit] = useState<{ id: string; tool: "remove" | "wheelchair" } | null>(null);
   /** A short-lived note about something that just happened. */
   const [notice, setNotice] = useState("");
+  const router = useRouter();
+  // Venues and their room templates, for "Add a room from a template" and for spotting newer versions.
+  const [venues, setVenues] = useState<FloorplanVenue[]>([]);
+  const [templatePicker, setTemplatePicker] = useState<{ venueId: string; templateId: string | null } | null>(null);
+  const [saveTemplate, setSaveTemplate] = useState<{
+    roomId: string;
+    venueId: string;
+    newVenueName: string;
+    name: string;
+    /** Replace the template the room came from, rather than adding a new one. */
+    replace: boolean;
+    withFixtures: boolean;
+  } | null>(null);
+  const [templateBusy, setTemplateBusy] = useState(false);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 5000);
@@ -570,6 +599,176 @@ export default function FloorplansPage() {
     // Rooms go underneath everything, so what's in them stays clickable.
     commitObjects((list) => [room, ...list]);
     setSelectedIds([room.id]);
+  }
+
+  /* ---------- room templates ---------- */
+
+  const loadVenues = useCallback(async () => {
+    try {
+      const res = await fetch("/api/floorplans/venues");
+      if (!res.ok) return;
+      const payload = (await res.json()) as { venues?: FloorplanVenue[] };
+      setVenues(Array.isArray(payload.venues) ? payload.venues : []);
+    } catch {
+      /* venues are optional: the plan works without them */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadVenues();
+  }, [loadVenues]);
+
+  function openTemplatePicker() {
+    setRoomDraw(false);
+    const venue = venues.find((v) => v.rooms.length) ?? venues[0];
+    setTemplatePicker({ venueId: venue?.id ?? "", templateId: venue?.rooms[0]?.id ?? null });
+    // Pick up rooms saved in another tab since this page opened.
+    void loadVenues();
+  }
+
+  function addRoomFromTemplate(venue: FloorplanVenue, template: FloorplanRoomTemplate) {
+    setTemplatePicker(null);
+    const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+    const k = upm / ROOM_TEMPLATE_UNITS_PER_METRE;
+    const b = roomLocalBounds(template.room);
+    const centre = viewCentre();
+    const g = draft.canvas.gridSize;
+    const origin = {
+      x: Math.round((centre.x - ((b.minX + b.maxX) / 2) * k) / g) * g,
+      y: Math.round((centre.y - ((b.minY + b.maxY) / 2) * k) / g) * g
+    };
+    const wasEmpty = !draftRef.current.objects.length;
+    const { room, fixtures } = objectsFromTemplate(venue, template, upm, origin);
+    // The room and its fixtures go underneath everything, so what's in them stays clickable.
+    commitObjects((list) => [room, ...fixtures, ...list]);
+    setSelectedIds([room.id]);
+    if (wasEmpty) fitSoon();
+    // The venue's logo comes with its room, unless the plan already has one.
+    const logo = venue.logoKey ? venueLogoLibrary.items.find((item) => item.key === venue.logoKey) : undefined;
+    if (logo && !draftRef.current.themeSnapshot.venueLogoDataUrl) void applyLogoFromLibrary(logo, "venueLogoDataUrl");
+  }
+
+  const roomUpdates = useMemo(() => pendingRoomUpdates(objects, venues), [objects, venues]);
+
+  function updateRoom(update: RoomUpdate) {
+    const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+    const next = applyRoomUpdate(draftRef.current.objects, update, upm);
+    const room = next.find((o): o is FloorplanRoomObject => o.id === update.room.id && o.type === "room");
+    commitObjects(() => next);
+    if (!room) return;
+    // Point out tables and seating that the new walls or fixtures now get in the way of.
+    const walls = roomWorldPoints(room);
+    const fixtures = next.filter((o) => o.roomId === room.id && o.type !== "text").map(objectBodyBounds);
+    const overlaps = (a: Bounds, b: Bounds) => a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+    const inTheWay = next.filter((o) => {
+      if (o.type !== "table" && o.type !== "seating") return false;
+      const box = objectBox(o);
+      const body = objectBodyBounds(o);
+      const wasInside = pointInPolygon({ x: box.cx, y: box.cy }, roomWorldPoints(update.room));
+      return (wasInside && !pointInPolygon({ x: box.cx, y: box.cy }, walls)) || fixtures.some((f) => overlaps(body, f));
+    });
+    const name = room.name?.trim() || update.template.name;
+    if (inTheWay.length) {
+      setSelectedIds(inTheWay.map((o) => o.id));
+      setNotice(
+        `${name} updated to version ${update.template.version}. ${inTheWay.length} table${inTheWay.length === 1 ? " or seating block is" : "s or seating blocks are"} now outside the walls or on a fixture, and selected.`
+      );
+    } else {
+      setSelectedIds([room.id]);
+      setNotice(`${name} updated to version ${update.template.version}.`);
+    }
+  }
+
+  function skipRoomUpdate(update: RoomUpdate) {
+    commitObjects((list) =>
+      list.map((o) =>
+        o.id === update.room.id && o.type === "room" && o.source ? { ...o, source: { ...o.source, skippedVersion: update.template.version } } : o
+      )
+    );
+  }
+
+  function roomSourceText(room: FloorplanRoomObject): string | null {
+    if (!room.source) return null;
+    const venue = venues.find((v) => v.id === room.source?.venueId);
+    const template = venue?.rooms.find((r) => r.id === room.source?.templateId);
+    if (!venue || !template) return "a room template that has since been deleted";
+    return `${venue.name} › ${template.name}, version ${room.source.version}`;
+  }
+
+  function openSaveTemplate(room: FloorplanRoomObject) {
+    const venue = venues.find((v) => v.id === room.source?.venueId);
+    const template = venue?.rooms.find((r) => r.id === room.source?.templateId);
+    setSaveTemplate({
+      roomId: room.id,
+      venueId: venue?.id ?? venues[0]?.id ?? "new",
+      newVenueName: "",
+      name: template?.name ?? room.name?.trim() ?? "",
+      replace: Boolean(template),
+      withFixtures: true
+    });
+  }
+
+  async function submitSaveTemplate() {
+    const form = saveTemplate;
+    const room = draftRef.current.objects.find((o): o is FloorplanRoomObject => o.id === form?.roomId && o.type === "room");
+    if (!form || !room) return;
+    const name = form.name.trim();
+    if (!name) return;
+    setTemplateBusy(true);
+    setError("");
+    try {
+      let venue = venues.find((v) => v.id === form.venueId);
+      if (!venue) {
+        const venueName = form.newVenueName.trim();
+        if (!venueName) throw new Error("Name the new venue first.");
+        const res = await fetch("/api/floorplans/venues", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: crypto.randomUUID(), name: venueName, logoKey: draftRef.current.selectedVenueLogoKey ?? null, updatedAt: new Date().toISOString(), rooms: [] })
+        });
+        if (!res.ok) throw new Error(await readResponseError(res, "Could not add the venue."));
+        venue = ((await res.json()) as { venue: FloorplanVenue }).venue;
+      }
+      const existing = form.replace && room.source?.venueId === venue.id ? venue.rooms.find((r) => r.id === room.source?.templateId) : undefined;
+      const fixtures = form.withFixtures ? fixturesInside(room, draftRef.current.objects) : [];
+      const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+      const template: FloorplanRoomTemplate = {
+        id: existing?.id ?? crypto.randomUUID(),
+        name,
+        version: existing?.version ?? 1,
+        updatedAt: new Date().toISOString(),
+        notes: existing?.notes,
+        ...templateContentFromPlan({ ...room, name: room.name?.trim() || name }, fixtures, upm)
+      };
+      const res = await fetch(`/api/floorplans/venues/${encodeURIComponent(venue.id)}/rooms`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(template)
+      });
+      if (!res.ok) throw new Error(await readResponseError(res, "Could not save the room template."));
+      const savedVenue = ((await res.json()) as { venue: FloorplanVenue }).venue;
+      const saved = savedVenue.rooms.find((r) => r.id === template.id) ?? template;
+      setVenues((list) => [...list.filter((v) => v.id !== savedVenue.id), savedVenue].sort((a, b) => a.name.localeCompare(b.name)));
+      // The plan's room now comes from this template, and the shapes saved with it go with the room.
+      const fixtureIds = new Set(fixtures.map((f) => f.id));
+      commitObjects((list) =>
+        list.map((o) => {
+          if (o.id === room.id && o.type === "room") return { ...o, source: { venueId: savedVenue.id, templateId: saved.id, version: saved.version } };
+          if (fixtureIds.has(o.id)) return { ...o, roomId: room.id };
+          return o;
+        })
+      );
+      setSaveTemplate(null);
+      setNotice(
+        existing && saved.version === existing.version
+          ? `“${saved.name}” is the same as the room in ${savedVenue.name}, so it stays at version ${saved.version}.`
+          : `Saved “${saved.name}” to ${savedVenue.name}${existing ? ` as version ${saved.version}. Other plans using it will offer the update` : ""}.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the room template.");
+    } finally {
+      setTemplateBusy(false);
+    }
   }
 
   function onDrawArea(b: Bounds) {
@@ -1291,7 +1490,7 @@ export default function FloorplansPage() {
   // Keyboard shortcuts. The handler is re-bound each render so it always sees fresh state.
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (event: KeyboardEvent) => {
-    if (listOpen || printOpen || settingsOpen || autoOpen || generatePrompt || fillPrompt) return;
+    if (listOpen || printOpen || settingsOpen || autoOpen || generatePrompt || fillPrompt || templatePicker || saveTemplate) return;
     const meta = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (meta && key === "s") {
@@ -1518,6 +1717,10 @@ export default function FloorplansPage() {
                 onSelect={() => loadDocument(copyForDuplicate(draftRef.current), true)}
               >
                 Duplicate floorplan
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem icon={<Building2 size={15} />} hint="Rooms you can start a plan from" onSelect={() => router.push("/floorplans/rooms")}>
+                Venues & rooms
               </MenuItem>
               <MenuSeparator />
               <MenuItem icon={<Trash2 size={15} />} danger disabled={busy} onSelect={() => void deleteCurrent()}>
@@ -2127,6 +2330,182 @@ export default function FloorplansPage() {
         </Modal>
       ) : null}
 
+      {roomUpdates.map((update) => (
+        <Callout key={update.room.id} tone="info" className="fp-recovered">
+          <div className="fp-update-banner">
+            <span>
+              {update.room.name?.trim() || update.template.name} has a newer version in {update.venue.name} (version {update.room.source?.version} → {update.template.version}).
+              {update.room.locked ? "" : " Updating replaces its walls, doors and fixtures; tables and seating stay where they are."}
+            </span>
+            <button type="button" className="btn-sm" onClick={() => updateRoom(update)}>
+              Update room
+            </button>
+            <button type="button" className="btn-sm btn-ghost" onClick={() => skipRoomUpdate(update)}>
+              Keep this version
+            </button>
+          </div>
+        </Callout>
+      ))}
+
+      {templatePicker ? (() => {
+        const venue = venues.find((v) => v.id === templatePicker.venueId);
+        const template = venue?.rooms.find((r) => r.id === templatePicker.templateId);
+        return (
+          <Modal
+            title="Add a room from a template"
+            onClose={() => setTemplatePicker(null)}
+            footer={
+              <>
+                <button type="button" className="btn-ghost" onClick={() => router.push("/floorplans/rooms")}>
+                  <Building2 size={15} aria-hidden /> Venues & rooms
+                </button>
+                <span className="spacer" />
+                <button type="button" onClick={() => setTemplatePicker(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={!venue || !template}
+                  onClick={() => venue && template && addRoomFromTemplate(venue, template)}
+                >
+                  Add room
+                </button>
+              </>
+            }
+          >
+            {venues.length === 0 ? (
+              <p className="field-hint" style={{ margin: 0 }}>
+                No rooms saved yet. Set them up in Venues & rooms, or select a room on a plan and use Save as room template.
+              </p>
+            ) : (
+              <div className="stack">
+                <Field label="Venue">
+                  <select
+                    value={templatePicker.venueId}
+                    onChange={(e) => {
+                      const v = venues.find((x) => x.id === e.target.value);
+                      setTemplatePicker({ venueId: e.target.value, templateId: v?.rooms[0]?.id ?? null });
+                    }}
+                  >
+                    {venues.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.rooms.length} room{v.rooms.length === 1 ? "" : "s"})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {venue && venue.rooms.length ? (
+                  <ul className="room-pick-list" aria-label="Rooms">
+                    {venue.rooms.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          aria-pressed={r.id === templatePicker.templateId}
+                          onClick={() => setTemplatePicker({ ...templatePicker, templateId: r.id })}
+                          onDoubleClick={() => addRoomFromTemplate(venue, r)}
+                        >
+                          <RoomThumb room={r.room} fixtures={r.fixtures} size={64} />
+                          <span className="room-card-text">
+                            <strong>{r.name}</strong>
+                            <span className="field-hint">{templateSizeText(r)}</span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    {venue?.name ?? "This venue"} has no rooms yet.
+                  </p>
+                )}
+                {!unitsPerMetre ? (
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    This plan has no scale set, so the room is added at {DEFAULT_UNITS_PER_METRE} units per metre.
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </Modal>
+        );
+      })() : null}
+
+      {saveTemplate ? (() => {
+        const room = objects.find((o): o is FloorplanRoomObject => o.id === saveTemplate.roomId && o.type === "room");
+        const fromVenue = room?.source ? venues.find((v) => v.id === room.source?.venueId) : undefined;
+        const fromTemplate = fromVenue?.rooms.find((r) => r.id === room?.source?.templateId);
+        const canReplace = Boolean(fromTemplate) && saveTemplate.venueId === fromVenue?.id;
+        const fixtureCount = room ? fixturesInside(room, objects).length : 0;
+        const isNewVenue = !venues.some((v) => v.id === saveTemplate.venueId);
+        const ready = saveTemplate.name.trim() && (!isNewVenue || saveTemplate.newVenueName.trim());
+        return (
+          <Modal
+            title={canReplace && saveTemplate.replace ? "Save to room template" : "Save as room template"}
+            size="sm"
+            onClose={() => setSaveTemplate(null)}
+            footer={
+              <>
+                <button type="button" onClick={() => setSaveTemplate(null)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn-primary" disabled={templateBusy || !ready} onClick={() => void submitSaveTemplate()}>
+                  {templateBusy ? "Saving…" : "Save"}
+                </button>
+              </>
+            }
+          >
+            <div className="stack">
+              <Field label="Venue">
+                <select value={saveTemplate.venueId} onChange={(e) => setSaveTemplate({ ...saveTemplate, venueId: e.target.value })}>
+                  {venues.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                  <option value="new">New venue…</option>
+                </select>
+              </Field>
+              {isNewVenue ? (
+                <Field label="New venue name">
+                  <input
+                    autoFocus
+                    value={saveTemplate.newVenueName}
+                    placeholder="e.g. Hartwell House"
+                    onChange={(e) => setSaveTemplate({ ...saveTemplate, newVenueName: e.target.value })}
+                  />
+                </Field>
+              ) : null}
+              {canReplace ? (
+                <Segmented
+                  aria-label="Save as"
+                  value={saveTemplate.replace ? "replace" : "new"}
+                  options={[
+                    { value: "replace", label: `Update “${fromTemplate?.name}”` },
+                    { value: "new", label: "Save as a new room" }
+                  ]}
+                  onChange={(v) => setSaveTemplate({ ...saveTemplate, replace: v === "replace" })}
+                />
+              ) : null}
+              <Field label="Room name">
+                <input value={saveTemplate.name} placeholder="e.g. The Orangery" onChange={(e) => setSaveTemplate({ ...saveTemplate, name: e.target.value })} />
+              </Field>
+              <Switch
+                label={`Include the ${fixtureCount} shape${fixtureCount === 1 ? "" : "s"} inside the room`}
+                hint="Pillars, bars, stages, keep-clear zones and labels. Tables and seating stay with the plan."
+                checked={saveTemplate.withFixtures && fixtureCount > 0}
+                disabled={!fixtureCount}
+                onChange={(withFixtures) => setSaveTemplate({ ...saveTemplate, withFixtures })}
+              />
+              {canReplace && saveTemplate.replace ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Other plans using this room will offer to update to the new version.
+                </p>
+              ) : null}
+            </div>
+          </Modal>
+        );
+      })() : null}
+
       <div className="editor">
         <section className="card editor-canvas-card">
           <div className="toolbar" role="toolbar" aria-label="Canvas tools">
@@ -2171,12 +2550,19 @@ export default function FloorplansPage() {
                 </MenuItem>
               </MenuButton>
               <MenuButton className="toolbar-btn" icon={<Shapes size={15} aria-hidden />} label="Room" title="Draw the room and add room features">
+                <MenuItem icon={<LibraryBig size={15} />} hint="A saved room, with its doors and fixtures" onSelect={openTemplatePicker}>
+                  Add a room from a template…
+                </MenuItem>
                 <MenuItem icon={<PencilRuler size={15} />} hint="Click round the walls corner by corner" shortcut="R" onSelect={startRoomDraw}>
                   Draw a room…
                 </MenuItem>
                 {presetItem("room", <Square size={15} />, "18 × 12 m, then drag its corners")}
                 <MenuSeparator />
                 {ROOM_PRESET_IDS.map((id) => presetItem(id))}
+                <MenuSeparator />
+                <MenuItem icon={<Building2 size={15} />} onSelect={() => router.push("/floorplans/rooms")}>
+                  Venues & rooms…
+                </MenuItem>
               </MenuButton>
               <button type="button" className="toolbar-btn" onClick={() => addPreset("text")} title="Add a text label">
                 <Type size={15} aria-hidden /> Text
@@ -2438,6 +2824,9 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
               onFillShape={fillSelectedShape}
               openingId={openingId}
               onOpeningId={setOpeningId}
+              roomTemplate={
+                primary.type === "room" ? { source: roomSourceText(primary), onSave: () => openSaveTemplate(primary) } : undefined
+              }
               onSeatEdit={(next) => setSeatEdit(next && primary ? { id: primary.id, tool: next } : null)}
               onDelete={deleteSelection}
               onOrder={reorderSelected}
@@ -2487,6 +2876,9 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
               <div className="stack">
                 <button type="button" className="btn-primary" onClick={() => setAutoOpen(true)}>
                   <WandSparkles size={15} aria-hidden /> Auto layout…
+                </button>
+                <button type="button" onClick={openTemplatePicker}>
+                  <LibraryBig size={15} aria-hidden /> Add a room from a template…
                 </button>
                 <button type="button" onClick={startRoomDraw}>
                   <PencilRuler size={15} aria-hidden /> Draw the room

@@ -648,6 +648,43 @@ export async function renderFloorplanDocumentPdf(
       continue;
     }
 
+    if (item.type === "rect" && item.keepClear) {
+      // Keep-clear zone: pale hatching inside a dashed edge.
+      const zone = rgb(0.76, 0.25, 0.05);
+      const local = (lx: number, ly: number) => {
+        const p = rotatePoint({ x: lx, y: ly }, box.rotation);
+        return { x: toX(box.cx + p.x), y: toY(box.cy + p.y) };
+      };
+      const corners = [
+        local(-box.w / 2, -box.h / 2),
+        local(box.w / 2, -box.h / 2),
+        local(box.w / 2, box.h / 2),
+        local(-box.w / 2, box.h / 2)
+      ];
+      drawPolygon(page, corners, { color: rgb(0.99, 0.94, 0.92), borderColor: zone, borderWidth: 0 });
+      // Hatching: 45° lines across the zone, clipped to it by working in the zone's own frame.
+      const step = Math.max(6 / scale, Math.min(box.w, box.h) / 12);
+      for (let t = -box.h; t < box.w; t += step) {
+        const x0 = -box.w / 2 + Math.max(0, t);
+        const y0 = box.h / 2 - Math.max(0, -t);
+        const len = Math.min(box.w / 2 - x0, y0 + box.h / 2);
+        if (len <= 0) continue;
+        page.drawLine({ start: local(x0, y0), end: local(x0 + len, y0 - len), thickness: 0.4, color: zone, opacity: 0.45 });
+      }
+      const d = corners.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(3)} ${(-p.y).toFixed(3)}`).join(" ") + " Z";
+      page.drawSvgPath(d, { x: 0, y: 0, borderColor: zone, borderWidth: Math.max(0.6, strokeWidth), borderDashArray: [3, 2] });
+      const label = item.label?.trim();
+      if (label) {
+        const sideways = Math.abs(Math.sin((box.rotation * Math.PI) / 180)) > 0.7;
+        const usable = (sideways ? box.h : box.w) * scale;
+        const tall = (sideways ? box.w : box.h) * scale;
+        const maxSize = Math.max(7, Math.min(14, tall * 0.35));
+        const size = fitTextSingleLine(bodyBold, label, usable - 6, maxSize, 5).size;
+        drawCentered(page, bodyBold, label, cx, cy - size * 0.35, usable - 6, maxSize, 5, zone);
+      }
+      continue;
+    }
+
     if (item.type === "rect" || item.type === "circle") {
       const fill = parseFill(item.fill, item.type === "rect" ? DEFAULT_FILLS.rect : DEFAULT_FILLS.circle);
       const style = { ...(fill ? { color: fill } : {}), borderColor: rgb(0.5, 0.57, 0.66), borderWidth: strokeWidth };

@@ -158,6 +158,14 @@ function snapTo(value: number, step: number): number {
   return Math.round(value / step) * step;
 }
 
+/** A locked room, or a fixture (pillar, bar, keep-clear zone…) of one. */
+function isLockedObject(o: FloorplanCanvasObject, objects: FloorplanCanvasObject[]): boolean {
+  if (o.type === "room") return Boolean(o.locked);
+  if (!o.roomId) return false;
+  const room = objects.find((r) => r.id === o.roomId);
+  return room?.type === "room" && Boolean(room.locked);
+}
+
 /** Screen pixels within which a corner snaps into line with its neighbours, or closes the room. */
 const CORNER_SNAP_PX = 8;
 
@@ -750,8 +758,8 @@ export function FloorplanCanvas(props: Props) {
     }
     const start = new Map<string, FloorplanCanvasObject>();
     p.objects.forEach((o) => {
-      // A locked room stays put, even when it's dragged along with other things.
-      if (ids.includes(o.id) && !(o.type === "room" && o.locked)) start.set(o.id, o);
+      // A locked room, and its fixtures, stay put, even when dragged along with other things.
+      if (ids.includes(o.id) && !isLockedObject(o, p.objects)) start.set(o.id, o);
     });
     if (!start.size) return;
     interaction.current = {
@@ -1033,13 +1041,14 @@ export function FloorplanCanvas(props: Props) {
       const counter = box.rotation ? { transform: `rotate(${-box.rotation}deg)` } : undefined;
       // An outline-only rectangle (e.g. the room) is grabbed by its edges, so the floor inside stays
       // free for drawing a selection box.
-      const outlineOnly = obj.type === "rect" && obj.fill === "none";
+      const keepClear = obj.type === "rect" && Boolean(obj.keepClear);
+      const outlineOnly = obj.type === "rect" && obj.fill === "none" && !keepClear;
       const edge = 8 * inv;
       return (
         <button
           key={obj.id}
           {...common}
-          className={`${common.className}${outlineOnly ? " fp-obj--outline" : ""}`}
+          className={`${common.className}${outlineOnly ? " fp-obj--outline" : ""}${keepClear ? " fp-obj--keep-clear" : ""}`}
           aria-label={obj.label || (obj.type === "rect" ? "Rectangle" : "Circle")}
           style={wrapper}
         >
@@ -1215,12 +1224,14 @@ export function FloorplanCanvas(props: Props) {
     if (single?.type === "room") return renderRoomOverlay(single);
     if (single) {
       const box = objectBox(single);
-      const resizable = single.type !== "text";
+      const locked = isLockedObject(single, objects);
+      const resizable = single.type !== "text" && !locked;
       const rotatable =
-        single.type === "rect" ||
+        !locked &&
+        (single.type === "rect" ||
         single.type === "text" ||
         single.type === "seating" ||
-        (single.type === "table" && (tableShape(single) === "rect" || (single.seatSpan ?? 360) < 360));
+        (single.type === "table" && (tableShape(single) === "rect" || (single.seatSpan ?? 360) < 360)));
       const corners: Array<{ sx: -1 | 1; sy: -1 | 1 }> = [
         { sx: -1, sy: -1 },
         { sx: 1, sy: -1 },

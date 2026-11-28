@@ -1,6 +1,6 @@
 "use client";
 
-import { BringToFront, SendToBack, SplitSquareHorizontal, Trash2 } from "lucide-react";
+import { BookmarkPlus, BringToFront, SendToBack, SplitSquareHorizontal, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Field, Section, Segmented, Switch } from "@/app/components/ui";
 import { NumericInput } from "@/app/floorplans/NumericInput";
@@ -87,6 +87,8 @@ interface Props {
   /** The door or window being edited in the selected room. */
   openingId?: string | null;
   onOpeningId?: (id: string | null) => void;
+  /** Where the selected room came from ("Hartwell House › The Orangery, version 3"), and saving it as a template. */
+  roomTemplate?: { source: string | null; onSave: () => void };
 }
 
 function Swatches({
@@ -279,7 +281,8 @@ export function Inspector({
   onClearUnderObjects,
   onFillShape,
   openingId,
-  onOpeningId
+  onOpeningId,
+  roomTemplate
 }: Props) {
   const patchTable = (fn: (t: FloorplanTableObject) => FloorplanTableObject, key?: string) =>
     onPatch((o) => (o.type === "table" ? fn(o) : o), key);
@@ -333,6 +336,7 @@ export function Inspector({
             onFill={selectionCount === 1 ? onFillShape : undefined}
             openingId={selectionCount === 1 ? (openingId ?? null) : null}
             onOpeningId={onOpeningId}
+            roomTemplate={selectionCount === 1 ? roomTemplate : undefined}
           />
         ) : null}
 
@@ -386,6 +390,16 @@ export function Inspector({
                 Fill with seating…
               </button>
             ) : null}
+            <Switch
+              label="Keep clear"
+              hint="Drawn hatched. Tables, seating and Fill with seating stay off it, e.g. a fire point or service route."
+              checked={Boolean(primary.keepClear)}
+              onChange={(keepClear) =>
+                onPatch((o) =>
+                  o.type === "rect" ? { ...o, keepClear: keepClear || undefined, fill: keepClear ? "none" : o.fill === "none" ? undefined : o.fill } : o
+                )
+              }
+            />
             <Switch
               label="Exit"
               hint="Counts towards total exit width (its longer side) in the plan measurements."
@@ -1056,7 +1070,8 @@ function RoomFields({
   patchRoom,
   onFill,
   openingId,
-  onOpeningId
+  onOpeningId,
+  roomTemplate
 }: {
   room: FloorplanRoomObject;
   unitsPerMetre: number | null;
@@ -1065,6 +1080,7 @@ function RoomFields({
   onFill?: () => void;
   openingId: string | null;
   onOpeningId?: (id: string | null) => void;
+  roomTemplate?: { source: string | null; onSave: () => void };
 }) {
   const lengths = wallLengths(room.points);
   const upm = unitsPerMetre;
@@ -1086,6 +1102,14 @@ function RoomFields({
           : `${room.points.length} walls`}
         {upm && totalGuests > 0 ? ` · ${(area / (upm * upm) / totalGuests).toFixed(2)} m² per guest` : ""}
       </p>
+      {roomTemplate ? (
+        <div className="fp-room-source">
+          <span className="field-hint">{roomTemplate.source ? `From ${roomTemplate.source}` : "Not saved as a room template"}</span>
+          <button type="button" className="btn-sm" onClick={roomTemplate.onSave}>
+            <BookmarkPlus size={14} aria-hidden /> {roomTemplate.source ? "Save to template…" : "Save as room template…"}
+          </button>
+        </div>
+      ) : null}
       <Switch
         label="Locked"
         hint="A locked room can't be moved or reshaped on the plan, so it stays put while you arrange furniture."

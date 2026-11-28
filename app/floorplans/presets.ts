@@ -156,6 +156,15 @@ export const OBJECT_PRESETS: ObjectPreset[] = [
     })
   },
   {
+    id: "keep-clear",
+    label: "Keep-clear zone",
+    behind: true,
+    build: (c, _existing, upm) => {
+      const size = Math.round(2 * upm);
+      return { id: crypto.randomUUID(), type: "rect", x: c.x - size / 2, y: c.y - size / 2, width: size, height: size, label: "Keep clear", fill: "none", keepClear: true };
+    }
+  },
+  {
     id: "room",
     label: "Rectangular room",
     behind: true,

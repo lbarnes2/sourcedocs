@@ -8,6 +8,8 @@ export interface FloorplanBaseObject {
   type: FloorplanObjectType;
   x: number;
   y: number;
+  /** A fixture of this room (pillar, built-in bar, keep-clear zone…): it came with the room's template. */
+  roomId?: string;
 }
 
 export type FloorplanTableShape = "round" | "rect";
@@ -49,6 +51,8 @@ export interface FloorplanRectObject extends FloorplanBaseObject {
   fill?: string;
   /** An exit (fire exit or main doors); its longer side counts towards total exit width. */
   exit?: boolean;
+  /** A keep-clear zone: drawn hatched, and tables, seating and the fill tools stay off it. */
+  keepClear?: boolean;
 }
 
 export interface FloorplanCircleObject extends FloorplanBaseObject {
@@ -116,6 +120,43 @@ export interface FloorplanRoomObject extends FloorplanBaseObject {
   locked?: boolean;
   /** Doors, windows and openings in the walls. */
   openings?: FloorplanOpening[];
+  /** The room template this room was copied from. */
+  source?: FloorplanRoomSource;
+}
+
+/** Where a room on a plan came from, so the plan can offer to update it when the template changes. */
+export interface FloorplanRoomSource {
+  venueId: string;
+  templateId: string;
+  /** The template's version when it was copied in (or last updated). */
+  version: number;
+  /** A newer version the plan chose to keep the old room over. */
+  skippedVersion?: number;
+}
+
+/**
+ * A room kept for reuse: its walls, doors and windows, and its fixtures (pillars, built-in bars and
+ * stages, exits, keep-clear zones). Stored at `ROOM_TEMPLATE_UNITS_PER_METRE`, with the room's
+ * origin at 0,0 and fixtures placed relative to it.
+ */
+export interface FloorplanRoomTemplate {
+  id: string;
+  name: string;
+  /** Goes up by one each time the room or its fixtures change. */
+  version: number;
+  updatedAt: string;
+  notes?: string;
+  room: FloorplanRoomObject;
+  fixtures: FloorplanCanvasObject[];
+}
+
+export interface FloorplanVenue {
+  id: string;
+  name: string;
+  /** Venue logo (logo library key) to put on plans that use this venue's rooms. */
+  logoKey?: string | null;
+  updatedAt: string;
+  rooms: FloorplanRoomTemplate[];
 }
 
 export type FloorplanOpeningKind = "door" | "double-door" | "window" | "opening";

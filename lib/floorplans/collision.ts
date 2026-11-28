@@ -126,6 +126,7 @@ export function objectsCollide(a: FloorplanCanvasObject, b: FloorplanCanvasObjec
 export function isObstacle(obj: FloorplanCanvasObject): boolean {
   if (obj.type === "room") return doorSwingBoxes(obj).length > 0;
   if (obj.type === "text" || isFurnishing(obj)) return false;
+  if (obj.type === "rect" && obj.keepClear) return true;
   return obj.fill !== "none";
 }
 
@@ -143,8 +144,8 @@ function area(b: Bounds): number {
  * not something the table is in the way of.
  */
 export function isFloorAreaFor(obstacle: FloorplanCanvasObject, table: FloorplanCanvasObject): boolean {
-  // A room's only obstacles are its door swings, which always count.
-  if (obstacle.type === "room") return false;
+  // A room's only obstacles are its door swings, and a keep-clear zone is to be kept clear: both always count.
+  if (obstacle.type === "room" || (obstacle.type === "rect" && obstacle.keepClear)) return false;
   const o = objectPrintBounds(obstacle);
   const t = objectPrintBounds(table);
   const contains = o.minX <= t.minX && o.minY <= t.minY && o.maxX >= t.maxX && o.maxY >= t.maxY;
