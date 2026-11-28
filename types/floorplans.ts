@@ -240,6 +240,16 @@ export interface FloorplanTheatreSettings {
   chevronAngle?: number;
 }
 
+/** "Fill an area" with banquet tables; table style, size, seats, layout and numbering share the auto layout fields. */
+export interface FloorplanBanquetFillSettings {
+  /** Clear floor between neighbouring tables' chairs, chair back to chair back. */
+  gangwayM?: number;
+  /** Stop at this many tables; missing or null for as many as fit. */
+  maxTables?: number | null;
+  /** Cabaret tables: which way the open side of the table faces (towards the stage). */
+  facing?: "up" | "down" | "left" | "right";
+}
+
 /** The user's own figures to compare the plan's measurements against (metres, seats). Nothing is a rule. */
 export interface FloorplanLimits {
   minAisleM?: number | null;
@@ -273,6 +283,9 @@ export interface FloorplanAutoLayoutSettings {
   /** Which generator the Auto layout form shows. */
   generator?: "tables" | "theatre";
   theatre?: FloorplanTheatreSettings;
+  banquet?: FloorplanBanquetFillSettings;
+  /** Which kind of fill the Fill an area dialog last made. */
+  fillKind?: "theatre" | "banquet";
 }
 
 export interface FloorplanDocument {

@@ -171,7 +171,15 @@ export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
   topTable: z.boolean().optional(),
   useGuestNumbers: z.boolean().optional(),
   generator: z.enum(["tables", "theatre"]).optional(),
-  theatre: theatreSettingsSchema.optional()
+  theatre: theatreSettingsSchema.optional(),
+  banquet: z
+    .object({
+      gangwayM: z.number().min(0).max(20).optional(),
+      maxTables: z.number().int().min(1).max(400).nullable().optional(),
+      facing: z.enum(["up", "down", "left", "right"]).optional()
+    })
+    .optional(),
+  fillKind: z.enum(["theatre", "banquet"]).optional()
 });
 
 export const floorplanDocumentSchema = z.object({

@@ -66,7 +66,8 @@ import { NumericInput } from "@/app/floorplans/NumericInput";
 import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
-import { findFreeCentre, seatsBlocked, seatsOutsideRoom } from "@/lib/floorplans/collision";
+import { findFreeCentre, seatsBlocked, seatsOnWalls, seatsOutsideRoom } from "@/lib/floorplans/collision";
+import { BANQUET_DEFAULTS, fillAreaWithTables, type BanquetFillSettings } from "@/lib/floorplans/banquet";
 import { migrateRoomOutlines, pointInPolygon, roomFromWorldPoints, roomLocalBounds, roomWorldPoints } from "@/lib/floorplans/room";
 import {
   ROOM_TEMPLATE_UNITS_PER_METRE,
@@ -198,6 +199,7 @@ type Library = { loaded: boolean; configured: boolean; items: Array<{ key: strin
 const EMPTY_LIBRARY: Library = { loaded: false, configured: false, items: [] };
 
 type Autosave = { doc: FloorplanDocument; at: string };
+type FillKind = "theatre" | "banquet";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -247,7 +249,10 @@ export default function FloorplansPage() {
     facing: TheatreFacing;
     /** The shape being filled, which isn't in the way of its own seating. */
     shapeId?: string;
+    kind: FillKind;
   } | null>(null);
+  // Which kind of fill a rectangle drawn with the fill tool opens with (the menu it was started from).
+  const nextFillKindRef = useRef<FillKind | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showFrame, setShowFrame] = useState(true);
@@ -579,9 +584,15 @@ export default function FloorplansPage() {
     return v.y < 0 ? "up" : "down";
   }
 
-  function openFill(area: FillArea, marginM: number, shapeId?: string) {
+  function openFill(area: FillArea, marginM: number, shapeId?: string, kind?: FillKind) {
     setDrawMode(false);
-    setFillPrompt({ area, marginM, facing: facingFor(area), shapeId });
+    setFillPrompt({ area, marginM, facing: facingFor(area), shapeId, kind: kind ?? draft.autoLayout.fillKind ?? "theatre" });
+  }
+
+  function startFillDraw(kind: FillKind) {
+    nextFillKindRef.current = kind;
+    setDrawMode(true);
+    setPanTool(false);
   }
 
   function startRoomDraw() {
@@ -775,7 +786,9 @@ export default function FloorplansPage() {
     setDrawMode(false);
     const minSize = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.5;
     if (b.maxX - b.minX < minSize || b.maxY - b.minY < minSize) return;
-    openFill({ cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, w: b.maxX - b.minX, h: b.maxY - b.minY, rotation: 0 }, 0);
+    const kind = nextFillKindRef.current ?? undefined;
+    nextFillKindRef.current = null;
+    openFill({ cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, w: b.maxX - b.minX, h: b.maxY - b.minY, rotation: 0 }, 0, undefined, kind);
   }
 
   function fillSelectedShape() {
@@ -790,10 +803,31 @@ export default function FloorplansPage() {
     if (!blocks.length) return;
     commit((doc) => ({
       ...doc,
-      autoLayout: { ...doc.autoLayout, theatre: { ...doc.autoLayout.theatre, ...patch } },
+      autoLayout: { ...doc.autoLayout, fillKind: "theatre", theatre: { ...doc.autoLayout.theatre, ...patch } },
       objects: [...doc.objects, ...blocks]
     }));
     setSelectedIds(blocks.map((b) => b.id));
+  }
+
+  function runFillTables(tables: FloorplanTableObject[], settings: BanquetFillSettings) {
+    setFillPrompt(null);
+    if (!tables.length) return;
+    commit((doc) => ({
+      ...doc,
+      autoLayout: {
+        ...doc.autoLayout,
+        fillKind: "banquet",
+        tableStyle: settings.style,
+        roundSize: settings.roundSize,
+        seatsPerTable: settings.seats,
+        tableLayout: settings.layout,
+        numbering: settings.numbering,
+        startCorner: settings.startCorner,
+        banquet: { gangwayM: settings.gangwayM, maxTables: settings.maxTables, facing: settings.facing }
+      },
+      objects: [...doc.objects, ...tables]
+    }));
+    setSelectedIds(tables.map((t) => t.id));
   }
 
   // Selecting something on the canvas puts the measurement highlight away.
@@ -1848,8 +1882,22 @@ export default function FloorplansPage() {
           unitsPerMetre={unitsPerMetre ?? DEFAULT_UNITS_PER_METRE}
           clearance={seatClearance}
           scaled={Boolean(unitsPerMetre)}
+          initialKind={fillPrompt.kind}
+          banquet={{
+            style: tableStyle,
+            roundSize,
+            seats: seatsPerTable,
+            gangwayM: draft.autoLayout.banquet?.gangwayM ?? BANQUET_DEFAULTS.gangwayM,
+            layout: draft.autoLayout.tableLayout,
+            maxTables: draft.autoLayout.banquet?.maxTables ?? BANQUET_DEFAULTS.maxTables,
+            facing: fillPrompt.facing,
+            numbering: draft.autoLayout.numbering,
+            startCorner: draft.autoLayout.startCorner
+          }}
+          guestNumbers={usingGuestNumbers ? guestTableNumbers : []}
           onCancel={() => setFillPrompt(null)}
           onFill={runFill}
+          onFillTables={runFillTables}
         />
       ) : null}
 
@@ -2513,6 +2561,13 @@ export default function FloorplansPage() {
               <MenuButton className="toolbar-btn" icon={<CircleDot size={15} aria-hidden />} label="Tables" title="Add tables, renumber">
                 <MenuLabel>Add</MenuLabel>
                 {TABLE_PRESET_IDS.map((id) => presetItem(id))}
+                <MenuItem
+                  icon={<SquareDashedMousePointer size={15} />}
+                  hint="Drag a rectangle on the plan, or select a room and use Fill"
+                  onSelect={() => startFillDraw("banquet")}
+                >
+                  Fill an area with tables…
+                </MenuItem>
                 <MenuSeparator />
                 <MenuLabel>Numbering</MenuLabel>
                 <MenuItem
@@ -2541,10 +2596,7 @@ export default function FloorplansPage() {
                   icon={<SquareDashedMousePointer size={15} />}
                   hint="Drag a rectangle on the plan"
                   shortcut="F"
-                  onSelect={() => {
-                    setDrawMode(true);
-                    setPanTool(false);
-                  }}
+                  onSelect={() => startFillDraw("theatre")}
                 >
                   Fill an area…
                 </MenuItem>
@@ -2677,8 +2729,8 @@ export default function FloorplansPage() {
                   setPanTool(false);
                   setRoomDraw(false);
                 }}
-                title="Fill an area with seating: drag a rectangle on the plan (F)"
-                aria-label="Fill an area with seating"
+                title="Fill an area with seating or tables: drag a rectangle on the plan (F)"
+                aria-label="Fill an area"
               >
                 <SquareDashedMousePointer size={16} />
               </button>
@@ -3153,8 +3205,12 @@ function FillPrompt({
   unitsPerMetre,
   clearance,
   scaled,
+  initialKind,
+  banquet,
+  guestNumbers,
   onCancel,
-  onFill
+  onFill,
+  onFillTables
 }: {
   area: FillArea;
   /** Filling a room: chairs outside its walls, or within the margin of one, are left out. */
@@ -3171,24 +3227,53 @@ function FillPrompt({
     blocks: FloorplanCanvasObject[],
     patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>
   ) => void;
+  initialKind: FillKind;
+  /** Last banquet fill settings (table type, size and layout shared with Auto layout). */
+  banquet: BanquetFillSettings;
+  /** Table numbers from the linked guest list, used first when filling with tables. */
+  guestNumbers: string[];
+  onFillTables: (tables: FloorplanTableObject[], settings: BanquetFillSettings) => void;
 }) {
+  const [kind, setKind] = useState<FillKind>(initialKind);
   const [margin, setMargin] = useState(initialMargin);
   const [form, setForm] = useState({ ...settings, facing: initialFacing });
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const [tablesForm, setTablesForm] = useState(banquet);
+  const setTables = (patch: Partial<BanquetFillSettings>) => setTablesForm((f) => ({ ...f, ...patch }));
+
+  const tablesResult = useMemo(() => {
+    if (kind !== "banquet") return null;
+    // Guest-list numbers not on the plan yet, then the next free numbers.
+    const taken = new Set(objects.flatMap((o) => (o.type === "table" ? [o.tableNumber.trim()] : [])));
+    const list = guestNumbers.filter((n) => !taken.has(n));
+    let next = 1;
+    const numberFor = (i: number) => {
+      while (list.length <= i) {
+        while (taken.has(String(next)) || list.includes(String(next))) next += 1;
+        list.push(String(next));
+      }
+      return list[i];
+    };
+    return fillAreaWithTables(area, tablesForm, { unitsPerMetre, marginM: margin, clearance, objects, room, numberFor });
+  }, [kind, area, tablesForm, unitsPerMetre, margin, clearance, objects, room, guestNumbers]);
 
   const result = useMemo(
     () =>
-      fillAreaWithSeating(area, form, {
+      kind !== "theatre"
+        ? { blocks: [], rows: 0, perRow: 0, aisles: 0, seats: 0 }
+        : fillAreaWithSeating(area, form, {
         unitsPerMetre,
         marginM: margin,
         maxRun: form.maxRun,
         objects,
         blocked: (block) => {
           const blocked = seatsBlocked(block, objects, clearance);
-          return room ? [...blocked, ...seatsOutsideRoom(block, room, margin * unitsPerMetre)] : blocked;
+          // Chairs never stand across the walls of a room the area overlaps.
+          const onWalls = objects.flatMap((o) => (o.type === "room" ? seatsOnWalls(block, o, clearance) : []));
+          return room ? [...blocked, ...onWalls, ...seatsOutsideRoom(block, room, margin * unitsPerMetre)] : [...blocked, ...onWalls];
         }
       }),
-    [area, form, margin, unitsPerMetre, objects, clearance, room]
+    [kind, area, form, margin, unitsPerMetre, objects, clearance, room]
   );
   const total = result.blocks.reduce((n, b) => n + (b.type === "seating" ? seatingRowLengths(b).reduce((x, y) => x + y, 0) : 0), 0);
   const takenOut = total - result.seats;
@@ -3196,7 +3281,7 @@ function FillPrompt({
 
   return (
     <Modal
-      title="Fill with seating"
+      title="Fill an area"
       size="sm"
       onClose={onCancel}
       footer={
@@ -3204,54 +3289,204 @@ function FillPrompt({
           <button type="button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={!result.blocks.length}
-            onClick={() =>
-              onFill(result.blocks, {
-                facing: form.facing,
-                maxRun: form.maxRun,
-                chairPreset: form.chairPreset,
-                seatwayM: form.seatwayM,
-                aisleWidthM: form.aisleWidthM,
-                splitAtAisles: form.splitAtAisles,
-                crossAisleEvery: form.crossAisleEvery,
-                frontDistanceM: form.frontDistanceM,
-                rowShape: form.rowShape,
-                curveRadiusM: form.curveRadiusM,
-                chevronAngle: form.chevronAngle
-              })
-            }
-          >
-            Fill
-          </button>
+          {kind === "banquet" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!tablesResult?.tables.length}
+              onClick={() => tablesResult && onFillTables(tablesResult.tables, tablesForm)}
+            >
+              Fill
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!result.blocks.length}
+              onClick={() =>
+                onFill(result.blocks, {
+                  facing: form.facing,
+                  maxRun: form.maxRun,
+                  chairPreset: form.chairPreset,
+                  seatwayM: form.seatwayM,
+                  aisleWidthM: form.aisleWidthM,
+                  splitAtAisles: form.splitAtAisles,
+                  crossAisleEvery: form.crossAisleEvery,
+                  frontDistanceM: form.frontDistanceM,
+                  rowShape: form.rowShape,
+                  curveRadiusM: form.curveRadiusM,
+                  chevronAngle: form.chevronAngle
+                })
+              }
+            >
+              Fill
+            </button>
+          )}
         </>
       }
     >
       <div className="stack">
-        <p className="fill-summary" style={{ margin: 0 }}>
-          {result.blocks.length ? (
-            <>
-              <strong>{result.seats}</strong> seats: {result.rows} row{result.rows === 1 ? "" : "s"}
-              {form.rowShape === "curved" ? `, ${result.perRow} in the front row` : ` of ${result.perRow}`}
-              {result.aisles ? `, ${result.aisles} aisle${result.aisles === 1 ? "" : "s"}` : ", no aisles"}
-              {takenOut
-                ? `, ${takenOut} chair${takenOut === 1 ? "" : "s"} left out ${shaped ? "at the edges or " : ""}around other objects`
-                : ""}
-              .
-            </>
-          ) : (
-            "No chairs fit in this area with these settings."
-          )}
-        </p>
-        <RowShapeFields
-          shape={form.rowShape}
-          curveRadiusM={form.curveRadiusM}
-          chevronAngle={form.chevronAngle}
-          onChange={set}
+        <Segmented
+          aria-label="Fill with"
+          value={kind}
+          options={[
+            { value: "theatre", label: "Theatre seating" },
+            { value: "banquet", label: "Banquet tables" }
+          ]}
+          onChange={setKind}
         />
-        <Field label="Audience faces" as="div" hint={area.rotation ? "Relative to the shape." : undefined}>
+        {kind === "banquet" && tablesResult ? (
+          <BanquetFillFields
+            form={tablesForm}
+            set={setTables}
+            result={tablesResult}
+            margin={margin}
+            onMargin={setMargin}
+            rotated={Boolean(area.rotation)}
+            guestNumbers={guestNumbers.length > 0}
+            scaled={scaled}
+          />
+        ) : (
+          <>
+            <p className="fill-summary" style={{ margin: 0 }}>
+              {result.blocks.length ? (
+                <>
+                  <strong>{result.seats}</strong> seats: {result.rows} row{result.rows === 1 ? "" : "s"}
+                  {form.rowShape === "curved" ? `, ${result.perRow} in the front row` : ` of ${result.perRow}`}
+                  {result.aisles ? `, ${result.aisles} aisle${result.aisles === 1 ? "" : "s"}` : ", no aisles"}
+                  {takenOut
+                    ? `, ${takenOut} chair${takenOut === 1 ? "" : "s"} left out ${shaped ? "at the edges or " : ""}around other objects`
+                    : ""}
+                  .
+                </>
+              ) : (
+                "No chairs fit in this area with these settings."
+              )}
+            </p>
+            <RowShapeFields
+              shape={form.rowShape}
+              curveRadiusM={form.curveRadiusM}
+              chevronAngle={form.chevronAngle}
+              onChange={set}
+            />
+            <Field label="Audience faces" as="div" hint={area.rotation ? "Relative to the shape." : undefined}>
+              <Segmented
+                value={form.facing}
+                options={[
+                  { value: "up", label: "Up" },
+                  { value: "down", label: "Down" },
+                  { value: "left", label: "Left" },
+                  { value: "right", label: "Right" }
+                ]}
+                onChange={(facing: TheatreFacing) => set({ facing })}
+              />
+            </Field>
+            <div className="form-grid">
+              <Field label="Most seats between aisles" hint="Aisles are added to keep every run within this.">
+                <NumericInput min={1} max={200} integer value={form.maxRun} onCommit={(n) => n != null && set({ maxRun: n })} />
+              </Field>
+              <Field label="Margin (m)" hint="Clear space kept inside the edges.">
+                <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && setMargin(n)} />
+              </Field>
+              <Field label="Chair" className="span-all">
+                <select value={form.chairPreset} onChange={(e) => set({ chairPreset: e.target.value })}>
+                  {CHAIR_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Seatway (m)">
+                <NumericInput min={0} max={5} value={form.seatwayM} onCommit={(n) => n != null && set({ seatwayM: n })} />
+              </Field>
+              <Field label="Aisle width (m)">
+                <NumericInput min={0} max={20} value={form.aisleWidthM} onCommit={(n) => n != null && set({ aisleWidthM: n })} />
+              </Field>
+              <Field label="Cross aisle every" hint="Rows; 0 for none.">
+                <NumericInput
+                  min={0}
+                  max={200}
+                  integer
+                  value={form.crossAisleEvery}
+                  onCommit={(n) => n != null && set({ crossAisleEvery: n })}
+                />
+              </Field>
+              <Field label="Front row to stage (m)" hint="Used when a stage reaches into the area.">
+                <NumericInput min={0} max={100} value={form.frontDistanceM} onCommit={(n) => n != null && set({ frontDistanceM: n })} />
+              </Field>
+            </div>
+            {form.rowShape === "straight" ? (
+              <Switch
+                label="A separate block for each section"
+                checked={form.splitAtAisles}
+                onChange={(splitAtAisles) => set({ splitAtAisles })}
+              />
+            ) : null}
+            {!scaled ? (
+              <p className="field-hint" style={{ margin: 0 }}>
+                No scale is set, so chair sizes are approximate. Set one in Plan settings for true sizes.
+              </p>
+            ) : null}
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** The banquet side of Fill an area: table type, gangway, layout and numbering, and what fits. */
+function BanquetFillFields({
+  form,
+  set,
+  result,
+  margin,
+  onMargin,
+  rotated,
+  guestNumbers,
+  scaled
+}: {
+  form: BanquetFillSettings;
+  set: (patch: Partial<BanquetFillSettings>) => void;
+  result: ReturnType<typeof fillAreaWithTables>;
+  margin: number;
+  onMargin: (m: number) => void;
+  rotated: boolean;
+  guestNumbers: boolean;
+  scaled: boolean;
+}) {
+  return (
+    <>
+      <p className="fill-summary" style={{ margin: 0 }}>
+        {result.tables.length ? (
+          <>
+            Fits <strong>{result.tables.length}</strong> table{result.tables.length === 1 ? "" : "s"} · <strong>{result.covers}</strong>{" "}
+            covers
+            {result.rows > 1 ? ` (${result.rows} rows, up to ${result.perRow} in a row)` : ""}
+            {result.capped ? `. ${result.capped} more would fit` : ""}.
+          </>
+        ) : (
+          "No tables fit in this area with these settings."
+        )}
+      </p>
+      <Field label="Table type" as="div">
+        <Segmented value={form.style} options={STYLE_OPTIONS} onChange={(style) => set({ style })} />
+      </Field>
+      {form.style !== "long" ? (
+        <Field label="Round table size" as="div">
+          <Segmented
+            value={form.roundSize}
+            options={(Object.keys(ROUND_TABLE_SIZES) as RoundTableSize[]).map((key) => ({
+              value: key,
+              label: ROUND_TABLE_SIZES[key].label,
+              title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
+            }))}
+            onChange={(roundSize) => set({ roundSize, seats: ROUND_TABLE_SIZES[roundSize].seats })}
+          />
+        </Field>
+      ) : null}
+      {form.style === "cabaret" ? (
+        <Field label="Open side faces" as="div" hint={rotated ? "Towards the stage, relative to the shape." : "Towards the stage."}>
           <Segmented
             value={form.facing}
             options={[
@@ -3263,55 +3498,75 @@ function FillPrompt({
             onChange={(facing: TheatreFacing) => set({ facing })}
           />
         </Field>
-        <div className="form-grid">
-          <Field label="Most seats between aisles" hint="Aisles are added to keep every run within this.">
-            <NumericInput min={1} max={200} integer value={form.maxRun} onCommit={(n) => n != null && set({ maxRun: n })} />
-          </Field>
-          <Field label="Margin (m)" hint="Clear space kept inside the edges.">
-            <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && setMargin(n)} />
-          </Field>
-          <Field label="Chair" className="span-all">
-            <select value={form.chairPreset} onChange={(e) => set({ chairPreset: e.target.value })}>
-              {CHAIR_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Seatway (m)">
-            <NumericInput min={0} max={5} value={form.seatwayM} onCommit={(n) => n != null && set({ seatwayM: n })} />
-          </Field>
-          <Field label="Aisle width (m)">
-            <NumericInput min={0} max={20} value={form.aisleWidthM} onCommit={(n) => n != null && set({ aisleWidthM: n })} />
-          </Field>
-          <Field label="Cross aisle every" hint="Rows; 0 for none.">
-            <NumericInput
-              min={0}
-              max={200}
-              integer
-              value={form.crossAisleEvery}
-              onCommit={(n) => n != null && set({ crossAisleEvery: n })}
-            />
-          </Field>
-          <Field label="Front row to stage (m)" hint="Used when a stage reaches into the area.">
-            <NumericInput min={0} max={100} value={form.frontDistanceM} onCommit={(n) => n != null && set({ frontDistanceM: n })} />
-          </Field>
-        </div>
-        {form.rowShape === "straight" ? (
-          <Switch
-            label="A separate block for each section"
-            checked={form.splitAtAisles}
-            onChange={(splitAtAisles) => set({ splitAtAisles })}
+      ) : null}
+      {form.style === "long" ? (
+        <Field label="Tables run" as="div">
+          <Segmented
+            value={form.facing === "left" || form.facing === "right" ? "down" : "across"}
+            options={[
+              { value: "across", label: "Across" },
+              { value: "down", label: "Down" }
+            ]}
+            onChange={(v) => set({ facing: v === "down" ? "right" : "up" })}
           />
-        ) : null}
-        {!scaled ? (
-          <p className="field-hint" style={{ margin: 0 }}>
-            No scale is set, so chair sizes are approximate. Set one in Plan settings for true sizes.
-          </p>
-        ) : null}
+        </Field>
+      ) : null}
+      <div className="form-grid">
+        <Field label="Seats each">
+          <NumericInput min={1} max={MAX_TABLE_SEATS} integer value={form.seats} onCommit={(n) => n != null && set({ seats: n })} />
+        </Field>
+        <Field label="Up to" hint="Tables; blank for as many as fit.">
+          <NumericInput
+            min={1}
+            max={400}
+            integer
+            allowEmpty
+            placeholder="All"
+            value={form.maxTables}
+            onCommit={(n) => set({ maxTables: n ?? null })}
+          />
+        </Field>
+        <Field label="Gangway (m)" hint="Between tables, chair back to chair back.">
+          <NumericInput min={0} max={20} value={form.gangwayM} onCommit={(n) => n != null && set({ gangwayM: n })} />
+        </Field>
+        <Field label="Margin (m)" hint="Clear space kept inside the edges.">
+          <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && onMargin(n)} />
+        </Field>
+        <Field label="Numbering">
+          <select value={form.numbering} onChange={(e) => set({ numbering: e.target.value as BanquetFillSettings["numbering"] })}>
+            <option value="straight">Straight</option>
+            <option value="snaked">Snaked</option>
+          </select>
+        </Field>
+        <Field label="Start corner">
+          <select value={form.startCorner} onChange={(e) => set({ startCorner: e.target.value as BanquetFillSettings["startCorner"] })}>
+            <option value="topLeft">Top left</option>
+            <option value="topRight">Top right</option>
+            <option value="bottomLeft">Bottom left</option>
+            <option value="bottomRight">Bottom right</option>
+          </select>
+        </Field>
       </div>
-    </Modal>
+      <Field label="Arrangement" as="div">
+        <Segmented
+          value={form.layout}
+          options={[
+            { value: "aligned", label: "Grid" },
+            { value: "staggered", label: "Staggered" }
+          ]}
+          onChange={(layout) => set({ layout })}
+        />
+      </Field>
+      <p className="field-hint" style={{ margin: 0 }}>
+        {guestNumbers ? "Numbered from the guest list, skipping numbers already on the plan. " : "Numbered on from the tables already on the plan. "}
+        Tables keep clear of walls, fixtures, keep-clear zones, door swings and other furniture.
+      </p>
+      {!scaled ? (
+        <p className="field-hint" style={{ margin: 0 }}>
+          No scale is set, so table sizes are approximate. Set one in Plan settings for true sizes.
+        </p>
+      ) : null}
+    </>
   );
 }
 

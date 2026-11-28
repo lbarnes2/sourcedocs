@@ -387,12 +387,12 @@ export function Inspector({
             </Field>
             {onFillShape && selectionCount === 1 ? (
               <button type="button" className="btn-sm" onClick={onFillShape}>
-                Fill with seating…
+                Fill with seating or tables…
               </button>
             ) : null}
             <Switch
               label="Keep clear"
-              hint="Drawn hatched. Tables, seating and Fill with seating stay off it, e.g. a fire point or service route."
+              hint="Drawn hatched. Tables, seating and Fill an area stay off it, e.g. a fire point or service route."
               checked={Boolean(primary.keepClear)}
               onChange={(keepClear) =>
                 onPatch((o) =>
@@ -1161,7 +1161,7 @@ function RoomFields({
       <OpeningsFields room={room} unitsPerMetre={upm} patchRoom={patchRoom} openingId={openingId} onOpeningId={onOpeningId} />
       {onFill ? (
         <button type="button" className="btn-sm" onClick={onFill}>
-          Fill with seating…
+          Fill with seating or tables…
         </button>
       ) : null}
     </>
