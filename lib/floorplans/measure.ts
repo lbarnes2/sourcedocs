@@ -17,8 +17,10 @@ import {
   seatway,
   type LocalBox
 } from "@/lib/floorplans/seating";
+import { openingPolygon, roomOpenings } from "@/lib/floorplans/openings";
+import { polygonArea, roomWorldPoints } from "@/lib/floorplans/room";
 import { findStage } from "@/lib/floorplans/theatre";
-import type { FloorplanCanvasObject, FloorplanLimits, FloorplanSeatingObject } from "@/types";
+import type { FloorplanCanvasObject, FloorplanLimits, FloorplanRoomObject, FloorplanSeatingObject } from "@/types";
 
 /** Where a measurement was taken: shapes to outline and/or a dimension line. */
 export type Highlight = { polygons: Point[][]; line?: [Point, Point]; label?: string };
@@ -54,6 +56,7 @@ function boxPolygon(cx: number, cy: number, w: number, h: number, rotation: numb
 }
 
 export function objectPolygon(obj: FloorplanCanvasObject): Point[] {
+  if (obj.type === "room") return roomWorldPoints(obj);
   if (obj.type === "seating" && rowShape(obj) !== "straight") {
     // The chairs' outline, so gaps and distances follow the curve or the wings rather than a box around them.
     const chairs = seatingPositions(obj).filter((p) => p.state !== "removed");
@@ -298,32 +301,41 @@ export function buildMeasurements(
     }
   }
 
-  // Exits: shapes marked as exits; the longer side is the opening.
+  // Exits: doors and openings marked as exits (their width), and shapes marked as exits (their longer side).
   const exits = objects.filter((o) => o.type === "rect" && o.exit);
-  if (exits.length || L.minExitWidthM != null) {
-    const width = exits.reduce((sum, o) => sum + (o.type === "rect" ? Math.max(o.width, o.height) : 0), 0);
+  const exitDoors = objects.flatMap((o) =>
+    o.type === "room" ? roomOpenings(o).filter((g) => g.opening.exit).map((g) => ({ room: o, g })) : []
+  );
+  const exitCount = exits.length + exitDoors.length;
+  if (exitCount || L.minExitWidthM != null) {
+    const width =
+      exits.reduce((sum, o) => sum + (o.type === "rect" ? Math.max(o.width, o.height) : 0), 0) +
+      exitDoors.reduce((sum, e) => sum + e.g.width, 0);
     const metres = m(width);
+    const depth = (upm ?? 24) * 0.4;
     out.push({
       id: "exits",
       label: "Exits",
-      value: exits.length ? `${exits.length} · ${fmt(metres)}` : "None marked",
-      detail: exits.length ? "Total width of the shapes marked as exits" : "Mark a shape as an exit in its settings",
+      value: exitCount ? `${exitCount} · ${fmt(metres)}` : "None marked",
+      detail: exitCount ? "Total width of the doors and shapes marked as exits" : "Mark a door or shape as an exit in its settings",
       past: L.minExitWidthM != null && (metres ?? 0) < L.minExitWidthM - 1e-6,
       limit: L.minExitWidthM != null ? `min ${L.minExitWidthM} m` : undefined,
-      highlight: exits.length ? { polygons: exits.map(objectPolygon) } : undefined,
-      objectIds: exits.map((o) => o.id)
+      highlight: exitCount
+        ? { polygons: [...exits.map(objectPolygon), ...exitDoors.map((e) => openingPolygon(e.g, depth))] }
+        : undefined,
+      objectIds: Array.from(new Set([...exits.map((o) => o.id), ...exitDoors.map((e) => e.room.id)]))
     });
   }
 
-  // Floor area per seat, from the outline-only shapes (rooms).
-  const rooms = objects.filter((o) => o.type === "rect" && o.fill === "none");
+  // Floor area per seat, from the rooms.
+  const rooms = objects.filter((o): o is FloorplanRoomObject => o.type === "room");
   if (rooms.length && capacity && upm) {
-    const area = rooms.reduce((sum, o) => sum + (o.type === "rect" ? o.width * o.height : 0), 0) / (upm * upm);
+    const area = rooms.reduce((sum, o) => sum + polygonArea(o.points), 0) / (upm * upm);
     out.push({
       id: "area",
       label: "Floor area per seat",
       value: `${(area / capacity).toFixed(2)} m²`,
-      detail: `${area.toFixed(0)} m² of room outline`,
+      detail: `${area.toFixed(0)} m² of room${rooms.length === 1 ? "" : "s"}`,
       highlight: { polygons: rooms.map(objectPolygon) },
       objectIds: rooms.map((o) => o.id)
     });

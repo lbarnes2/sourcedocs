@@ -2622,6 +2622,16 @@ button.fp-obj--outline {
   pointer-events: none;
 }
 
+/* Keep-clear zones: hatched, with a dashed red edge. */
+button.fp-obj--keep-clear .fp-body {
+  border: 1.5px dashed #c2410c;
+  background: repeating-linear-gradient(45deg, rgba(194, 65, 12, 0.14) 0 3px, transparent 3px 9px) !important;
+}
+
+button.fp-obj--keep-clear .fp-label {
+  color: #c2410c;
+}
+
 .fp-edge {
   position: absolute;
   pointer-events: auto;
@@ -2794,6 +2804,173 @@ button.fp-obj--seating:focus-visible .fp-seating {
   position: absolute;
   background: var(--accent);
   transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* Rooms: walls drawn as a path; only the walls take the pointer. */
+.fp-room {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-room-floor {
+  fill: rgba(128, 146, 168, 0.06);
+  stroke: none;
+}
+
+.fp-room-wall {
+  fill: none;
+  stroke: #5b6b7d;
+  stroke-linejoin: miter;
+}
+
+.fp-room-hit {
+  fill: none;
+  stroke: transparent;
+  pointer-events: stroke;
+}
+
+.fp-opening-jamb,
+.fp-door,
+.fp-window,
+.fp-window-glass {
+  fill: none;
+  stroke: #5b6b7d;
+}
+
+.fp-door {
+  stroke-linejoin: round;
+}
+
+.fp-window {
+  fill: #fff;
+}
+
+.fp-opening--exit .fp-door,
+.fp-opening--exit .fp-opening-jamb {
+  stroke: #1f8a4c;
+}
+
+.fp-opening-label {
+  fill: #5b6b7d;
+  font-weight: 700;
+}
+
+.fp-opening--exit .fp-opening-label {
+  fill: #1f8a4c;
+}
+
+button.fp-obj--room:hover .fp-room-wall {
+  stroke: var(--accent);
+}
+
+.fp-room-name {
+  position: absolute;
+  color: #5b6b7d;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.fp-room-overlay,
+.fp-sketch {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fp-room-overlay path {
+  fill: none;
+  stroke: var(--accent);
+}
+
+.fp-handle--corner {
+  cursor: move;
+}
+
+.fp-handle--add {
+  border-radius: 50%;
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.85);
+  cursor: copy;
+}
+
+.fp-handle--opening {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.fp-handle--opening-on {
+  background: rgba(232, 145, 30, 0.35);
+  border-color: #d97706;
+}
+
+.fp-wall-length {
+  position: absolute;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(128, 146, 168, 0.35);
+}
+
+.fp-wall-length--live {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: none;
+}
+
+.fp-wall-length--typed {
+  background: #d97706;
+}
+
+.fp-sketch polyline,
+.fp-sketch line {
+  fill: none;
+  stroke: var(--accent);
+}
+
+.fp-sketch-close {
+  opacity: 0.6;
+}
+
+.fp-sketch circle {
+  fill: #fff;
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.fp-sketch circle.fp-sketch-first {
+  fill: var(--accent);
+}
+
+.fp-sketch circle.fp-sketch-cursor {
+  fill: var(--accent);
+  stroke: none;
+}
+
+.fp-draw-hint {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(31, 41, 55, 0.88);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-align: center;
   pointer-events: none;
 }
 
@@ -3969,4 +4146,221 @@ td.guest-row-actions {
 .btn-group--sm .toolbar-zoom {
   min-width: 40px;
   font-size: 0.74rem;
+}
+
+/* Room inspector: one row per wall. */
+.fp-wall-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fp-wall-list li {
+  display: grid;
+  grid-template-columns: 1.6em 1fr auto auto auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.fp-wall-index {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.fp-wall-unit {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
+/* Room inspector: doors and windows. */
+.fp-opening-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fp-opening-list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fp-opening-item {
+  border: 1px solid var(--line, #e3e7ec);
+  border-radius: 6px;
+}
+
+.fp-opening-item--on {
+  border-color: #d97706;
+  padding-bottom: 8px;
+}
+
+.fp-opening-item > .stack {
+  padding: 0 8px;
+}
+
+button.fp-opening-summary {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 600;
+  text-align: left;
+}
+
+.fp-exit-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #1f8a4c;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   Venues & rooms
+   ========================================================================== */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 0.88rem;
+  font-weight: 550;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+}
+
+a.btn:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.room-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.room-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.room-card:hover {
+  border-color: var(--border-strong);
+}
+
+.room-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  color: inherit;
+  text-decoration: none;
+  min-height: 116px;
+}
+
+.room-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 28px;
+}
+
+.room-card-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-card-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.room-card--new {
+  border-style: dashed;
+  background: transparent;
+}
+
+.room-card--new .room-card-main {
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-weight: 550;
+}
+
+.room-thumb {
+  flex: none;
+  background: var(--surface-2);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.room-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.room-pick-list button {
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 8px;
+  text-align: left;
+  white-space: normal;
+}
+
+.room-pick-list button[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+.fp-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fp-room-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }

@@ -10,7 +10,8 @@ const floorplanIdSchema = z.string().refine(isValidFloorplanUuid, "Invalid floor
 const objectBase = z.object({
   id: z.string().min(1).max(100),
   x: z.number().min(-20_000).max(20_000),
-  y: z.number().min(-20_000).max(20_000)
+  y: z.number().min(-20_000).max(20_000),
+  roomId: z.string().max(100).optional()
 });
 
 const rotationSchema = z.number().min(-360).max(720);
@@ -38,7 +39,8 @@ const rectObjectSchema = objectBase.extend({
   rotation: rotationSchema.optional(),
   label: z.string().max(200).optional(),
   fill: colorSchema.optional(),
-  exit: z.boolean().optional()
+  exit: z.boolean().optional(),
+  keepClear: z.boolean().optional()
 });
 
 const circleObjectSchema = objectBase.extend({
@@ -77,6 +79,40 @@ const seatingObjectSchema = objectBase.extend({
   chevronAngle: z.number().min(0).max(45).optional()
 });
 
+const roomObjectSchema = objectBase.extend({
+  type: z.literal("room"),
+  name: z.string().max(200).optional(),
+  points: z
+    .array(z.object({ x: z.number().min(-40_000).max(40_000), y: z.number().min(-40_000).max(40_000) }))
+    .min(3)
+    .max(500),
+  locked: z.boolean().optional(),
+  openings: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(100),
+        kind: z.enum(["door", "double-door", "window", "opening"]),
+        wall: z.number().int().min(0).max(500),
+        offset: z.number().min(0).max(100_000),
+        width: z.number().min(1).max(10_000),
+        swing: z.enum(["in", "out"]).optional(),
+        hinge: z.enum(["start", "end"]).optional(),
+        exit: z.boolean().optional(),
+        label: z.string().max(200).optional()
+      })
+    )
+    .max(200)
+    .optional(),
+  source: z
+    .object({
+      venueId: z.string().min(1).max(100),
+      templateId: z.string().min(1).max(100),
+      version: z.number().int().min(1).max(1_000_000),
+      skippedVersion: z.number().int().min(1).max(1_000_000).optional()
+    })
+    .optional()
+});
+
 const canvasUnitsPerMetreSchema = z.number().min(1).max(10_000).nullable().optional();
 
 export const floorplanPrintOptionsSchema = z.object({
@@ -93,7 +129,8 @@ export const floorplanCanvasObjectSchema = z.discriminatedUnion("type", [
   rectObjectSchema,
   circleObjectSchema,
   textObjectSchema,
-  seatingObjectSchema
+  seatingObjectSchema,
+  roomObjectSchema
 ]);
 
 const optionalLimit = z.number().min(0).max(100_000).nullable().optional();
@@ -134,7 +171,15 @@ export const autoLayoutFloorplanDocSchema = floorplanSchema.extend({
   topTable: z.boolean().optional(),
   useGuestNumbers: z.boolean().optional(),
   generator: z.enum(["tables", "theatre"]).optional(),
-  theatre: theatreSettingsSchema.optional()
+  theatre: theatreSettingsSchema.optional(),
+  banquet: z
+    .object({
+      gangwayM: z.number().min(0).max(20).optional(),
+      maxTables: z.number().int().min(1).max(400).nullable().optional(),
+      facing: z.enum(["up", "down", "left", "right"]).optional()
+    })
+    .optional(),
+  fillKind: z.enum(["theatre", "banquet"]).optional()
 });
 
 export const floorplanDocumentSchema = z.object({
@@ -212,3 +257,23 @@ export function withFloorplanSaveDefaults(raw: z.infer<typeof floorplanSavePaylo
   };
 }
 
+
+const venueIdSchema = z.string().refine(isValidFloorplanUuid, "Invalid id (expected a UUID).");
+
+export const floorplanRoomTemplateSchema = z.object({
+  id: venueIdSchema,
+  name: z.string().trim().min(1, "Give the room a name.").max(200),
+  version: z.number().int().min(1).max(1_000_000),
+  updatedAt: z.string().max(100),
+  notes: z.string().max(5_000).optional(),
+  room: roomObjectSchema,
+  fixtures: z.array(floorplanCanvasObjectSchema).max(500)
+});
+
+export const floorplanVenueSchema = z.object({
+  id: venueIdSchema,
+  name: z.string().trim().min(1, "Give the venue a name.").max(200),
+  logoKey: z.string().max(500).nullable().optional(),
+  updatedAt: z.string().max(100),
+  rooms: z.array(floorplanRoomTemplateSchema).max(200)
+});

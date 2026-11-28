@@ -165,7 +165,7 @@ export function buildPlanIssues(objects: FloorplanCanvasObject[], guests: TableG
       issues.push({
         id: "obstacle",
         severity: "warning",
-        message: `${n} ${furnishingNoun(furnishings, blockedTables)} run${n === 1 ? "s" : ""} into a pillar, stage, bar or other object.`,
+        message: `${n} ${furnishingNoun(furnishings, blockedTables)} run${n === 1 ? "s" : ""} into a pillar, stage, bar, door swing or other object.`,
         objectIds: [...Array.from(blockedTables), ...Array.from(blockingObjects)]
       });
     }

@@ -11,7 +11,9 @@ import {
   type Point
 } from "@/lib/floorplans/geometry";
 import { seatKey, seatingRunBoxes, seatingSeats } from "@/lib/floorplans/seating";
-import type { FloorplanCanvasObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
+import { doorSwingBoxes } from "@/lib/floorplans/openings";
+import { pointInPolygon, roomWorldPoints } from "@/lib/floorplans/room";
+import type { FloorplanCanvasObject, FloorplanRoomObject, FloorplanSeatingObject, FloorplanTableObject } from "@/types";
 
 type Circle = { kind: "circle"; x: number; y: number; r: number };
 type Box = { kind: "box"; cx: number; cy: number; hw: number; hh: number; rotation: number };
@@ -30,6 +32,10 @@ function rotate(p: Point, degrees: number): Point {
 
 /** The shapes that make up an object: a table's top plus each chair, or a shape's outline. */
 export function objectShapes(obj: FloorplanCanvasObject): Shape[] {
+  // A room is the floor everything stands on; only the floor its doors swing through is in the way.
+  if (obj.type === "room") {
+    return doorSwingBoxes(obj).map((b) => ({ kind: "box", cx: b.cx, cy: b.cy, hw: b.w / 2, hh: b.h / 2, rotation: b.rotation }));
+  }
   const box = objectBox(obj);
   if (obj.type === "seating") {
     // Each run of chairs between aisles, row by row: aisles and seatways are open floor.
@@ -114,11 +120,13 @@ export function objectsCollide(a: FloorplanCanvasObject, b: FloorplanCanvasObjec
 }
 
 /**
- * Things a table shouldn't stand on: pillars, stages, bars, dance floors… Outline-only shapes (the room)
- * and text labels are not obstacles.
+ * Things a table shouldn't stand on: pillars, stages, bars, dance floors, the swing of a door…
+ * Outline-only shapes and text labels are not obstacles; a room is one only where its doors swing in.
  */
 export function isObstacle(obj: FloorplanCanvasObject): boolean {
+  if (obj.type === "room") return doorSwingBoxes(obj).length > 0;
   if (obj.type === "text" || isFurnishing(obj)) return false;
+  if (obj.type === "rect" && obj.keepClear) return true;
   return obj.fill !== "none";
 }
 
@@ -136,6 +144,8 @@ function area(b: Bounds): number {
  * not something the table is in the way of.
  */
 export function isFloorAreaFor(obstacle: FloorplanCanvasObject, table: FloorplanCanvasObject): boolean {
+  // A room's only obstacles are its door swings, and a keep-clear zone is to be kept clear: both always count.
+  if (obstacle.type === "room" || (obstacle.type === "rect" && obstacle.keepClear)) return false;
   const o = objectPrintBounds(obstacle);
   const t = objectPrintBounds(table);
   const contains = o.minX <= t.minX && o.minY <= t.minY && o.maxX >= t.maxX && o.maxY >= t.maxY;
@@ -206,6 +216,133 @@ export function seatsBlocked(block: FloorplanSeatingObject, others: FloorplanCan
     const bounds = { minX: chair.cx - r, minY: chair.cy - r, maxX: chair.cx + r, maxY: chair.cy + r };
     const hit = blockers.some((o) => boundsMeet(bounds, o.bounds, 0) && o.shapes.some((sh) => shapesHit(chair, sh, gap)));
     if (hit) out.push(seatKey(seat.row, seat.seat));
+  }
+  return out;
+}
+
+function segmentDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/**
+ * Chairs in a seating block that are outside the room's walls or closer than `gap` to one. Returns
+ * "row:seat" keys. Used when filling a room that isn't a plain rectangle.
+ */
+export function seatsOutsideRoom(block: FloorplanSeatingObject, room: FloorplanRoomObject, gap: number): string[] {
+  const walls = roomWorldPoints(room);
+  const swings: Box[] = doorSwingBoxes(room).map((b) => ({ kind: "box", cx: b.cx, cy: b.cy, hw: b.w / 2, hh: b.h / 2, rotation: b.rotation }));
+  const rotation = block.rotation ?? 0;
+  const out: string[] = [];
+  for (const seat of seatingSeats(block)) {
+    const c = rotate({ x: seat.x, y: seat.y }, rotation);
+    const chair: Box = {
+      kind: "box",
+      cx: block.x + c.x,
+      cy: block.y + c.y,
+      hw: block.chairWidth / 2,
+      hh: block.chairDepth / 2,
+      rotation: rotation + seat.angle
+    };
+    const corners = boxCorners(chair);
+    const outside =
+      corners.some((p) => !pointInPolygon(p, walls)) ||
+      // A corner of the room poking into the chair (an inside corner of an L).
+      walls.some((w) => shapesHit({ kind: "circle", x: w.x, y: w.y, r: 0.01 }, chair, gap)) ||
+      // The floor a door swings through.
+      swings.some((sw) => shapesHit(chair, sw, 0)) ||
+      (gap > 0 &&
+        corners.some((p) => walls.some((a, i) => segmentDistance(p, a, walls[(i + 1) % walls.length]) < gap - TOLERANCE)));
+    if (outside) out.push(seatKey(seat.row, seat.seat));
+  }
+  return out;
+}
+
+/**
+ * Whether any part of an object (a table and its chairs) is outside `polygon` or closer than `gap` to
+ * one of its edges. Used to fit tables inside a room's walls or a filled area.
+ */
+export function objectOutsidePolygon(obj: FloorplanCanvasObject, polygon: Point[], gap: number): boolean {
+  const edges = polygon.map((a, i) => [a, polygon[(i + 1) % polygon.length]] as const);
+  const nearEdge = (p: Point, r: number) => edges.some(([a, b]) => segmentDistance(p, a, b) < r + gap - TOLERANCE);
+  return objectShapes(obj).some((sh) => {
+    if (sh.kind === "circle") {
+      const c = { x: sh.x, y: sh.y };
+      return !pointInPolygon(c, polygon) || nearEdge(c, sh.r);
+    }
+    const corners = boxCorners(sh);
+    return (
+      corners.some((p) => !pointInPolygon(p, polygon) || nearEdge(p, 0)) ||
+      // A corner of the polygon poking into the box (an inside corner of an L-shaped room).
+      polygon.some((w) => shapesHit({ kind: "circle", x: w.x, y: w.y, r: 0.01 }, sh, gap))
+    );
+  });
+}
+
+/** The extent of an object's shapes (a table with its chairs), without label room. */
+export function shapesBounds(obj: FloorplanCanvasObject): Bounds {
+  const pts = objectShapes(obj).flatMap((sh) =>
+    sh.kind === "circle"
+      ? [
+          { x: sh.x - sh.r, y: sh.y - sh.r },
+          { x: sh.x + sh.r, y: sh.y + sh.r }
+        ]
+      : boxCorners(sh)
+  );
+  return {
+    minX: Math.min(...pts.map((p) => p.x)),
+    minY: Math.min(...pts.map((p) => p.y)),
+    maxX: Math.max(...pts.map((p) => p.x)),
+    maxY: Math.max(...pts.map((p) => p.y))
+  };
+}
+
+function segmentsCross(a: Point, b: Point, c: Point, d: Point): boolean {
+  const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+
+/** Whether a shape lies across one of a polygon's edges (or within `gap` of one). */
+function shapeOnEdges(sh: Shape, polygon: Point[], gap: number): boolean {
+  const edges = polygon.map((a, i) => [a, polygon[(i + 1) % polygon.length]] as const);
+  if (sh.kind === "circle") return edges.some(([a, b]) => segmentDistance({ x: sh.x, y: sh.y }, a, b) < sh.r + gap - TOLERANCE);
+  const corners = boxCorners(sh);
+  const sides = corners.map((p, i) => [p, corners[(i + 1) % 4]] as const);
+  return (
+    edges.some(([a, b]) => sides.some(([p, q]) => segmentsCross(a, b, p, q))) ||
+    (gap > 0 && corners.some((p) => edges.some(([a, b]) => segmentDistance(p, a, b) < gap - TOLERANCE)))
+  );
+}
+
+/** Whether any part of an object stands across a room's walls (or within `gap` of them). */
+export function objectOnWalls(obj: FloorplanCanvasObject, room: FloorplanRoomObject, gap: number): boolean {
+  const walls = roomWorldPoints(room);
+  return objectShapes(obj).some((sh) => shapeOnEdges(sh, walls, gap));
+}
+
+/** Chairs in a seating block that stand across a room's walls (or within `gap` of them): "row:seat" keys. */
+export function seatsOnWalls(block: FloorplanSeatingObject, room: FloorplanRoomObject, gap: number): string[] {
+  const walls = roomWorldPoints(room);
+  const rotation = block.rotation ?? 0;
+  const out: string[] = [];
+  for (const seat of seatingSeats(block)) {
+    const c = rotate({ x: seat.x, y: seat.y }, rotation);
+    const chair: Box = {
+      kind: "box",
+      cx: block.x + c.x,
+      cy: block.y + c.y,
+      hw: block.chairWidth / 2,
+      hh: block.chairDepth / 2,
+      rotation: rotation + seat.angle
+    };
+    if (shapeOnEdges(chair, walls, gap)) out.push(seatKey(seat.row, seat.seat));
   }
   return out;
 }

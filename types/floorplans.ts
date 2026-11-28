@@ -1,13 +1,15 @@
 import type { PaperOrientation, PaperSize } from "./paper";
 import type { ThemeSettings } from "./index";
 
-export type FloorplanObjectType = "table" | "rect" | "circle" | "text" | "seating";
+export type FloorplanObjectType = "table" | "rect" | "circle" | "text" | "seating" | "room";
 
 export interface FloorplanBaseObject {
   id: string;
   type: FloorplanObjectType;
   x: number;
   y: number;
+  /** A fixture of this room (pillar, built-in bar, keep-clear zone…): it came with the room's template. */
+  roomId?: string;
 }
 
 export type FloorplanTableShape = "round" | "rect";
@@ -49,6 +51,8 @@ export interface FloorplanRectObject extends FloorplanBaseObject {
   fill?: string;
   /** An exit (fire exit or main doors); its longer side counts towards total exit width. */
   exit?: boolean;
+  /** A keep-clear zone: drawn hatched, and tables, seating and the fill tools stay off it. */
+  keepClear?: boolean;
 }
 
 export interface FloorplanCircleObject extends FloorplanBaseObject {
@@ -103,7 +107,83 @@ export interface FloorplanSeatingObject extends FloorplanBaseObject {
   chevronAngle?: number;
 }
 
+/**
+ * A room: its walls as a closed outline of corners. `x`/`y` is the origin the corners are measured
+ * from (kept at the top-left of their bounding box); corners run round the room in order, and wall `i`
+ * runs from corner `i` to corner `i + 1` (the last wall closes back to corner 0).
+ */
+export interface FloorplanRoomObject extends FloorplanBaseObject {
+  type: "room";
+  name?: string;
+  points: Array<{ x: number; y: number }>;
+  /** Locked rooms can't be moved or reshaped on the canvas (they can still be selected). */
+  locked?: boolean;
+  /** Doors, windows and openings in the walls. */
+  openings?: FloorplanOpening[];
+  /** The room template this room was copied from. */
+  source?: FloorplanRoomSource;
+}
+
+/** Where a room on a plan came from, so the plan can offer to update it when the template changes. */
+export interface FloorplanRoomSource {
+  venueId: string;
+  templateId: string;
+  /** The template's version when it was copied in (or last updated). */
+  version: number;
+  /** A newer version the plan chose to keep the old room over. */
+  skippedVersion?: number;
+}
+
+/**
+ * A room kept for reuse: its walls, doors and windows, and its fixtures (pillars, built-in bars and
+ * stages, exits, keep-clear zones). Stored at `ROOM_TEMPLATE_UNITS_PER_METRE`, with the room's
+ * origin at 0,0 and fixtures placed relative to it.
+ */
+export interface FloorplanRoomTemplate {
+  id: string;
+  name: string;
+  /** Goes up by one each time the room or its fixtures change. */
+  version: number;
+  updatedAt: string;
+  notes?: string;
+  room: FloorplanRoomObject;
+  fixtures: FloorplanCanvasObject[];
+}
+
+export interface FloorplanVenue {
+  id: string;
+  name: string;
+  /** Venue logo (logo library key) to put on plans that use this venue's rooms. */
+  logoKey?: string | null;
+  updatedAt: string;
+  rooms: FloorplanRoomTemplate[];
+}
+
+export type FloorplanOpeningKind = "door" | "double-door" | "window" | "opening";
+
+/**
+ * A door, window or opening in a room's wall. It belongs to a wall by index and sits `offset` along it
+ * (from the wall's start corner to the opening's centre), so it stays on its wall when the room is
+ * reshaped. Lengths are plan units.
+ */
+export interface FloorplanOpening {
+  id: string;
+  kind: FloorplanOpeningKind;
+  wall: number;
+  offset: number;
+  width: number;
+  /** Doors: which way they open. Default "in". */
+  swing?: "in" | "out";
+  /** Single doors: which jamb the hinge is on, the wall's start or end. Default "start". */
+  hinge?: "start" | "end";
+  /** Counts towards the plan's total exit width. */
+  exit?: boolean;
+  /** e.g. "Fire exit 2", "Main doors". */
+  label?: string;
+}
+
 export type FloorplanCanvasObject =
+  | FloorplanRoomObject
   | FloorplanTableObject
   | FloorplanRectObject
   | FloorplanCircleObject
@@ -160,6 +240,16 @@ export interface FloorplanTheatreSettings {
   chevronAngle?: number;
 }
 
+/** "Fill an area" with banquet tables; table style, size, seats, layout and numbering share the auto layout fields. */
+export interface FloorplanBanquetFillSettings {
+  /** Clear floor between neighbouring tables' chairs, chair back to chair back. */
+  gangwayM?: number;
+  /** Stop at this many tables; missing or null for as many as fit. */
+  maxTables?: number | null;
+  /** Cabaret tables: which way the open side of the table faces (towards the stage). */
+  facing?: "up" | "down" | "left" | "right";
+}
+
 /** The user's own figures to compare the plan's measurements against (metres, seats). Nothing is a rule. */
 export interface FloorplanLimits {
   minAisleM?: number | null;
@@ -193,6 +283,9 @@ export interface FloorplanAutoLayoutSettings {
   /** Which generator the Auto layout form shows. */
   generator?: "tables" | "theatre";
   theatre?: FloorplanTheatreSettings;
+  banquet?: FloorplanBanquetFillSettings;
+  /** Which kind of fill the Fill an area dialog last made. */
+  fillKind?: "theatre" | "banquet";
 }
 
 export interface FloorplanDocument {

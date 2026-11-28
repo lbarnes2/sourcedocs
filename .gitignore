@@ -9,6 +9,7 @@ data/signage-venues/*.json
 .env.local
 .env.*.local
 data/floorplans/*.json
+data/floorplan-venues/*.json
 data/buffet-settings.json
 .DS_Store
 *.tsbuildinfo

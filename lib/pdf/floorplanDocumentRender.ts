@@ -10,6 +10,7 @@ import { hexToRgb } from "@/lib/pdf/color";
 import type { PDFFont, PDFPage } from "pdf-lib";
 import {
   DEFAULT_FILLS,
+  DEFAULT_UNITS_PER_METRE,
   OCCUPANCY_COLORS,
   OCCUPANCY_LABELS,
   OUTLINE_COLOR,
@@ -19,6 +20,7 @@ import {
   fixedPointsPerUnit,
   ratioForScale,
   objectBox,
+  objectBodyBounds,
   objectsPrintBounds,
   occupancyStatus,
   printFit,
@@ -31,6 +33,8 @@ import {
   type OccupancyStatus
 } from "@/lib/floorplans/geometry";
 import { planTotals } from "@/lib/floorplans/checks";
+import { doorLeafPath, outsideReach, roomOpenings, roomWalls, wallRunsPath } from "@/lib/floorplans/openings";
+import { roomWorldPoints } from "@/lib/floorplans/room";
 import { seatingNameBand, seatingPositions, seatingSeats } from "@/lib/floorplans/seating";
 
 /** The wheelchair symbol (same drawing as on the canvas), in a 24-unit box. */
@@ -569,6 +573,114 @@ export async function renderFloorplanDocumentPdf(
         const maxSize = Math.max(6, Math.min(14, band * scale * 0.75));
         const size = fitTextSingleLine(bodyBold, name, usable, maxSize, 4.5).size;
         drawCentered(page, bodyBold, name, toX(box.cx + at.x), toY(box.cy + at.y) - size * 0.35, usable, maxSize, 4.5, textColor);
+      }
+      continue;
+    }
+
+    if (item.type === "room") {
+      // Walls as a thick outline over a faint floor tint; the name sits inside the top-left corner.
+      const wall = Math.max(1.2, (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.12 * scale);
+      const wallColor = rgb(0.36, 0.42, 0.49);
+      const exitColor = rgb(0.12, 0.54, 0.3);
+      const pts = roomWorldPoints(item).map((p) => ({ x: toX(p.x), y: toY(p.y) }));
+      // Floor, then the walls as runs between the doors and windows.
+      drawPolygon(page, pts, { color: rgb(0.965, 0.97, 0.98), borderColor: wallColor, borderWidth: 0 });
+      const walls = roomWalls(item);
+      // pdf-lib draws SVG paths with y flipped about the origin, so plan points go to (x, -y) on the page.
+      const toSvg = (q: { x: number; y: number }) => ({ x: toX(q.x), y: -toY(q.y) });
+      page.drawSvgPath(wallRunsPath(item, walls, toSvg), { x: 0, y: 0, borderColor: wallColor, borderWidth: wall });
+      for (const g of roomOpenings(item, walls)) {
+        const color = g.opening.exit ? exitColor : wallColor;
+        const n = { x: g.wall.nx, y: g.wall.ny };
+        const half = wall / 2 / scale;
+        for (const q of [g.start, g.end]) {
+          page.drawLine({
+            start: { x: toX(q.x - n.x * half), y: toY(q.y - n.y * half) },
+            end: { x: toX(q.x + n.x * half), y: toY(q.y + n.y * half) },
+            thickness: Math.max(0.5, wall * 0.35),
+            color
+          });
+        }
+        if (g.opening.kind === "window") {
+          drawPolygon(
+            page,
+            [
+              { x: g.start.x - n.x * half, y: g.start.y - n.y * half },
+              { x: g.end.x - n.x * half, y: g.end.y - n.y * half },
+              { x: g.end.x + n.x * half, y: g.end.y + n.y * half },
+              { x: g.start.x + n.x * half, y: g.start.y + n.y * half }
+            ].map((q) => ({ x: toX(q.x), y: toY(q.y) })),
+            { color: rgb(1, 1, 1), borderColor: wallColor, borderWidth: Math.max(0.3, wall * 0.15) }
+          );
+          page.drawLine({
+            start: { x: toX(g.start.x), y: toY(g.start.y) },
+            end: { x: toX(g.end.x), y: toY(g.end.y) },
+            thickness: Math.max(0.3, wall * 0.15),
+            color: wallColor
+          });
+        }
+        for (const leaf of g.leaves) {
+          // toX/toY flip the page vertically, and the (x, -y) for pdf-lib flips it back: net, no mirror.
+          page.drawSvgPath(doorLeafPath(leaf, toSvg, scale), { x: 0, y: 0, borderColor: color, borderWidth: Math.max(0.4, wall * 0.25) });
+        }
+        const label = g.opening.label?.trim() || (g.opening.exit ? "Exit" : "");
+        if (label) {
+          const away = (wall + 8) / scale + outsideReach(g);
+          const p = { x: toX(g.centre.x - n.x * away), y: toY(g.centre.y - n.y * away) };
+          const size = 7;
+          const w = bodyBold.widthOfTextAtSize(label, size);
+          page.drawText(label, { x: p.x - w / 2, y: p.y - size * 0.35, size, font: bodyBold, color });
+        }
+      }
+      const name = item.name?.trim();
+      if (name) {
+        const b = objectBodyBounds(item);
+        const fitted = fitTextSingleLine(bodyBold, name, Math.max(20, (b.maxX - b.minX) * scale - 12), 11, 6);
+        const size = fitted.size;
+        page.drawText(fitted.line, {
+          x: toX(b.minX) + wall / 2 + 5,
+          y: toY(b.minY) - wall / 2 - 4 - size,
+          size,
+          font: bodyBold,
+          color: rgb(0.36, 0.42, 0.49)
+        });
+      }
+      continue;
+    }
+
+    if (item.type === "rect" && item.keepClear) {
+      // Keep-clear zone: pale hatching inside a dashed edge.
+      const zone = rgb(0.76, 0.25, 0.05);
+      const local = (lx: number, ly: number) => {
+        const p = rotatePoint({ x: lx, y: ly }, box.rotation);
+        return { x: toX(box.cx + p.x), y: toY(box.cy + p.y) };
+      };
+      const corners = [
+        local(-box.w / 2, -box.h / 2),
+        local(box.w / 2, -box.h / 2),
+        local(box.w / 2, box.h / 2),
+        local(-box.w / 2, box.h / 2)
+      ];
+      drawPolygon(page, corners, { color: rgb(0.99, 0.94, 0.92), borderColor: zone, borderWidth: 0 });
+      // Hatching: 45° lines across the zone, clipped to it by working in the zone's own frame.
+      const step = Math.max(6 / scale, Math.min(box.w, box.h) / 12);
+      for (let t = -box.h; t < box.w; t += step) {
+        const x0 = -box.w / 2 + Math.max(0, t);
+        const y0 = box.h / 2 - Math.max(0, -t);
+        const len = Math.min(box.w / 2 - x0, y0 + box.h / 2);
+        if (len <= 0) continue;
+        page.drawLine({ start: local(x0, y0), end: local(x0 + len, y0 - len), thickness: 0.4, color: zone, opacity: 0.45 });
+      }
+      const d = corners.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(3)} ${(-p.y).toFixed(3)}`).join(" ") + " Z";
+      page.drawSvgPath(d, { x: 0, y: 0, borderColor: zone, borderWidth: Math.max(0.6, strokeWidth), borderDashArray: [3, 2] });
+      const label = item.label?.trim();
+      if (label) {
+        const sideways = Math.abs(Math.sin((box.rotation * Math.PI) / 180)) > 0.7;
+        const usable = (sideways ? box.h : box.w) * scale;
+        const tall = (sideways ? box.w : box.h) * scale;
+        const maxSize = Math.max(7, Math.min(14, tall * 0.35));
+        const size = fitTextSingleLine(bodyBold, label, usable - 6, maxSize, 5).size;
+        drawCentered(page, bodyBold, label, cx, cy - size * 0.35, usable - 6, maxSize, 5, zone);
       }
       continue;
     }

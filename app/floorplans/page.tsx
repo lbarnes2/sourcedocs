@@ -1,8 +1,11 @@
 "use client";
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlignCenterHorizontal,
+  Building2,
+  LibraryBig,
   AlignCenterVertical,
   AlignEndHorizontal,
   AlignEndVertical,
@@ -38,7 +41,9 @@ import {
   Save,
   SendToBack,
   Settings2,
+  PencilRuler,
   Shapes,
+  Square,
   SquareDashedMousePointer,
   Trash2,
   TriangleAlert,
@@ -54,13 +59,25 @@ import { Callout, Field, Modal, PageHeader, Section, Segmented, Switch, Toasts }
 import { FloorplanCanvas, type CanvasView, clampZoom } from "@/app/floorplans/FloorplanCanvas";
 import { Inspector } from "@/app/floorplans/Inspector";
 import { PlanPanel } from "@/app/floorplans/PlanPanel";
+import { RoomThumb, templateSizeText } from "@/app/floorplans/RoomThumb";
 import { MenuButton, MenuItem, MenuLabel, MenuPanel, MenuSeparator } from "@/app/floorplans/Menu";
 import { buildMeasurements, type Measurement } from "@/lib/floorplans/measure";
 import { NumericInput } from "@/app/floorplans/NumericInput";
 import { MAX_FLOORPLAN_GRID } from "@/lib/validation/limits";
 import { OBJECT_PRESETS } from "@/app/floorplans/presets";
 import { buildPlanIssues, planTotals, type PlanIssue } from "@/lib/floorplans/checks";
-import { findFreeCentre, seatsBlocked } from "@/lib/floorplans/collision";
+import { findFreeCentre, seatsBlocked, seatsOnWalls, seatsOutsideRoom } from "@/lib/floorplans/collision";
+import { BANQUET_DEFAULTS, fillAreaWithTables, type BanquetFillSettings } from "@/lib/floorplans/banquet";
+import { migrateRoomOutlines, pointInPolygon, roomFromWorldPoints, roomLocalBounds, roomWorldPoints } from "@/lib/floorplans/room";
+import {
+  ROOM_TEMPLATE_UNITS_PER_METRE,
+  applyRoomUpdate,
+  fixturesInside,
+  objectsFromTemplate,
+  pendingRoomUpdates,
+  templateContentFromPlan,
+  type RoomUpdate
+} from "@/lib/floorplans/roomTemplates";
 import { CHAIR_PRESETS, CHEVRON_MAX_ANGLE, ROW_SHAPES, seatingRowLengths, withSeatState, type RowShape, type SeatState } from "@/lib/floorplans/seating";
 import {
   GENERATED_SEATING_ID,
@@ -110,7 +127,10 @@ import type {
   FloorplanDocument,
   FloorplanListItem,
   FloorplanPrintOptions,
+  FloorplanRoomObject,
+  FloorplanRoomTemplate,
   FloorplanTableObject,
+  FloorplanVenue,
   GuestRecord,
   ProjectListItem
 } from "@/types";
@@ -128,7 +148,7 @@ const STYLE_OPTIONS: Array<{ value: TableStyle; label: string; title: string }> 
 
 /** Which add menu each preset lives in; the seating block and text label have their own places. */
 const TABLE_PRESET_IDS = ["round-6ft", "round-5ft", "rect-table", "top-table"];
-const ROOM_PRESET_IDS = ["room", "stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
+const ROOM_PRESET_IDS = ["keep-clear", "stage", "dance-floor", "bar", "buffet", "entrance", "av-desk", "pillar"];
 
 const SHORTCUTS: Array<[string, string]> = [
   ["Drag", "Move (Shift-drag moves off the grid)"],
@@ -140,7 +160,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ["⌘C / ⌘V / ⌘D", "Copy / paste / duplicate"],
   ["⌘A", "Select everything"],
   ["Delete", "Delete the selection"],
-  ["V / H / F", "Select, hand, fill an area"],
+  ["V / H / F / R", "Select, hand, fill an area, draw a room"],
   ["A", "Auto layout"],
   ["⌘S / ⌘P", "Save / print and export"],
   ["Esc", "Deselect, or stop what you're doing"]
@@ -179,6 +199,7 @@ type Library = { loaded: boolean; configured: boolean; items: Array<{ key: strin
 const EMPTY_LIBRARY: Library = { loaded: false, configured: false, items: [] };
 
 type Autosave = { doc: FloorplanDocument; at: string };
+type FillKind = "theatre" | "banquet";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -217,13 +238,21 @@ export default function FloorplansPage() {
   const [panTool, setPanTool] = useState(false);
   /** Drawing a rectangle to fill with seating. */
   const [drawMode, setDrawMode] = useState(false);
+  /** Drawing a room corner by corner. */
+  const [roomDraw, setRoomDraw] = useState(false);
+  useEffect(() => {
+    if (drawMode || panTool) setRoomDraw(false);
+  }, [drawMode, panTool]);
   const [fillPrompt, setFillPrompt] = useState<{
     area: FillArea;
     marginM: number;
     facing: TheatreFacing;
     /** The shape being filled, which isn't in the way of its own seating. */
     shapeId?: string;
+    kind: FillKind;
   } | null>(null);
+  // Which kind of fill a rectangle drawn with the fill tool opens with (the menu it was started from).
+  const nextFillKindRef = useRef<FillKind | null>(null);
   const [spaceDown, setSpaceDown] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showFrame, setShowFrame] = useState(true);
@@ -267,6 +296,20 @@ export default function FloorplansPage() {
   const [seatEdit, setSeatEdit] = useState<{ id: string; tool: "remove" | "wheelchair" } | null>(null);
   /** A short-lived note about something that just happened. */
   const [notice, setNotice] = useState("");
+  const router = useRouter();
+  // Venues and their room templates, for "Add a room from a template" and for spotting newer versions.
+  const [venues, setVenues] = useState<FloorplanVenue[]>([]);
+  const [templatePicker, setTemplatePicker] = useState<{ venueId: string; templateId: string | null } | null>(null);
+  const [saveTemplate, setSaveTemplate] = useState<{
+    roomId: string;
+    venueId: string;
+    newVenueName: string;
+    name: string;
+    /** Replace the template the room came from, rather than adding a new one. */
+    replace: boolean;
+    withFixtures: boolean;
+  } | null>(null);
+  const [templateBusy, setTemplateBusy] = useState(false);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(""), 5000);
@@ -287,6 +330,12 @@ export default function FloorplansPage() {
     () => objects.find((o) => o.id === validSelected[validSelected.length - 1]) ?? null,
     [objects, validSelected]
   );
+  // The door or window being edited: only while its room is the one thing selected.
+  const [openingIdRaw, setOpeningId] = useState<string | null>(null);
+  const openingId =
+    primary?.type === "room" && validSelected.length === 1 && primary.openings?.some((o) => o.id === openingIdRaw)
+      ? openingIdRaw
+      : null;
   const print = resolvePrintOptions(draft.print);
   const unitsPerMetre = draft.canvas.unitsPerMetre && draft.canvas.unitsPerMetre > 0 ? draft.canvas.unitsPerMetre : null;
   const tableGuests: TableGuestMap | null = useMemo(
@@ -417,7 +466,9 @@ export default function FloorplansPage() {
       pastRef.current = [];
       futureRef.current = [];
       coalesceRef.current = { key: null, at: 0 };
-      setDoc(doc);
+      // Old plans: their "Room outline" rectangles become rooms.
+      const objects = migrateRoomOutlines(doc.objects);
+      setDoc(objects === doc.objects ? doc : { ...doc, objects });
       setSelectedIds([]);
       setDirty(markDirty);
       syncHistory();
@@ -533,23 +584,218 @@ export default function FloorplansPage() {
     return v.y < 0 ? "up" : "down";
   }
 
-  function openFill(area: FillArea, marginM: number, shapeId?: string) {
+  function openFill(area: FillArea, marginM: number, shapeId?: string, kind?: FillKind) {
     setDrawMode(false);
-    setFillPrompt({ area, marginM, facing: facingFor(area), shapeId });
+    setFillPrompt({ area, marginM, facing: facingFor(area), shapeId, kind: kind ?? draft.autoLayout.fillKind ?? "theatre" });
+  }
+
+  function startFillDraw(kind: FillKind) {
+    nextFillKindRef.current = kind;
+    setDrawMode(true);
+    setPanTool(false);
+  }
+
+  function startRoomDraw() {
+    setRoomDraw(true);
+    setDrawMode(false);
+    setPanTool(false);
+    setSeatEdit(null);
+    setSelectedIds([]);
+  }
+
+  function onRoomDrawn(points: { x: number; y: number }[] | null) {
+    setRoomDraw(false);
+    if (!points || points.length < 3) return;
+    const room = roomFromWorldPoints(points);
+    // Rooms go underneath everything, so what's in them stays clickable.
+    commitObjects((list) => [room, ...list]);
+    setSelectedIds([room.id]);
+  }
+
+  /* ---------- room templates ---------- */
+
+  const loadVenues = useCallback(async () => {
+    try {
+      const res = await fetch("/api/floorplans/venues");
+      if (!res.ok) return;
+      const payload = (await res.json()) as { venues?: FloorplanVenue[] };
+      setVenues(Array.isArray(payload.venues) ? payload.venues : []);
+    } catch {
+      /* venues are optional: the plan works without them */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadVenues();
+  }, [loadVenues]);
+
+  function openTemplatePicker() {
+    setRoomDraw(false);
+    const venue = venues.find((v) => v.rooms.length) ?? venues[0];
+    setTemplatePicker({ venueId: venue?.id ?? "", templateId: venue?.rooms[0]?.id ?? null });
+    // Pick up rooms saved in another tab since this page opened.
+    void loadVenues();
+  }
+
+  function addRoomFromTemplate(venue: FloorplanVenue, template: FloorplanRoomTemplate) {
+    setTemplatePicker(null);
+    const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+    const k = upm / ROOM_TEMPLATE_UNITS_PER_METRE;
+    const b = roomLocalBounds(template.room);
+    const centre = viewCentre();
+    const g = draft.canvas.gridSize;
+    const origin = {
+      x: Math.round((centre.x - ((b.minX + b.maxX) / 2) * k) / g) * g,
+      y: Math.round((centre.y - ((b.minY + b.maxY) / 2) * k) / g) * g
+    };
+    const wasEmpty = !draftRef.current.objects.length;
+    const { room, fixtures } = objectsFromTemplate(venue, template, upm, origin);
+    // The room and its fixtures go underneath everything, so what's in them stays clickable.
+    commitObjects((list) => [room, ...fixtures, ...list]);
+    setSelectedIds([room.id]);
+    if (wasEmpty) fitSoon();
+    // The venue's logo comes with its room, unless the plan already has one.
+    const logo = venue.logoKey ? venueLogoLibrary.items.find((item) => item.key === venue.logoKey) : undefined;
+    if (logo && !draftRef.current.themeSnapshot.venueLogoDataUrl) void applyLogoFromLibrary(logo, "venueLogoDataUrl");
+  }
+
+  const roomUpdates = useMemo(() => pendingRoomUpdates(objects, venues), [objects, venues]);
+
+  function updateRoom(update: RoomUpdate) {
+    const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+    const next = applyRoomUpdate(draftRef.current.objects, update, upm);
+    const room = next.find((o): o is FloorplanRoomObject => o.id === update.room.id && o.type === "room");
+    commitObjects(() => next);
+    if (!room) return;
+    // Point out tables and seating that the new walls or fixtures now get in the way of.
+    const walls = roomWorldPoints(room);
+    const fixtures = next.filter((o) => o.roomId === room.id && o.type !== "text").map(objectBodyBounds);
+    const overlaps = (a: Bounds, b: Bounds) => a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+    const inTheWay = next.filter((o) => {
+      if (o.type !== "table" && o.type !== "seating") return false;
+      const box = objectBox(o);
+      const body = objectBodyBounds(o);
+      const wasInside = pointInPolygon({ x: box.cx, y: box.cy }, roomWorldPoints(update.room));
+      return (wasInside && !pointInPolygon({ x: box.cx, y: box.cy }, walls)) || fixtures.some((f) => overlaps(body, f));
+    });
+    const name = room.name?.trim() || update.template.name;
+    if (inTheWay.length) {
+      setSelectedIds(inTheWay.map((o) => o.id));
+      setNotice(
+        `${name} updated to version ${update.template.version}. ${inTheWay.length} table${inTheWay.length === 1 ? " or seating block is" : "s or seating blocks are"} now outside the walls or on a fixture, and selected.`
+      );
+    } else {
+      setSelectedIds([room.id]);
+      setNotice(`${name} updated to version ${update.template.version}.`);
+    }
+  }
+
+  function skipRoomUpdate(update: RoomUpdate) {
+    commitObjects((list) =>
+      list.map((o) =>
+        o.id === update.room.id && o.type === "room" && o.source ? { ...o, source: { ...o.source, skippedVersion: update.template.version } } : o
+      )
+    );
+  }
+
+  function roomSourceText(room: FloorplanRoomObject): string | null {
+    if (!room.source) return null;
+    const venue = venues.find((v) => v.id === room.source?.venueId);
+    const template = venue?.rooms.find((r) => r.id === room.source?.templateId);
+    if (!venue || !template) return "a room template that has since been deleted";
+    return `${venue.name} › ${template.name}, version ${room.source.version}`;
+  }
+
+  function openSaveTemplate(room: FloorplanRoomObject) {
+    const venue = venues.find((v) => v.id === room.source?.venueId);
+    const template = venue?.rooms.find((r) => r.id === room.source?.templateId);
+    setSaveTemplate({
+      roomId: room.id,
+      venueId: venue?.id ?? venues[0]?.id ?? "new",
+      newVenueName: "",
+      name: template?.name ?? room.name?.trim() ?? "",
+      replace: Boolean(template),
+      withFixtures: true
+    });
+  }
+
+  async function submitSaveTemplate() {
+    const form = saveTemplate;
+    const room = draftRef.current.objects.find((o): o is FloorplanRoomObject => o.id === form?.roomId && o.type === "room");
+    if (!form || !room) return;
+    const name = form.name.trim();
+    if (!name) return;
+    setTemplateBusy(true);
+    setError("");
+    try {
+      let venue = venues.find((v) => v.id === form.venueId);
+      if (!venue) {
+        const venueName = form.newVenueName.trim();
+        if (!venueName) throw new Error("Name the new venue first.");
+        const res = await fetch("/api/floorplans/venues", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: crypto.randomUUID(), name: venueName, logoKey: draftRef.current.selectedVenueLogoKey ?? null, updatedAt: new Date().toISOString(), rooms: [] })
+        });
+        if (!res.ok) throw new Error(await readResponseError(res, "Could not add the venue."));
+        venue = ((await res.json()) as { venue: FloorplanVenue }).venue;
+      }
+      const existing = form.replace && room.source?.venueId === venue.id ? venue.rooms.find((r) => r.id === room.source?.templateId) : undefined;
+      const fixtures = form.withFixtures ? fixturesInside(room, draftRef.current.objects) : [];
+      const upm = unitsPerMetre ?? DEFAULT_UNITS_PER_METRE;
+      const template: FloorplanRoomTemplate = {
+        id: existing?.id ?? crypto.randomUUID(),
+        name,
+        version: existing?.version ?? 1,
+        updatedAt: new Date().toISOString(),
+        notes: existing?.notes,
+        ...templateContentFromPlan({ ...room, name: room.name?.trim() || name }, fixtures, upm)
+      };
+      const res = await fetch(`/api/floorplans/venues/${encodeURIComponent(venue.id)}/rooms`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(template)
+      });
+      if (!res.ok) throw new Error(await readResponseError(res, "Could not save the room template."));
+      const savedVenue = ((await res.json()) as { venue: FloorplanVenue }).venue;
+      const saved = savedVenue.rooms.find((r) => r.id === template.id) ?? template;
+      setVenues((list) => [...list.filter((v) => v.id !== savedVenue.id), savedVenue].sort((a, b) => a.name.localeCompare(b.name)));
+      // The plan's room now comes from this template, and the shapes saved with it go with the room.
+      const fixtureIds = new Set(fixtures.map((f) => f.id));
+      commitObjects((list) =>
+        list.map((o) => {
+          if (o.id === room.id && o.type === "room") return { ...o, source: { venueId: savedVenue.id, templateId: saved.id, version: saved.version } };
+          if (fixtureIds.has(o.id)) return { ...o, roomId: room.id };
+          return o;
+        })
+      );
+      setSaveTemplate(null);
+      setNotice(
+        existing && saved.version === existing.version
+          ? `“${saved.name}” is the same as the room in ${savedVenue.name}, so it stays at version ${saved.version}.`
+          : `Saved “${saved.name}” to ${savedVenue.name}${existing ? ` as version ${saved.version}. Other plans using it will offer the update` : ""}.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the room template.");
+    } finally {
+      setTemplateBusy(false);
+    }
   }
 
   function onDrawArea(b: Bounds) {
     setDrawMode(false);
     const minSize = (unitsPerMetre ?? DEFAULT_UNITS_PER_METRE) * 0.5;
     if (b.maxX - b.minX < minSize || b.maxY - b.minY < minSize) return;
-    openFill({ cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, w: b.maxX - b.minX, h: b.maxY - b.minY, rotation: 0 }, 0);
+    const kind = nextFillKindRef.current ?? undefined;
+    nextFillKindRef.current = null;
+    openFill({ cx: (b.minX + b.maxX) / 2, cy: (b.minY + b.maxY) / 2, w: b.maxX - b.minX, h: b.maxY - b.minY, rotation: 0 }, 0, undefined, kind);
   }
 
   function fillSelectedShape() {
-    if (!primary || primary.type !== "rect") return;
+    if (!primary || (primary.type !== "rect" && primary.type !== "room")) return;
     const box = objectBox(primary);
-    // A room outline gets a gangway round the walls to start with; any other shape is filled to its edges.
-    openFill({ cx: box.cx, cy: box.cy, w: box.w, h: box.h, rotation: box.rotation }, primary.fill === "none" ? 1 : 0, primary.id);
+    // A room gets a gangway round the walls to start with; any other shape is filled to its edges.
+    openFill({ cx: box.cx, cy: box.cy, w: box.w, h: box.h, rotation: box.rotation }, primary.type === "room" ? 1 : 0, primary.id);
   }
 
   function runFill(blocks: FloorplanCanvasObject[], patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>) {
@@ -557,10 +803,31 @@ export default function FloorplansPage() {
     if (!blocks.length) return;
     commit((doc) => ({
       ...doc,
-      autoLayout: { ...doc.autoLayout, theatre: { ...doc.autoLayout.theatre, ...patch } },
+      autoLayout: { ...doc.autoLayout, fillKind: "theatre", theatre: { ...doc.autoLayout.theatre, ...patch } },
       objects: [...doc.objects, ...blocks]
     }));
     setSelectedIds(blocks.map((b) => b.id));
+  }
+
+  function runFillTables(tables: FloorplanTableObject[], settings: BanquetFillSettings) {
+    setFillPrompt(null);
+    if (!tables.length) return;
+    commit((doc) => ({
+      ...doc,
+      autoLayout: {
+        ...doc.autoLayout,
+        fillKind: "banquet",
+        tableStyle: settings.style,
+        roundSize: settings.roundSize,
+        seatsPerTable: settings.seats,
+        tableLayout: settings.layout,
+        numbering: settings.numbering,
+        startCorner: settings.startCorner,
+        banquet: { gangwayM: settings.gangwayM, maxTables: settings.maxTables, facing: settings.facing }
+      },
+      objects: [...doc.objects, ...tables]
+    }));
+    setSelectedIds(tables.map((t) => t.id));
   }
 
   // Selecting something on the canvas puts the measurement highlight away.
@@ -1257,7 +1524,7 @@ export default function FloorplansPage() {
   // Keyboard shortcuts. The handler is re-bound each render so it always sees fresh state.
   const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (event: KeyboardEvent) => {
-    if (listOpen || printOpen || settingsOpen || autoOpen || generatePrompt || fillPrompt) return;
+    if (listOpen || printOpen || settingsOpen || autoOpen || generatePrompt || fillPrompt || templatePicker || saveTemplate) return;
     const meta = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (meta && key === "s") {
@@ -1310,9 +1577,18 @@ export default function FloorplansPage() {
       setDrawMode(false);
       return;
     }
+    if (roomDraw) return;
     if (event.key === "Delete" || event.key === "Backspace") {
       // Editing seats: the block itself isn't what's being worked on.
       if (seatEdit) return;
+      // A door or window is selected: take that out, not the room.
+      if (openingId && primary?.type === "room") {
+        event.preventDefault();
+        const id = openingId;
+        patchSelected((o) => (o.type === "room" ? { ...o, openings: o.openings?.filter((x) => x.id !== id) } : o));
+        setOpeningId(null);
+        return;
+      }
       if (validSelected.length) {
         event.preventDefault();
         deleteSelection();
@@ -1320,7 +1596,8 @@ export default function FloorplansPage() {
       return;
     }
     if (event.key === "Escape") {
-      setSelectedIds([]);
+      if (openingId) setOpeningId(null);
+      else setSelectedIds([]);
       return;
     }
     if (event.key.startsWith("Arrow") && validSelected.length) {
@@ -1332,8 +1609,9 @@ export default function FloorplansPage() {
       if (event.key === "ArrowDown") nudge(0, step);
       return;
     }
-    if (!event.altKey && !event.shiftKey && (key === "v" || key === "h" || key === "f" || key === "a")) {
+    if (!event.altKey && !event.shiftKey && (key === "v" || key === "h" || key === "f" || key === "a" || key === "r")) {
       if (key === "a") setAutoOpen(true);
+      else if (key === "r") startRoomDraw();
       else {
         setPanTool(key === "h");
         setDrawMode(key === "f");
@@ -1475,6 +1753,10 @@ export default function FloorplansPage() {
                 Duplicate floorplan
               </MenuItem>
               <MenuSeparator />
+              <MenuItem icon={<Building2 size={15} />} hint="Rooms you can start a plan from" onSelect={() => router.push("/floorplans/rooms")}>
+                Venues & rooms
+              </MenuItem>
+              <MenuSeparator />
               <MenuItem icon={<Trash2 size={15} />} danger disabled={busy} onSelect={() => void deleteCurrent()}>
                 {isSaved ? "Delete floorplan" : "Discard floorplan"}
               </MenuItem>
@@ -1596,11 +1878,26 @@ export default function FloorplansPage() {
           initialFacing={fillPrompt.facing}
           settings={theatre}
           objects={fillPrompt.shapeId ? objects.filter((o) => o.id !== fillPrompt.shapeId) : objects}
+          room={objects.find((o): o is FloorplanRoomObject => o.id === fillPrompt.shapeId && o.type === "room")}
           unitsPerMetre={unitsPerMetre ?? DEFAULT_UNITS_PER_METRE}
           clearance={seatClearance}
           scaled={Boolean(unitsPerMetre)}
+          initialKind={fillPrompt.kind}
+          banquet={{
+            style: tableStyle,
+            roundSize,
+            seats: seatsPerTable,
+            gangwayM: draft.autoLayout.banquet?.gangwayM ?? BANQUET_DEFAULTS.gangwayM,
+            layout: draft.autoLayout.tableLayout,
+            maxTables: draft.autoLayout.banquet?.maxTables ?? BANQUET_DEFAULTS.maxTables,
+            facing: fillPrompt.facing,
+            numbering: draft.autoLayout.numbering,
+            startCorner: draft.autoLayout.startCorner
+          }}
+          guestNumbers={usingGuestNumbers ? guestTableNumbers : []}
           onCancel={() => setFillPrompt(null)}
           onFill={runFill}
+          onFillTables={runFillTables}
         />
       ) : null}
 
@@ -2081,6 +2378,182 @@ export default function FloorplansPage() {
         </Modal>
       ) : null}
 
+      {roomUpdates.map((update) => (
+        <Callout key={update.room.id} tone="info" className="fp-recovered">
+          <div className="fp-update-banner">
+            <span>
+              {update.room.name?.trim() || update.template.name} has a newer version in {update.venue.name} (version {update.room.source?.version} → {update.template.version}).
+              {update.room.locked ? "" : " Updating replaces its walls, doors and fixtures; tables and seating stay where they are."}
+            </span>
+            <button type="button" className="btn-sm" onClick={() => updateRoom(update)}>
+              Update room
+            </button>
+            <button type="button" className="btn-sm btn-ghost" onClick={() => skipRoomUpdate(update)}>
+              Keep this version
+            </button>
+          </div>
+        </Callout>
+      ))}
+
+      {templatePicker ? (() => {
+        const venue = venues.find((v) => v.id === templatePicker.venueId);
+        const template = venue?.rooms.find((r) => r.id === templatePicker.templateId);
+        return (
+          <Modal
+            title="Add a room from a template"
+            onClose={() => setTemplatePicker(null)}
+            footer={
+              <>
+                <button type="button" className="btn-ghost" onClick={() => router.push("/floorplans/rooms")}>
+                  <Building2 size={15} aria-hidden /> Venues & rooms
+                </button>
+                <span className="spacer" />
+                <button type="button" onClick={() => setTemplatePicker(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={!venue || !template}
+                  onClick={() => venue && template && addRoomFromTemplate(venue, template)}
+                >
+                  Add room
+                </button>
+              </>
+            }
+          >
+            {venues.length === 0 ? (
+              <p className="field-hint" style={{ margin: 0 }}>
+                No rooms saved yet. Set them up in Venues & rooms, or select a room on a plan and use Save as room template.
+              </p>
+            ) : (
+              <div className="stack">
+                <Field label="Venue">
+                  <select
+                    value={templatePicker.venueId}
+                    onChange={(e) => {
+                      const v = venues.find((x) => x.id === e.target.value);
+                      setTemplatePicker({ venueId: e.target.value, templateId: v?.rooms[0]?.id ?? null });
+                    }}
+                  >
+                    {venues.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.rooms.length} room{v.rooms.length === 1 ? "" : "s"})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                {venue && venue.rooms.length ? (
+                  <ul className="room-pick-list" aria-label="Rooms">
+                    {venue.rooms.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          aria-pressed={r.id === templatePicker.templateId}
+                          onClick={() => setTemplatePicker({ ...templatePicker, templateId: r.id })}
+                          onDoubleClick={() => addRoomFromTemplate(venue, r)}
+                        >
+                          <RoomThumb room={r.room} fixtures={r.fixtures} size={64} />
+                          <span className="room-card-text">
+                            <strong>{r.name}</strong>
+                            <span className="field-hint">{templateSizeText(r)}</span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    {venue?.name ?? "This venue"} has no rooms yet.
+                  </p>
+                )}
+                {!unitsPerMetre ? (
+                  <p className="field-hint" style={{ margin: 0 }}>
+                    This plan has no scale set, so the room is added at {DEFAULT_UNITS_PER_METRE} units per metre.
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </Modal>
+        );
+      })() : null}
+
+      {saveTemplate ? (() => {
+        const room = objects.find((o): o is FloorplanRoomObject => o.id === saveTemplate.roomId && o.type === "room");
+        const fromVenue = room?.source ? venues.find((v) => v.id === room.source?.venueId) : undefined;
+        const fromTemplate = fromVenue?.rooms.find((r) => r.id === room?.source?.templateId);
+        const canReplace = Boolean(fromTemplate) && saveTemplate.venueId === fromVenue?.id;
+        const fixtureCount = room ? fixturesInside(room, objects).length : 0;
+        const isNewVenue = !venues.some((v) => v.id === saveTemplate.venueId);
+        const ready = saveTemplate.name.trim() && (!isNewVenue || saveTemplate.newVenueName.trim());
+        return (
+          <Modal
+            title={canReplace && saveTemplate.replace ? "Save to room template" : "Save as room template"}
+            size="sm"
+            onClose={() => setSaveTemplate(null)}
+            footer={
+              <>
+                <button type="button" onClick={() => setSaveTemplate(null)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn-primary" disabled={templateBusy || !ready} onClick={() => void submitSaveTemplate()}>
+                  {templateBusy ? "Saving…" : "Save"}
+                </button>
+              </>
+            }
+          >
+            <div className="stack">
+              <Field label="Venue">
+                <select value={saveTemplate.venueId} onChange={(e) => setSaveTemplate({ ...saveTemplate, venueId: e.target.value })}>
+                  {venues.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                  <option value="new">New venue…</option>
+                </select>
+              </Field>
+              {isNewVenue ? (
+                <Field label="New venue name">
+                  <input
+                    autoFocus
+                    value={saveTemplate.newVenueName}
+                    placeholder="e.g. Hartwell House"
+                    onChange={(e) => setSaveTemplate({ ...saveTemplate, newVenueName: e.target.value })}
+                  />
+                </Field>
+              ) : null}
+              {canReplace ? (
+                <Segmented
+                  aria-label="Save as"
+                  value={saveTemplate.replace ? "replace" : "new"}
+                  options={[
+                    { value: "replace", label: `Update “${fromTemplate?.name}”` },
+                    { value: "new", label: "Save as a new room" }
+                  ]}
+                  onChange={(v) => setSaveTemplate({ ...saveTemplate, replace: v === "replace" })}
+                />
+              ) : null}
+              <Field label="Room name">
+                <input value={saveTemplate.name} placeholder="e.g. The Orangery" onChange={(e) => setSaveTemplate({ ...saveTemplate, name: e.target.value })} />
+              </Field>
+              <Switch
+                label={`Include the ${fixtureCount} shape${fixtureCount === 1 ? "" : "s"} inside the room`}
+                hint="Pillars, bars, stages, keep-clear zones and labels. Tables and seating stay with the plan."
+                checked={saveTemplate.withFixtures && fixtureCount > 0}
+                disabled={!fixtureCount}
+                onChange={(withFixtures) => setSaveTemplate({ ...saveTemplate, withFixtures })}
+              />
+              {canReplace && saveTemplate.replace ? (
+                <p className="field-hint" style={{ margin: 0 }}>
+                  Other plans using this room will offer to update to the new version.
+                </p>
+              ) : null}
+            </div>
+          </Modal>
+        );
+      })() : null}
+
       <div className="editor">
         <section className="card editor-canvas-card">
           <div className="toolbar" role="toolbar" aria-label="Canvas tools">
@@ -2088,6 +2561,13 @@ export default function FloorplansPage() {
               <MenuButton className="toolbar-btn" icon={<CircleDot size={15} aria-hidden />} label="Tables" title="Add tables, renumber">
                 <MenuLabel>Add</MenuLabel>
                 {TABLE_PRESET_IDS.map((id) => presetItem(id))}
+                <MenuItem
+                  icon={<SquareDashedMousePointer size={15} />}
+                  hint="Drag a rectangle on the plan, or select a room and use Fill"
+                  onSelect={() => startFillDraw("banquet")}
+                >
+                  Fill an area with tables…
+                </MenuItem>
                 <MenuSeparator />
                 <MenuLabel>Numbering</MenuLabel>
                 <MenuItem
@@ -2116,16 +2596,25 @@ export default function FloorplansPage() {
                   icon={<SquareDashedMousePointer size={15} />}
                   hint="Drag a rectangle on the plan"
                   shortcut="F"
-                  onSelect={() => {
-                    setDrawMode(true);
-                    setPanTool(false);
-                  }}
+                  onSelect={() => startFillDraw("theatre")}
                 >
                   Fill an area…
                 </MenuItem>
               </MenuButton>
-              <MenuButton className="toolbar-btn" icon={<Shapes size={15} aria-hidden />} label="Room" title="Add room features">
+              <MenuButton className="toolbar-btn" icon={<Shapes size={15} aria-hidden />} label="Room" title="Draw the room and add room features">
+                <MenuItem icon={<LibraryBig size={15} />} hint="A saved room, with its doors and fixtures" onSelect={openTemplatePicker}>
+                  Add a room from a template…
+                </MenuItem>
+                <MenuItem icon={<PencilRuler size={15} />} hint="Click round the walls corner by corner" shortcut="R" onSelect={startRoomDraw}>
+                  Draw a room…
+                </MenuItem>
+                {presetItem("room", <Square size={15} />, "18 × 12 m, then drag its corners")}
+                <MenuSeparator />
                 {ROOM_PRESET_IDS.map((id) => presetItem(id))}
+                <MenuSeparator />
+                <MenuItem icon={<Building2 size={15} />} onSelect={() => router.push("/floorplans/rooms")}>
+                  Venues & rooms…
+                </MenuItem>
               </MenuButton>
               <button type="button" className="toolbar-btn" onClick={() => addPreset("text")} title="Add a text label">
                 <Type size={15} aria-hidden /> Text
@@ -2205,11 +2694,12 @@ export default function FloorplansPage() {
             <div className="btn-group" role="group" aria-label="Tools">
               <button
                 type="button"
-                className={`icon-btn${!panTool && !drawMode ? " icon-btn--on" : ""}`}
-                aria-pressed={!panTool && !drawMode}
+                className={`icon-btn${!panTool && !drawMode && !roomDraw ? " icon-btn--on" : ""}`}
+                aria-pressed={!panTool && !drawMode && !roomDraw}
                 onClick={() => {
                   setPanTool(false);
                   setDrawMode(false);
+                  setRoomDraw(false);
                 }}
                 title="Select and move (V)"
                 aria-label="Select tool"
@@ -2223,6 +2713,7 @@ export default function FloorplansPage() {
                 onClick={() => {
                   setPanTool((v) => !v);
                   setDrawMode(false);
+                  setRoomDraw(false);
                 }}
                 title="Hand: drag to pan (H, or hold Space)"
                 aria-label="Hand tool"
@@ -2236,11 +2727,22 @@ export default function FloorplansPage() {
                 onClick={() => {
                   setDrawMode((v) => !v);
                   setPanTool(false);
+                  setRoomDraw(false);
                 }}
-                title="Fill an area with seating: drag a rectangle on the plan (F)"
-                aria-label="Fill an area with seating"
+                title="Fill an area with seating or tables: drag a rectangle on the plan (F)"
+                aria-label="Fill an area"
               >
                 <SquareDashedMousePointer size={16} />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn${roomDraw ? " icon-btn--on" : ""}`}
+                aria-pressed={roomDraw}
+                onClick={() => (roomDraw ? setRoomDraw(false) : startRoomDraw())}
+                title="Draw a room: click round the walls corner by corner (R)"
+                aria-label="Draw a room"
+              >
+                <PencilRuler size={16} />
               </button>
             </div>
           </div>
@@ -2270,6 +2772,10 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
             }
             drawMode={drawMode}
             onDrawArea={onDrawArea}
+            roomDraw={roomDraw}
+            onRoomDrawn={onRoomDrawn}
+            openingId={openingId}
+            onSelectOpening={setOpeningId}
             seatEdit={seatEdit}
             onEditSeats={editSeats}
             onSeatPaint={paintSeat}
@@ -2368,6 +2874,11 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
               seatEdit={seatEdit}
               onClearUnderObjects={clearSeatsUnderObjects}
               onFillShape={fillSelectedShape}
+              openingId={openingId}
+              onOpeningId={setOpeningId}
+              roomTemplate={
+                primary.type === "room" ? { source: roomSourceText(primary), onSave: () => openSaveTemplate(primary) } : undefined
+              }
               onSeatEdit={(next) => setSeatEdit(next && primary ? { id: primary.id, tool: next } : null)}
               onDelete={deleteSelection}
               onOrder={reorderSelected}
@@ -2418,8 +2929,11 @@ fillPrompt ? { polygons: [areaPolygon(fillPrompt.area)] } : canvasHighlight
                 <button type="button" className="btn-primary" onClick={() => setAutoOpen(true)}>
                   <WandSparkles size={15} aria-hidden /> Auto layout…
                 </button>
-                <button type="button" onClick={() => addPreset("room")}>
-                  <Shapes size={15} aria-hidden /> Draw the room outline
+                <button type="button" onClick={openTemplatePicker}>
+                  <LibraryBig size={15} aria-hidden /> Add a room from a template…
+                </button>
+                <button type="button" onClick={startRoomDraw}>
+                  <PencilRuler size={15} aria-hidden /> Draw the room
                 </button>
                 <button type="button" onClick={() => setSettingsOpen(true)}>
                   <Settings2 size={15} aria-hidden /> Link a guest list or set the scale
@@ -2687,13 +3201,20 @@ function FillPrompt({
   initialFacing,
   settings,
   objects,
+  room,
   unitsPerMetre,
   clearance,
   scaled,
+  initialKind,
+  banquet,
+  guestNumbers,
   onCancel,
-  onFill
+  onFill,
+  onFillTables
 }: {
   area: FillArea;
+  /** Filling a room: chairs outside its walls, or within the margin of one, are left out. */
+  room?: FloorplanRoomObject;
   initialMargin: number;
   initialFacing: TheatreFacing;
   settings: ReturnType<typeof resolveTheatreSettings>;
@@ -2706,21 +3227,53 @@ function FillPrompt({
     blocks: FloorplanCanvasObject[],
     patch: Partial<NonNullable<FloorplanDocument["autoLayout"]["theatre"]>>
   ) => void;
+  initialKind: FillKind;
+  /** Last banquet fill settings (table type, size and layout shared with Auto layout). */
+  banquet: BanquetFillSettings;
+  /** Table numbers from the linked guest list, used first when filling with tables. */
+  guestNumbers: string[];
+  onFillTables: (tables: FloorplanTableObject[], settings: BanquetFillSettings) => void;
 }) {
+  const [kind, setKind] = useState<FillKind>(initialKind);
   const [margin, setMargin] = useState(initialMargin);
   const [form, setForm] = useState({ ...settings, facing: initialFacing });
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const [tablesForm, setTablesForm] = useState(banquet);
+  const setTables = (patch: Partial<BanquetFillSettings>) => setTablesForm((f) => ({ ...f, ...patch }));
+
+  const tablesResult = useMemo(() => {
+    if (kind !== "banquet") return null;
+    // Guest-list numbers not on the plan yet, then the next free numbers.
+    const taken = new Set(objects.flatMap((o) => (o.type === "table" ? [o.tableNumber.trim()] : [])));
+    const list = guestNumbers.filter((n) => !taken.has(n));
+    let next = 1;
+    const numberFor = (i: number) => {
+      while (list.length <= i) {
+        while (taken.has(String(next)) || list.includes(String(next))) next += 1;
+        list.push(String(next));
+      }
+      return list[i];
+    };
+    return fillAreaWithTables(area, tablesForm, { unitsPerMetre, marginM: margin, clearance, objects, room, numberFor });
+  }, [kind, area, tablesForm, unitsPerMetre, margin, clearance, objects, room, guestNumbers]);
 
   const result = useMemo(
     () =>
-      fillAreaWithSeating(area, form, {
+      kind !== "theatre"
+        ? { blocks: [], rows: 0, perRow: 0, aisles: 0, seats: 0 }
+        : fillAreaWithSeating(area, form, {
         unitsPerMetre,
         marginM: margin,
         maxRun: form.maxRun,
         objects,
-        blocked: (block) => seatsBlocked(block, objects, clearance)
+        blocked: (block) => {
+          const blocked = seatsBlocked(block, objects, clearance);
+          // Chairs never stand across the walls of a room the area overlaps.
+          const onWalls = objects.flatMap((o) => (o.type === "room" ? seatsOnWalls(block, o, clearance) : []));
+          return room ? [...blocked, ...onWalls, ...seatsOutsideRoom(block, room, margin * unitsPerMetre)] : [...blocked, ...onWalls];
+        }
       }),
-    [area, form, margin, unitsPerMetre, objects, clearance]
+    [kind, area, form, margin, unitsPerMetre, objects, clearance, room]
   );
   const total = result.blocks.reduce((n, b) => n + (b.type === "seating" ? seatingRowLengths(b).reduce((x, y) => x + y, 0) : 0), 0);
   const takenOut = total - result.seats;
@@ -2728,7 +3281,7 @@ function FillPrompt({
 
   return (
     <Modal
-      title="Fill with seating"
+      title="Fill an area"
       size="sm"
       onClose={onCancel}
       footer={
@@ -2736,54 +3289,204 @@ function FillPrompt({
           <button type="button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={!result.blocks.length}
-            onClick={() =>
-              onFill(result.blocks, {
-                facing: form.facing,
-                maxRun: form.maxRun,
-                chairPreset: form.chairPreset,
-                seatwayM: form.seatwayM,
-                aisleWidthM: form.aisleWidthM,
-                splitAtAisles: form.splitAtAisles,
-                crossAisleEvery: form.crossAisleEvery,
-                frontDistanceM: form.frontDistanceM,
-                rowShape: form.rowShape,
-                curveRadiusM: form.curveRadiusM,
-                chevronAngle: form.chevronAngle
-              })
-            }
-          >
-            Fill
-          </button>
+          {kind === "banquet" ? (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!tablesResult?.tables.length}
+              onClick={() => tablesResult && onFillTables(tablesResult.tables, tablesForm)}
+            >
+              Fill
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!result.blocks.length}
+              onClick={() =>
+                onFill(result.blocks, {
+                  facing: form.facing,
+                  maxRun: form.maxRun,
+                  chairPreset: form.chairPreset,
+                  seatwayM: form.seatwayM,
+                  aisleWidthM: form.aisleWidthM,
+                  splitAtAisles: form.splitAtAisles,
+                  crossAisleEvery: form.crossAisleEvery,
+                  frontDistanceM: form.frontDistanceM,
+                  rowShape: form.rowShape,
+                  curveRadiusM: form.curveRadiusM,
+                  chevronAngle: form.chevronAngle
+                })
+              }
+            >
+              Fill
+            </button>
+          )}
         </>
       }
     >
       <div className="stack">
-        <p className="fill-summary" style={{ margin: 0 }}>
-          {result.blocks.length ? (
-            <>
-              <strong>{result.seats}</strong> seats: {result.rows} row{result.rows === 1 ? "" : "s"}
-              {form.rowShape === "curved" ? `, ${result.perRow} in the front row` : ` of ${result.perRow}`}
-              {result.aisles ? `, ${result.aisles} aisle${result.aisles === 1 ? "" : "s"}` : ", no aisles"}
-              {takenOut
-                ? `, ${takenOut} chair${takenOut === 1 ? "" : "s"} left out ${shaped ? "at the edges or " : ""}around other objects`
-                : ""}
-              .
-            </>
-          ) : (
-            "No chairs fit in this area with these settings."
-          )}
-        </p>
-        <RowShapeFields
-          shape={form.rowShape}
-          curveRadiusM={form.curveRadiusM}
-          chevronAngle={form.chevronAngle}
-          onChange={set}
+        <Segmented
+          aria-label="Fill with"
+          value={kind}
+          options={[
+            { value: "theatre", label: "Theatre seating" },
+            { value: "banquet", label: "Banquet tables" }
+          ]}
+          onChange={setKind}
         />
-        <Field label="Audience faces" as="div" hint={area.rotation ? "Relative to the shape." : undefined}>
+        {kind === "banquet" && tablesResult ? (
+          <BanquetFillFields
+            form={tablesForm}
+            set={setTables}
+            result={tablesResult}
+            margin={margin}
+            onMargin={setMargin}
+            rotated={Boolean(area.rotation)}
+            guestNumbers={guestNumbers.length > 0}
+            scaled={scaled}
+          />
+        ) : (
+          <>
+            <p className="fill-summary" style={{ margin: 0 }}>
+              {result.blocks.length ? (
+                <>
+                  <strong>{result.seats}</strong> seats: {result.rows} row{result.rows === 1 ? "" : "s"}
+                  {form.rowShape === "curved" ? `, ${result.perRow} in the front row` : ` of ${result.perRow}`}
+                  {result.aisles ? `, ${result.aisles} aisle${result.aisles === 1 ? "" : "s"}` : ", no aisles"}
+                  {takenOut
+                    ? `, ${takenOut} chair${takenOut === 1 ? "" : "s"} left out ${shaped ? "at the edges or " : ""}around other objects`
+                    : ""}
+                  .
+                </>
+              ) : (
+                "No chairs fit in this area with these settings."
+              )}
+            </p>
+            <RowShapeFields
+              shape={form.rowShape}
+              curveRadiusM={form.curveRadiusM}
+              chevronAngle={form.chevronAngle}
+              onChange={set}
+            />
+            <Field label="Audience faces" as="div" hint={area.rotation ? "Relative to the shape." : undefined}>
+              <Segmented
+                value={form.facing}
+                options={[
+                  { value: "up", label: "Up" },
+                  { value: "down", label: "Down" },
+                  { value: "left", label: "Left" },
+                  { value: "right", label: "Right" }
+                ]}
+                onChange={(facing: TheatreFacing) => set({ facing })}
+              />
+            </Field>
+            <div className="form-grid">
+              <Field label="Most seats between aisles" hint="Aisles are added to keep every run within this.">
+                <NumericInput min={1} max={200} integer value={form.maxRun} onCommit={(n) => n != null && set({ maxRun: n })} />
+              </Field>
+              <Field label="Margin (m)" hint="Clear space kept inside the edges.">
+                <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && setMargin(n)} />
+              </Field>
+              <Field label="Chair" className="span-all">
+                <select value={form.chairPreset} onChange={(e) => set({ chairPreset: e.target.value })}>
+                  {CHAIR_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Seatway (m)">
+                <NumericInput min={0} max={5} value={form.seatwayM} onCommit={(n) => n != null && set({ seatwayM: n })} />
+              </Field>
+              <Field label="Aisle width (m)">
+                <NumericInput min={0} max={20} value={form.aisleWidthM} onCommit={(n) => n != null && set({ aisleWidthM: n })} />
+              </Field>
+              <Field label="Cross aisle every" hint="Rows; 0 for none.">
+                <NumericInput
+                  min={0}
+                  max={200}
+                  integer
+                  value={form.crossAisleEvery}
+                  onCommit={(n) => n != null && set({ crossAisleEvery: n })}
+                />
+              </Field>
+              <Field label="Front row to stage (m)" hint="Used when a stage reaches into the area.">
+                <NumericInput min={0} max={100} value={form.frontDistanceM} onCommit={(n) => n != null && set({ frontDistanceM: n })} />
+              </Field>
+            </div>
+            {form.rowShape === "straight" ? (
+              <Switch
+                label="A separate block for each section"
+                checked={form.splitAtAisles}
+                onChange={(splitAtAisles) => set({ splitAtAisles })}
+              />
+            ) : null}
+            {!scaled ? (
+              <p className="field-hint" style={{ margin: 0 }}>
+                No scale is set, so chair sizes are approximate. Set one in Plan settings for true sizes.
+              </p>
+            ) : null}
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** The banquet side of Fill an area: table type, gangway, layout and numbering, and what fits. */
+function BanquetFillFields({
+  form,
+  set,
+  result,
+  margin,
+  onMargin,
+  rotated,
+  guestNumbers,
+  scaled
+}: {
+  form: BanquetFillSettings;
+  set: (patch: Partial<BanquetFillSettings>) => void;
+  result: ReturnType<typeof fillAreaWithTables>;
+  margin: number;
+  onMargin: (m: number) => void;
+  rotated: boolean;
+  guestNumbers: boolean;
+  scaled: boolean;
+}) {
+  return (
+    <>
+      <p className="fill-summary" style={{ margin: 0 }}>
+        {result.tables.length ? (
+          <>
+            Fits <strong>{result.tables.length}</strong> table{result.tables.length === 1 ? "" : "s"} · <strong>{result.covers}</strong>{" "}
+            covers
+            {result.rows > 1 ? ` (${result.rows} rows, up to ${result.perRow} in a row)` : ""}
+            {result.capped ? `. ${result.capped} more would fit` : ""}.
+          </>
+        ) : (
+          "No tables fit in this area with these settings."
+        )}
+      </p>
+      <Field label="Table type" as="div">
+        <Segmented value={form.style} options={STYLE_OPTIONS} onChange={(style) => set({ style })} />
+      </Field>
+      {form.style !== "long" ? (
+        <Field label="Round table size" as="div">
+          <Segmented
+            value={form.roundSize}
+            options={(Object.keys(ROUND_TABLE_SIZES) as RoundTableSize[]).map((key) => ({
+              value: key,
+              label: ROUND_TABLE_SIZES[key].label,
+              title: `${ROUND_TABLE_SIZES[key].diameterM.toFixed(2)} m across, seats ${ROUND_TABLE_SIZES[key].seats}`
+            }))}
+            onChange={(roundSize) => set({ roundSize, seats: ROUND_TABLE_SIZES[roundSize].seats })}
+          />
+        </Field>
+      ) : null}
+      {form.style === "cabaret" ? (
+        <Field label="Open side faces" as="div" hint={rotated ? "Towards the stage, relative to the shape." : "Towards the stage."}>
           <Segmented
             value={form.facing}
             options={[
@@ -2795,55 +3498,75 @@ function FillPrompt({
             onChange={(facing: TheatreFacing) => set({ facing })}
           />
         </Field>
-        <div className="form-grid">
-          <Field label="Most seats between aisles" hint="Aisles are added to keep every run within this.">
-            <NumericInput min={1} max={200} integer value={form.maxRun} onCommit={(n) => n != null && set({ maxRun: n })} />
-          </Field>
-          <Field label="Margin (m)" hint="Clear space kept inside the edges.">
-            <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && setMargin(n)} />
-          </Field>
-          <Field label="Chair" className="span-all">
-            <select value={form.chairPreset} onChange={(e) => set({ chairPreset: e.target.value })}>
-              {CHAIR_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label} ({Math.round(p.widthM * 100)} × {Math.round(p.depthM * 100)} cm)
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Seatway (m)">
-            <NumericInput min={0} max={5} value={form.seatwayM} onCommit={(n) => n != null && set({ seatwayM: n })} />
-          </Field>
-          <Field label="Aisle width (m)">
-            <NumericInput min={0} max={20} value={form.aisleWidthM} onCommit={(n) => n != null && set({ aisleWidthM: n })} />
-          </Field>
-          <Field label="Cross aisle every" hint="Rows; 0 for none.">
-            <NumericInput
-              min={0}
-              max={200}
-              integer
-              value={form.crossAisleEvery}
-              onCommit={(n) => n != null && set({ crossAisleEvery: n })}
-            />
-          </Field>
-          <Field label="Front row to stage (m)" hint="Used when a stage reaches into the area.">
-            <NumericInput min={0} max={100} value={form.frontDistanceM} onCommit={(n) => n != null && set({ frontDistanceM: n })} />
-          </Field>
-        </div>
-        {form.rowShape === "straight" ? (
-          <Switch
-            label="A separate block for each section"
-            checked={form.splitAtAisles}
-            onChange={(splitAtAisles) => set({ splitAtAisles })}
+      ) : null}
+      {form.style === "long" ? (
+        <Field label="Tables run" as="div">
+          <Segmented
+            value={form.facing === "left" || form.facing === "right" ? "down" : "across"}
+            options={[
+              { value: "across", label: "Across" },
+              { value: "down", label: "Down" }
+            ]}
+            onChange={(v) => set({ facing: v === "down" ? "right" : "up" })}
           />
-        ) : null}
-        {!scaled ? (
-          <p className="field-hint" style={{ margin: 0 }}>
-            No scale is set, so chair sizes are approximate. Set one in Plan settings for true sizes.
-          </p>
-        ) : null}
+        </Field>
+      ) : null}
+      <div className="form-grid">
+        <Field label="Seats each">
+          <NumericInput min={1} max={MAX_TABLE_SEATS} integer value={form.seats} onCommit={(n) => n != null && set({ seats: n })} />
+        </Field>
+        <Field label="Up to" hint="Tables; blank for as many as fit.">
+          <NumericInput
+            min={1}
+            max={400}
+            integer
+            allowEmpty
+            placeholder="All"
+            value={form.maxTables}
+            onCommit={(n) => set({ maxTables: n ?? null })}
+          />
+        </Field>
+        <Field label="Gangway (m)" hint="Between tables, chair back to chair back.">
+          <NumericInput min={0} max={20} value={form.gangwayM} onCommit={(n) => n != null && set({ gangwayM: n })} />
+        </Field>
+        <Field label="Margin (m)" hint="Clear space kept inside the edges.">
+          <NumericInput min={0} max={20} value={margin} onCommit={(n) => n != null && onMargin(n)} />
+        </Field>
+        <Field label="Numbering">
+          <select value={form.numbering} onChange={(e) => set({ numbering: e.target.value as BanquetFillSettings["numbering"] })}>
+            <option value="straight">Straight</option>
+            <option value="snaked">Snaked</option>
+          </select>
+        </Field>
+        <Field label="Start corner">
+          <select value={form.startCorner} onChange={(e) => set({ startCorner: e.target.value as BanquetFillSettings["startCorner"] })}>
+            <option value="topLeft">Top left</option>
+            <option value="topRight">Top right</option>
+            <option value="bottomLeft">Bottom left</option>
+            <option value="bottomRight">Bottom right</option>
+          </select>
+        </Field>
       </div>
-    </Modal>
+      <Field label="Arrangement" as="div">
+        <Segmented
+          value={form.layout}
+          options={[
+            { value: "aligned", label: "Grid" },
+            { value: "staggered", label: "Staggered" }
+          ]}
+          onChange={(layout) => set({ layout })}
+        />
+      </Field>
+      <p className="field-hint" style={{ margin: 0 }}>
+        {guestNumbers ? "Numbered from the guest list, skipping numbers already on the plan. " : "Numbered on from the tables already on the plan. "}
+        Tables keep clear of walls, fixtures, keep-clear zones, door swings and other furniture.
+      </p>
+      {!scaled ? (
+        <p className="field-hint" style={{ margin: 0 }}>
+          No scale is set, so table sizes are approximate. Set one in Plan settings for true sizes.
+        </p>
+      ) : null}
+    </>
   );
 }
 

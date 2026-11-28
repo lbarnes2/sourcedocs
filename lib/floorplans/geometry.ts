@@ -3,6 +3,8 @@
  * what gets printed. Everything is in canvas units; nothing here touches the DOM or pdf-lib.
  */
 import { pdfPageDimensions } from "@/lib/paperSizes";
+import { outsideReach, roomOpenings } from "@/lib/floorplans/openings";
+import { roomLocalBounds } from "@/lib/floorplans/room";
 import { seatingFitTo, seatingNameBand, seatingSize } from "@/lib/floorplans/seating";
 import type {
   FloorplanCanvasObject,
@@ -239,6 +241,17 @@ export function estimateTextSize(obj: Pick<FloorplanTextObject, "text" | "fontSi
 export type ObjectBox = { cx: number; cy: number; w: number; h: number; rotation: number; round: boolean };
 
 export function objectBox(obj: FloorplanCanvasObject): ObjectBox {
+  if (obj.type === "room") {
+    const b = roomLocalBounds(obj);
+    return {
+      cx: obj.x + (b.minX + b.maxX) / 2,
+      cy: obj.y + (b.minY + b.maxY) / 2,
+      w: b.maxX - b.minX,
+      h: b.maxY - b.minY,
+      rotation: 0,
+      round: false
+    };
+  }
   if (obj.type === "table") {
     const { w, h } = tableBodySize(obj);
     return { cx: obj.x, cy: obj.y, w, h, rotation: obj.rotation ?? 0, round: tableShape(obj) === "round" };
@@ -304,6 +317,16 @@ export function objectPrintBounds(obj: FloorplanCanvasObject): Bounds {
     return boxBounds({ ...box, cx: box.cx + shift.x, cy: box.cy + shift.y, h: box.h + band });
   }
   const body = boxBounds(box);
+  if (obj.type === "room") {
+    // Doors that open outwards, and labels, reach beyond the walls.
+    for (const g of roomOpenings(obj)) {
+      const label = g.opening.label?.trim() || g.opening.exit;
+      const reach = outsideReach(g) + (label ? 16 : 0);
+      if (!reach) continue;
+      for (const q of [g.start, g.end]) growBounds(body, q.x - g.wall.nx * reach, q.y - g.wall.ny * reach);
+    }
+    return body;
+  }
   if (obj.type !== "table") return body;
   const { radius } = chairMetrics(obj);
   for (const s of seatOffsets(obj)) {

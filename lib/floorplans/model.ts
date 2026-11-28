@@ -40,7 +40,7 @@ export interface AutoLayoutOptions {
 
 const TABLE_GAP = 18;
 
-function tableTemplate(
+export function tableTemplate(
   seats: number,
   style: TableStyle,
   k: number,
