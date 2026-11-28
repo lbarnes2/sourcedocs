@@ -1389,6 +1389,31 @@ export default function FloorplansPage() {
   const metresPerSquare = unitsPerMetre ? draft.canvas.gridSize / unitsPerMetre : null;
   const linkedProject = projects.find((p) => p.id === draft.projectId);
 
+
+  const setPage = (patch: Partial<Pick<FloorplanDocument["canvas"], "paperSize" | "orientation">>) =>
+    commit((doc) => ({
+      ...doc,
+      canvas: { ...doc.canvas, ...patch },
+      autoLayout: { ...doc.autoLayout, ...patch }
+    }));
+  const pageFields = (
+    <>
+      <Field label="Paper" as="div">
+        <Segmented
+          value={draft.canvas.paperSize}
+          options={PAPER_OPTIONS}
+          onChange={(value) => setPage({ paperSize: value as FloorplanDocument["canvas"]["paperSize"] })}
+        />
+      </Field>
+      <Field label="Orientation" as="div" hint="Also sets the print area shown on the canvas.">
+        <Segmented
+          value={draft.canvas.orientation}
+          options={ORIENTATION_OPTIONS}
+          onChange={(orientation) => setPage({ orientation })}
+        />
+      </Field>
+    </>
+  );
   return (
     <main className="page page--wide">
       <PageHeader
@@ -1794,6 +1819,8 @@ export default function FloorplansPage() {
           }
         >
           <div className="stack">
+            <h3 className="dialog-heading">Page</h3>
+            {pageFields}
             <h3 className="dialog-heading">Guest list</h3>
             <Field
               label="Event"
@@ -1932,32 +1959,7 @@ export default function FloorplansPage() {
                   }}
                 />
               </Field>
-              <Field label="Paper" as="div">
-                <Segmented
-                  value={draft.canvas.paperSize}
-                  options={PAPER_OPTIONS}
-                  onChange={(value) =>
-                    commit((doc) => ({
-                      ...doc,
-                      canvas: { ...doc.canvas, paperSize: value as FloorplanDocument["canvas"]["paperSize"] },
-                      autoLayout: { ...doc.autoLayout, paperSize: value as FloorplanDocument["autoLayout"]["paperSize"] }
-                    }))
-                  }
-                />
-              </Field>
-              <Field label="Orientation" as="div">
-                <Segmented
-                  value={draft.canvas.orientation}
-                  options={ORIENTATION_OPTIONS}
-                  onChange={(value) =>
-                    commit((doc) => ({
-                      ...doc,
-                      canvas: { ...doc.canvas, orientation: value },
-                      autoLayout: { ...doc.autoLayout, orientation: value }
-                    }))
-                  }
-                />
-              </Field>
+              {pageFields}
               <Switch
                 label="Legend and totals"
                 hint="Footer with table, seat and guest totals."
